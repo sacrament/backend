@@ -1,4 +1,4 @@
-# 🎯 Winky Chat Backend
+# 🎯 Winky Backend
 
 A modern, production-ready Node.js backend for real-time chat and video calling application.
 
