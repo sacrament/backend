@@ -1,17 +1,16 @@
 
 const mongoose = require('mongoose');
 const UserModel = mongoose.model('User');
+ 
+const { UserService, ContactService, ChatService, CallService } = require('../../services'); 
+const utils = require('../../utils');
+const { getChatService } = require('../services');
+const PushNotificationService = require('../../notifications');
+ 
 
-const { ContactService } = require('../../../services');
-const { UserService } = require('../../../services');
-const CS = require('../../chat.service');
-const utils = require('../../../utils');
-const PushNotificationService = require('../../../notifications');
-
-let ChatSocketService;
+const chatSocketService = getChatService();
 module.exports = class User {
-    constructor(io) {
-        ChatSocketService = new CS(io);
+    constructor(io) { 
         this.handler = {
             'store contacts': storeContacts,
             'remove contact': removeContact,
@@ -115,7 +114,7 @@ const sendRequest = async function (data, cb) {
             from = u;
         }
 
-        const memberIsOnline = await ChatSocketService.isUserConnected(toUser);
+        const memberIsOnline = await chatSocketService.isUserConnected(toUser);
 
         if (memberIsOnline) {
             this.to(toUser).emit('new connection request', { from: from, request: res.request });
@@ -162,7 +161,7 @@ const respondRequest = async function (data, cb) {
             from = u;
         }
 
-        const memberIsOnline = await ChatSocketService.isUserConnected(toUser);
+        const memberIsOnline = await chatSocketService.isUserConnected(toUser);
 
         if (memberIsOnline) {
             // const unreadMessages = await chatService.countUnreadMessagesForChat(chat._id, to)  
@@ -210,7 +209,7 @@ const cancelRequest = async function (data, cb) {
             from = u;
         }
 
-        const memberIsOnline = await ChatSocketService.isUserConnected(toUser);
+        const memberIsOnline = await chatSocketService.isUserConnected(toUser);
 
         if (memberIsOnline) {
             // const unreadMessages = await chatService.countUnreadMessagesForChat(chat._id, to)  
@@ -257,7 +256,7 @@ const undoFriendshipConnection = async function (data, cb) {
             from = u;
         }
 
-        const memberIsOnline = await ChatSocketService.isUserConnected(toUser);
+        const memberIsOnline = await chatSocketService.isUserConnected(toUser);
 
         if (memberIsOnline) {
             // const unreadMessages = await chatService.countUnreadMessagesForChat(chat._id, to)  
@@ -266,7 +265,7 @@ const undoFriendshipConnection = async function (data, cb) {
         } else {
             /// Offline people. Send a push notification 
             const pushNotification = new PushNotificationService();
-            await pushNotification.undoConnectionFriendship(form, res.request, to);
+            await pushNotification.undoConnectionFriendship(from, res.request, to);
         }
         cb({ request: res.request });
     } catch (ex) {
@@ -326,7 +325,7 @@ const requestReminder = async function (data, cb) {
             from = u;
         }
 
-        const memberIsOnline = await ChatSocketService.isUserConnected(toUser);
+        const memberIsOnline = await chatSocketService.isUserConnected(toUser);
 
         if (memberIsOnline) {
             this.to(toUser).emit('reminder for connection request', { from: from, request: request });

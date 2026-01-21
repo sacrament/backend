@@ -32,9 +32,10 @@
 // DOMAIN SERVICES (Business Logic)
 // ============================================================================
 
-const { ChatService } = require('./domain/chat');
-const { UserService, ContactService } = require('./domain/user');
-const { CallService } = require('./domain/call');
+const ChatService = require('./domain/chat/chat.service');
+const UserService = require('./domain/user/user.service');
+const ContactService = require('./domain/user/contact.service');
+const CallService = require('./domain/call/call.service');
 
 // ============================================================================
 // EXTERNAL SERVICES (Third-party Integrations)

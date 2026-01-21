@@ -3,20 +3,18 @@ const mongoose = require('mongoose');
 const UserModel = mongoose.model('User');
 const ChatModel = mongoose.model('Chat');
 const MessageModel = mongoose.model('Message');
-const { ChatService } = require('../../../services');
+const { CallService, ChatService, UserService, ContactService } = require('../../services');
 const ChatServiceDB = require('../../../services/domain/chat/chat.service.db');
-const MessageServiceDB = require('../../../services/domain/chat/message.service.db');
-const { UserService } = require('../../../services');
-const CS = require('../../chat.service');
-const VoipPushNotificationService = require('../../../notifications/voip');
-const { CallService } = require('../../../services');
+const MessageServiceDB = require('../../../services/domain/chat/message.service.db'); 
+const { getChatService } = require('../services');
+const VoipPushNotificationService = require('../../../notifications/voip'); 
 const PushNotificationService = require('../../../notifications');
 
-let ChatSocketService; 
+// Get ChatService from singleton manager
+const chatSocketService = getChatService();
 
 module.exports = class Calls {
-    constructor(io) { 
-        ChatSocketService = new CS(io);
+    constructor(io) {  
         this.handler = {
             'create room': createRoom,
             'call': call,
@@ -115,7 +113,7 @@ const call = async function(data, ack) {
 
         callService.call(roomId, caller, callee).then(async result => {
             const { call, token }  = result;
-            const isUserConnected = await ChatSocketService.isUserConnected(callee);
+            const isUserConnected = await chatSocketService.isUserConnected(callee);
             const fromObject = await userService.getUserById(caller, true);
             const toObject = await userService.getUserById(callee, true);
 
@@ -194,7 +192,7 @@ const endCall = async function(data, ack) {
 
         callService.endCall(roomId, callee, caller).then(async result => {
             const call = result;
-            const isUserConnected = await ChatSocketService.isUserConnected(callee);
+            const isUserConnected = await chatSocketService.isUserConnected(callee);
             const fromObject = await userService.getUserById(caller, true);
             const toObject = await userService.getUserById(callee, true);
 

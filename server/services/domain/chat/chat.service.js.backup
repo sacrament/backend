@@ -8,8 +8,6 @@ const MessageMediaModel = mongoose.model('Media');
 const MessageReactionModel = mongoose.model('Reaction');
 
 const utils = require('../../../utils/index');
-const { normalizeUserId } = require('../../../utils/user.utils');
-const { validateRequired, validateObjectId, validateString, validateBoolean } = require('../../../utils/validation.utils');
 
 class ChatService {
     /**
@@ -21,107 +19,123 @@ class ChatService {
         this.model = chatModel;
     }
     /**
-     * Get chat by ID with optional population
      *
-     * @param {string} chatId - Chat ID to retrieve
-     * @param {string|number} userId - User ID requesting the chat
-     * @param {boolean} [populate=true] - Whether to populate related fields
-     * @returns {Promise<Object>} Chat object with optional populated fields
-     * @throws {Error} If chat not found or validation fails
      *
-     * @example
-     * const chat = await chatService.getById('507f...', '507f...', true);
+     * @param {*} chatId
+     * @returns Promise()
+     * @memberof ChatService
      */
     async getById(chatId, userId, populate = true) {
-        validateRequired(chatId, 'Chat ID');
-        validateObjectId(chatId, 'Chat ID');
-        validateRequired(userId, 'User ID');
-
-        userId = await normalizeUserId(userId);
-
-        const query = {
-            _id: chatId,
-            members: {
-                $elemMatch: {
-                    $and: [{ user: { $eq: new ObjectId(userId) } }, { user: { $exists: true } }],
-                    canChat: true,
-                }
-            }
-        };
-
-        if (populate) {
-            let chat = await this.model
-                .findOne(query)
-                .select(utils.chatColumnsToShow())
-                .populate({
-                    path: "members.user",
-                    select: utils.userColumnsToShow()
-                })
-                .populate({
-                    path: 'lastMessage',
-                    select: utils.lastMessageColumnsToShow(),
-                    populate: {
-                        path: 'from reactions media',
-                        select: utils.userColumnsToShow() + utils.reactionColumnsToShow() + utils.mediaColumnsToShow(),
-                        populate: {
-                            path: 'from',
-                            select: utils.userColumnsToShow()
-                        }
-                    }
-                })
-                .lean()
-                .exec();
-
-            if (!chat) {
-                throw new Error('No chat found for given id');
-            }
-
-            if (chat.type === 'private') {
-                try {
-                    chat = await this.updatePrivateChatMembersToActive(chatId);
-                } catch (ex) {
-                    console.error(ex.message);
-                }
-            }
-
-            try {
-                const total = await this.countUnreadMessagesForChat(chatId, userId);
-                chat.unreadMessages = total === 0 ? 1 : total;
-            } catch (err) {
-                chat.unreadMessages = 1;
-                console.error(`Error while getting total unread messages for chat: ${chatId} for user: ${userId}. Error: ${err.message}`);
-            }
-
-            return chat;
-        } else {
-            const chat = await this.model.findOne(query).exec();
-
-            if (!chat) {
-                throw new Error('No chat found for given id');
-            }
-
-            return chat;
+        if (typeof userId === 'number') {
+            const userService = new UserService(UserModel);
+            userId = await userService.getUserIds([userId]);
         }
+
+        return new Promise((resolve, reject) => {
+            const query = {
+                _id: chatId,
+                // active: true,
+                // members: {
+                //     $elemMatch: {
+                //         user: { '_id': new ObjectId(userId) },
+                //         canChat: true
+                //     }
+                // }
+
+                // active: true,
+                // deleted: false,
+                members: {
+                    $elemMatch: {
+                        $and: [{ user: { $eq: new ObjectId(userId) } }, { user: { $exists: true } }],
+                        // user: new ObjectId(userId),
+                        canChat: true,
+                        // 'options.blocked': false,
+                    }
+                }
+            };
+
+            if (populate) {
+                this.model
+                    .findOne(query)
+                    // .select('_id id name members lastMessage type imageUrl createdOn deleted deletedOn')
+                    .select(utils.chatColumnsToShow())
+                    .populate({
+                        path: "members.user",
+                        select: utils.userColumnsToShow()
+                        // select: '_id id name email phone imageUrl device'
+                    })
+                    .populate({
+                        path: 'lastMessage',
+                        select: utils.lastMessageColumnsToShow(),
+                        populate: {
+                            path: 'from reactions media',
+                            select: utils.userColumnsToShow() + utils.reactionColumnsToShow() + utils.mediaColumnsToShow(),
+                            populate: {
+                                path: 'from',
+                                select: utils.userColumnsToShow()
+                            }
+                        }
+                    }) 
+                    .lean()
+                    .exec(async (err, chat) => {
+                        if (err) return reject(err);
+
+                        if (!chat) return reject(new Error('No chat found for given id'));
+
+                        // if (!chat.active && chat.deleted) {
+                        //     return reject(new Error('Chat is not active, because it is deleted'));
+                        // } 
+
+                        if (chat.type == 'private') {
+                            // update chat members to canChat = true
+                            try {
+                                chat = await this.updatePrivateChatMembersToActive(chatId);
+                            } catch (ex) {
+                                console.error(ex.message);
+                            }
+                        }
+
+                        this.countUnreadMessagesForChat(chatId, userId).then(total => {
+                            chat.unreadMessages = total == 0 ? 1 : total;
+                            // console.info(`Total unread: ${total} for chat: ${chatId} for user: ${userId}`);
+                            resolve(chat);
+                        }).catch(err => {
+                            chat.unreadMessages = 1;
+                            console.error(`Error while getting total unread messages for chat: ${chatId} for user: ${userId}. Error: ${err.message}`);
+                            resolve(chat);
+                        })
+                    });
+            } else {
+                this.model
+                    .findOne(query, (err, chat) => {
+                        if (err) return reject(err);
+
+                        if (!chat) return reject(new Error('No chat found for given id'));
+
+                        resolve(chat);
+                    });
+            }
+        });
     }
 
     /**
-     * Get all chats for a user
+     *Get all chats
      *
-     * @param {string|number} userId - User ID to get chats for
-     * @param {number} [skip=-1] - Number of chats to skip for pagination (-1 for no pagination)
-     * @returns {Promise<Array<Object>>} Array of chat objects with populated fields
-     * @throws {Error} If validation fails or query errors occur
-     *
-     * @example
-     * const chats = await chatService.getAll('507f...', 0);
+     * @param {*} userId
+     * @returns
+     * @memberof ChatService
      */
     async getAll(userId, skip = -1) {
-        validateRequired(userId, 'User ID');
+        if (typeof userId === 'number') {
+            const userService = new UserService(UserModel);
+            userId = await userService.getUserIds([userId]);
+        }
 
-        userId = await normalizeUserId(userId);
+        console.log(`Get All chats for: ${userId} at ${Date()}`);
 
-        console.log(`Get All chats for: ${userId} at ${Date.now()}`);
-
+        //MARK: Need to populate users insiede the members array
+        // MARK: Get the user and check the join date for last message
+        // return new Promise((resolve, reject) => {
         const aggregate = this.model.aggregate([
             // unwind the history array 
             {
@@ -375,12 +389,11 @@ class ChatService {
             },
             // { $skip: skip },
             // { $limit: 20 }
-        ]);
-
+        ])
         try {
             let chats;
 
-            if (skip !== -1) {
+            if (skip != -1) {
                 chats = await aggregate.skip(skip).limit(20).exec();
             } else {
                 chats = await aggregate.exec();
@@ -388,33 +401,40 @@ class ChatService {
 
             await Promise.all(chats.map(async (chat) => {
                 const unread = await this.countUnreadMessagesForChat(chat._id, userId);
+                // console.warn(`[WARN]: Chat ${chat.name} Unread messages: ${unread}. Last message: ${chat.lastMessage.content || chat.lastMessage.kind} is DELETED: ${chat.deleted}`)
                 chat.unreadMessages = unread;
             }));
 
-            console.log(`Total chats fetched: ${chats.length} at ${Date.now()}`);
+            // const res = await Promise.all(promises);
+
+            console.log(`TOtal chats fetched: ${chats.length} at ${Date()}`)
+            // console.log(`Result: ${JSON.stringify(result, null, 14)}`);
             return chats;
         } catch (ex) {
-            console.error('Error: ' + ex.message);
-            throw ex;
+            console.error('Error: ' + ex.message)
+            return ex;
         }
     }
 
     /**
-     * Get all favorite chats for a user
+     *Get all chats
      *
-     * @param {string|number} userId - User ID to get favorite chats for
-     * @returns {Promise<Array<Object>>} Array of favorite chat objects
-     * @throws {Error} If validation fails or query errors occur
-     *
-     * @example
-     * const favoriteChats = await chatService.getAllFavoriteChats('507f...');
+     * @param {*} userId
+     * @returns
+     * @memberof ChatService
      */
     async getAllFavoriteChats(userId) {
-        validateRequired(userId, 'User ID');
+        if (typeof userId === 'number') {
+            const userService = new UserService(UserModel);
+            userId = await userService.getUserIds([userId]);
+        }
 
-        userId = await normalizeUserId(userId);
+        // console.log(`Messages from: ${userId}`);
 
-        const chats = await this.model.aggregate([
+        //MARK: Need to populate users insiede the members array
+
+        return new Promise((resolve, reject) => {
+            this.model.aggregate([
                 // unwind the history array 
                 {
                     $match: {
@@ -570,156 +590,154 @@ class ChatService {
                         }
                     }
                 }
-            ]).exec();
-
-        return chats;
+            ]).then((chats) => {
+                resolve(chats);
+            }).catch((err) => {
+                reject(err);
+            });
+        });
     }
 
     /**
-     * Get chats for a user with optional filtering
      *
-     * @param {string|number} user - User ID to get chats for
-     * @param {boolean} [showOnlyFavorites=false] - Whether to show only favorite chats
-     * @param {number} [skip=0] - Number of chats to skip for pagination
-     * @returns {Promise<Array<Object>>} Array of chat objects
-     * @throws {Error} If validation fails
      *
-     * @example
-     * const chats = await chatService.getChatsForUser('507f...', false, 0);
+     * @param {*} user
+     * @param {boolean} [showOnlyFavorites=false]
+     * @returns
+     * @memberof ChatService
      */
     async getChatsForUser(user, showOnlyFavorites = false, skip = 0) {
-        validateRequired(user, 'User ID');
-        validateBoolean(showOnlyFavorites, 'Show only favorites');
-
         if (showOnlyFavorites) {
             return this.getAllFavoriteChats(user);
         } else {
-            return this.getAll(user, skip);
+            return this.getAll(user, skip)
         }
     }
 
     /**
-     * Get members of a chat
      *
-     * @param {string} chatId - Chat ID to get members from
-     * @param {boolean} [onlyUser=true] - Whether to return only user IDs or full member objects
-     * @returns {Promise<Array>} Array of user IDs or member objects
-     * @throws {Error} If chat not found or validation fails
      *
-     * @example
-     * const members = await chatService.getChatMembers('507f...', true);
+     * @param {*} chatId
+     * @returns
+     * @memberof ChatService
      */
     async getChatMembers(chatId, onlyUser = true) {
-        validateRequired(chatId, 'Chat ID');
-        validateObjectId(chatId, 'Chat ID');
-        validateBoolean(onlyUser, 'Only user');
-
-        const query = {
-            active: true,
-            _id: chatId
-        };
-
-        const chat = await this.model.findOne(query).lean().exec();
-
-        if (!chat) {
-            throw new Error('Chat not found');
-        }
-
-        if (onlyUser) {
-            return chat.members.map(member => member.user);
-        } else {
-            return chat.members.map(member => member);
-        }
+        return new Promise((resolve, reject) => {
+            const query = {
+                active: true,
+                _id: chatId
+            };
+            this.model.findOne(query).lean().then((chat) => {
+                if (chat) {
+                    if (onlyUser) {
+                        resolve(chat.members.map(member => member.user));
+                    } else {
+                        resolve(chat.members.map(member => member));
+                    }
+                } else {
+                    reject(new Error('Chat not found'))
+                }
+            }).catch(err => reject(err));
+        })
     }
 
     /**
-     * Get a specific member from a chat
      *
-     * @param {string} chatId - Chat ID to search in
-     * @param {string|number} userId - User ID to find
-     * @returns {Promise<Object>} Member object with user details
-     * @throws {Error} If user not found in chat or validation fails
      *
-     * @example
-     * const member = await chatService.getChatMember('507f...', '507f...');
+     * @param {*} chatId
+     * @param {*} userId
+     * @return {*} 
+     * @memberof ChatService
      */
     async getChatMember(chatId, userId) {
-        validateRequired(chatId, 'Chat ID');
-        validateObjectId(chatId, 'Chat ID');
-        validateRequired(userId, 'User ID');
-
-        userId = await normalizeUserId(userId);
-
-        const query = {
-            active: true,
-            _id: chatId,
-            members: {
-                $elemMatch: {
-                    user: new ObjectId(userId),
-                    canChat: true,
-                }
-            }
-        };
-
-        const chat = await this.model.findOne(query).lean().exec();
-
-        if (!chat) {
-            throw new Error('User not found in this chat');
+        if (typeof userId === 'number') {
+            const userService = new UserService(UserModel);
+            userId = await userService.getUserIds([userId]);
         }
 
-        const member = chat.members.filter(member => member.user.toString() === userId)[0];
-        return member;
+        return new Promise((resolve, reject) => {
+            const query = {
+                active: true,
+                _id: chatId,
+                members: {
+                    $elemMatch: {
+                        user: new ObjectId(userId),
+                        canChat: true,
+                        // 'options.blocked': false,
+                    }
+                }
+            };
+
+            this.model.findOne(query).lean()
+                .then((chat) => {
+                    if (chat) {
+                        resolve(chat.members.filter(member => member.user.toString() == userId)[0]);
+                    } else {
+                        reject(new Error('User not found in this chat'))
+                    }
+                }).catch(err => reject(err));
+        })
     }
 
     /**
      * Get total unread messages for a chat and specific user
      *
-     * @param {string} chatId - Chat ID to count unread messages for
-     * @param {string|number} userId - User ID to count unread messages for
-     * @returns {Promise<number>} Count of unread messages
-     * @throws {Error} If validation fails
-     *
-     * @example
-     * const unreadCount = await chatService.countUnreadMessagesForChat('507f...', '507f...');
+     * @param {*} chatId
+     * @param {*} userId
+     * @returns
+     * @memberof ChatService
      */
     async countUnreadMessagesForChat(chatId, userId) {
-        validateRequired(chatId, 'Chat ID');
-        validateObjectId(chatId, 'Chat ID');
-        validateRequired(userId, 'User ID');
-
-        userId = await normalizeUserId(userId);
-
-        try {
-            const count = await MessageModel.countDocuments({
+        if (typeof userId === 'number') {
+            const userService = new UserService(UserModel);
+            userId = await userService.getUserIds([userId]);
+        }
+        // console.info(`[INFO]: Total Unread for chat ${chatId} for user: ${userId}`)
+        return new Promise((resolve, reject) => {
+            MessageModel.countDocuments({
                 chatId: { $eq: new ObjectId(chatId) },
                 from: { $ne: new ObjectId(userId) },
                 kind: { $ne: 'generic' },
+                // deleted: { $eq: false },
                 'deleted.date': { $eq: null },
                 'status.user': { $eq: new ObjectId(userId) },
+                // 'status.read': { $eq: null }
                 $and: [{ 'status.read': { $eq: null } }, { 'status.read': { $exists: true } }],
-            }).exec();
+            }).exec((err, count) => {
+                if (err) return resolve(0);
 
-            return count;
-        } catch (err) {
-            console.error(`Error counting unread messages for chat ${chatId}: ${err.message}`);
-            return 0;
-        }
+                // console.log(`[LOG]: Total ${count} for chat ${chatId}`)
+
+                resolve(count);
+            });
+        })
+
     }
 
     /**
-     * Get total unread messages for a single user across all chats
+     * Get total unread messages for a single user
      *
-     * @param {string|number} userId - User ID to count unread messages for
-     * @returns {Promise<number>} Total count of unread messages
-     * @throws {Error} If validation fails
-     *
-     * @example
-     * const totalUnread = await chatService.countUnreadMessagesForUser('507f...');
+     * @param {*} userId
+     * @returns
+     * @memberof ChatService
      */
     async countUnreadMessagesForUser(userId) {
-        validateRequired(userId, 'User ID');
-
-        userId = await normalizeUserId(userId);
+        if (typeof userId === 'number') {
+            const userService = new UserService(UserModel);
+            userId = await userService.getUserIds([userId]);
+        }
+        // console.log(`User: ${userId}`)
+        // return MessageModel.countDocuments({
+        //     // chatId: chatId,
+        //     from: { $ne: new ObjectId(userId) },
+        //     kind: { $ne: 'generic' },
+        //     status: {
+        //         $elemMatch: {
+        //             user: new ObjectId(userId),
+        //             read: { $eq: null }
+        //         }
+        //     }
+        // });
 
         const aggregate = this.model.aggregate([
             // unwind the history array 
@@ -805,39 +823,39 @@ class ChatService {
                     }
                 }
             }
-        ]);
+        ])
 
-        try {
-            const result = await aggregate.exec();
-            if (result.length > 0) {
-                console.log(`Total Unread messages: ${result[0].total} at ${Date.now()}`);
-                return result[0].total;
-            } else {
-                return 0;
+        return new Promise( async (resolve, reject) => {
+            try {
+                const result = await aggregate.exec()
+                if (result.length > 0) {
+                    console.log(`TOtal Unread messages: ${result[0].total} at ${Date.now()}`)
+                    // console.log(`Result: ${JSON.stringify(result, null, 14)}`);
+                    resolve(result[0].total);
+                } else {
+                    resolve(0);
+                }
+            } catch (ex) {
+                console.error('Error: ' + ex.message)
+                resolve(0);
             }
-        } catch (ex) {
-            console.error('Error: ' + ex.message);
-            return 0;
-        }
+        }) 
     }
 
     /**
      * Total unread chats for a user
      *
-     * @param {string|number} userId - User ID to count unread chats for
-     * @returns {Promise<number>} Count of chats with unread messages
-     * @throws {Error} If validation fails
-     *
-     * @example
-     * const unreadChats = await chatService.countTotalUnreadChatsForUser('507f...');
+     * @param {*} userId
+     * @memberof ChatService
      */
     async countTotalUnreadChatsForUser(userId) {
-        validateRequired(userId, 'User ID');
+        if (typeof userId === 'number') {
+            const userService = new UserService(UserModel);
+            userId = await userService.getUserIds([userId]);
+        }
 
-        userId = await normalizeUserId(userId);
-
-        try {
-            const result = await this.model.aggregate([
+        return new Promise((resolve) => {
+            this.model.aggregate([
                 {
                     '$match': {
                         'active': true,
@@ -916,258 +934,211 @@ class ChatService {
                 }, {
                     '$count': 'total'
                 }
-            ]).exec();
-
-            if (result.length) {
-                const total = result[0].total;
-                console.log(`Total Unread: ${JSON.stringify(total)} for user: ${userId}`);
-                return total;
-            } else {
-                console.log(`No Unread Chats`);
-                return 0;
-            }
-        } catch (err) {
-            console.error(`Error counting chats for user: ${userId}. Error: ${err.message}`);
-            return 0;
-        }
+            ])
+                .then((result) => {
+                    if (result.length) {
+                        const total = result[0].total;
+                        console.log(`Total Unread: ${JSON.stringify(total)} for user: ${userId}`)
+                        resolve(total);
+                    } else {
+                        resolve(0);
+                        console.log(`No Unread Chats`)
+                    }
+                }).catch(err => {
+                    console.error(`Error counting chats for user: ${userId}. Error: ${err.message}`)
+                    resolve(0);
+                });
+        });
     }
 
-    /**
-     * @deprecated This method appears to be using incorrect API (findAll on Mongoose model)
-     * Should not be used - marked for removal
-     */
     getAllMessagesWithChatsFromMySQL() {
         return this.model.findAll({
             // limit: 10
         });
     }
 
-    /**
-     * Get chat by imported group ID
-     *
-     * @param {number} importedGroupId - Imported group ID from legacy system
-     * @returns {Promise<Object>} Chat object
-     * @throws {Error} If chat not found or validation fails
-     *
-     * @example
-     * const chat = await chatService.getByImportedId(12345);
-     */
     async getByImportedId(importedGroupId) {
-        validateRequired(importedGroupId, 'Imported group ID');
 
-        const query = {
-            isImported: true,
-            id: importedGroupId
-        };
+        return new Promise((resolve, reject) => {
+            const query = {
+                isImported: true,
+                id: importedGroupId
+            };
 
-        const chat = await this.model.findOne(query).lean().exec();
-
-        if (!chat) {
-            throw new Error('Chat not found');
-        }
-
-        return chat;
+            this.model.findOne(query).lean().then((chat) => {
+                if (chat) {
+                    resolve(chat);
+                } else {
+                    reject(new Error('Chat not found'))
+                }
+            }).catch(err => reject(err));
+        });
     }
 
-    /**
-     * Get chat by unique ID
-     *
-     * @param {string} uniqueId - Unique identifier for imported chat
-     * @returns {Promise<Object>} Chat object
-     * @throws {Error} If chat not found or validation fails
-     *
-     * @example
-     * const chat = await chatService.getByUniqueId('abc123');
-     */
     async getByUniqueId(uniqueId) {
-        validateRequired(uniqueId, 'Unique ID');
-        validateString(uniqueId, 'Unique ID');
 
-        const query = {
-            isImported: true,
-            uniqueId: uniqueId
-        };
+        return new Promise((resolve, reject) => {
+            const query = {
+                isImported: true,
+                uniqueId: uniqueId
+            };
 
-        try {
-            const chat = await this.model.findOne(query).lean().exec();
-
-            if (!chat) {
-                throw new Error(`Chat not found: ${uniqueId}`);
-            }
-
-            return chat;
-        } catch (err) {
-            console.log(`Error while getting chat with unique: ${uniqueId}`);
-            throw err;
-        }
+            this.model.findOne(query).lean().then((chat) => {
+                if (chat) {
+                    resolve(chat);
+                } else {
+                    reject(new Error(`Chat not found: ${uniqueId}`))
+                }
+            }).catch(err => {
+                console.log(`Error while getting chat with unique: ${uniqueId}`);
+                reject(err);
+            });
+        });
     }
 
     /**
-     * Get chat by ID with populated fields
+     * Get chat by id
      *
-     * @param {string} chatId - Chat ID to retrieve
-     * @returns {Promise<Object>} Chat object with populated members and last message
-     * @throws {Error} If chat not found, deleted, or validation fails
-     *
-     * @example
-     * const chat = await chatService.getChatById('507f...');
+     * @param {*} chatId
+     * @returns
+     * @memberof ChatService
      */
     async getChatById(chatId) {
-        validateRequired(chatId, 'Chat ID');
-        validateObjectId(chatId, 'Chat ID');
+        return new Promise((resolve, reject) => {
+            const query = {
+                _id: chatId
+            };
 
-        const query = {
-            _id: chatId
-        };
+            this.model
+                .findOne(query)
+                // .select('_id id name members lastMessage type imageUrl createdOn deleted deletedOn')
+                .select(utils.chatColumnsToShow())
+                .populate({
+                    path: "members.user",
+                    select: utils.userColumnsToShow()
+                    // select: '_id id name email phone imageUrl device'
+                })
+                .populate({
+                    path: 'lastMessage',
+                    select: utils.messageColumnsToShow(),
+                    // select: '_id id content kind sentOn from',
+                    populate: {
+                        path: 'from reactions',
+                        select: utils.userColumnsToShow() + utils.reactionColumnsToShow(),
+                        populate: {
+                            path: 'from',
+                            select: utils.userColumnsToShow()
+                        }
+                    }
+                })
+                .lean()
+                .exec((err, chat) => {
+                    if (err) return reject(err);
 
-        const chat = await this.model
-            .findOne(query)
-            .select(utils.chatColumnsToShow())
-            .populate({
-                path: "members.user",
-                select: utils.userColumnsToShow()
-            })
-            .populate({
-                path: 'lastMessage',
-                select: utils.messageColumnsToShow(),
-                populate: {
-                    path: 'from reactions',
-                    select: utils.userColumnsToShow() + utils.reactionColumnsToShow(),
+                    if (!chat) return reject(new Error('No chat found for given id'));
+
+                    if (!chat.active && chat.deleted) {
+                        return reject(new Error('Chat is not active, because it is deleted'));
+                    }
+
+                    resolve(chat);
+                });
+        });
+    }
+
+    async getOnlyChat(id) {
+        return new Promise((resolve, reject) => {
+            const query = {
+                _id: id
+            };
+
+            this.model
+                .findOne(query)
+                // .select('_id id name members lastMessage type imageUrl createdOn deleted deletedOn')
+                .select(utils.chatColumnsToShow())
+                .populate({
+                    path: "members.user",
+                    select: utils.userColumnsToShow()
+                    // select: '_id id name email phone imageUrl device'
+                })
+                .populate({
+                    path: 'lastMessage',
+                    select: utils.messageColumnsToShow(),
+                    // select: '_id id content kind sentOn from',
                     populate: {
                         path: 'from',
                         select: utils.userColumnsToShow()
+                        // select: '_id id name email phone imageUrl status'
                     }
-                }
-            })
-            .lean()
-            .exec();
+                })
+                .exec((err, chat) => {
+                    if (err) return reject(err);
 
-        if (!chat) {
-            throw new Error('No chat found for given id');
-        }
+                    if (!chat) return reject(new Error('No chat found for given id'));
 
-        if (!chat.active && chat.deleted) {
-            throw new Error('Chat is not active, because it is deleted');
-        }
-
-        return chat;
+                    resolve(chat);
+                });
+        });
     }
 
-    /**
-     * Get only chat data without activity check
-     *
-     * @param {string} id - Chat ID to retrieve
-     * @returns {Promise<Object>} Chat object with populated fields
-     * @throws {Error} If chat not found or validation fails
-     *
-     * @example
-     * const chat = await chatService.getOnlyChat('507f...');
-     */
-    async getOnlyChat(id) {
-        validateRequired(id, 'Chat ID');
-        validateObjectId(id, 'Chat ID');
-
-        const query = {
-            _id: id
-        };
-
-        const chat = await this.model
-            .findOne(query)
-            .select(utils.chatColumnsToShow())
-            .populate({
-                path: "members.user",
-                select: utils.userColumnsToShow()
-            })
-            .populate({
-                path: 'lastMessage',
-                select: utils.messageColumnsToShow(),
-                populate: {
-                    path: 'from',
-                    select: utils.userColumnsToShow()
-                }
-            })
-            .exec();
-
-        if (!chat) {
-            throw new Error('No chat found for given id');
-        }
-
-        return chat;
-    }
-
-    /**
-     * Update private chat members to active status
-     *
-     * @param {string} chatId - Chat ID to update
-     * @returns {Promise<Object>} Updated chat object
-     * @throws {Error} If nothing to update or validation fails
-     *
-     * @example
-     * const updatedChat = await chatService.updatePrivateChatMembersToActive('507f...');
-     */
     async updatePrivateChatMembersToActive(chatId) {
-        validateRequired(chatId, 'Chat ID');
-        validateObjectId(chatId, 'Chat ID');
+        return new Promise((resolve, reject) => {
+            const date = Date.now();
+            const filter = { _id: chatId, 'members.canChat': { $eq: false } };
+            const update = { $set: { 'members.$.canChat': true, 'members.$.joinedOn': date, 'members.$.updatedOn': date } };
 
-        const date = Date.now();
-        const filter = { _id: chatId, 'members.canChat': { $eq: false } };
-        const update = { $set: { 'members.$.canChat': true, 'members.$.joinedOn': date, 'members.$.updatedOn': date } };
-
-        const chat = await this.model.findOneAndUpdate(filter, update, { new: true })
-            .populate({
-                path: "members.user",
-                select: utils.userColumnsToShow()
-            })
-            .populate({
-                path: 'lastMessage',
-                select: utils.messageColumnsToShow(),
-                populate: {
-                    path: 'from',
+            this.model.findOneAndUpdate(filter, update, { new: true })
+                .populate({
+                    path: "members.user",
                     select: utils.userColumnsToShow()
-                }
-            })
-            .lean()
-            .exec();
-
-        if (!chat) {
-            throw new Error('Nothing to update');
-        }
-
-        return chat;
+                    // select: '_id id name email phone imageUrl device'
+                })
+                .populate({
+                    path: 'lastMessage',
+                    select: utils.messageColumnsToShow(),
+                    // select: '_id id content kind sentOn from',
+                    populate: {
+                        path: 'from',
+                        select: utils.userColumnsToShow()
+                        // select: '_id id name email phone imageUrl status' 
+                    }
+                })
+                .lean()
+                .then(chat => {
+                    if (chat) {
+                        resolve(chat);
+                    } else {
+                        reject(new Error('Nothing to update'));
+                    }
+                }).catch(err => {
+                    reject(err);
+                });
+        });
     }
 
     /**
-     * Update chat with public key
+     * 
      *
-     * @param {Object} data - Update data
-     * @param {string} data.chatId - Chat ID to update
-     * @param {string} data.publicKey - Public key to set
-     * @returns {Promise<Object>} Updated chat object
-     * @throws {Error} If chat not found or validation fails
-     *
-     * @example
-     * const chat = await chatService.updateChatWithPublicKey({
-     *   chatId: '507f...',
-     *   publicKey: 'abc123...'
-     * });
+     * @param {*} data
+     * @return {*} 
+     * @memberof ChatService
      */
     async updateChatWithPublicKey(data) {
-        validateRequired(data, 'Data');
-        validateRequired(data.chatId, 'Chat ID');
-        validateObjectId(data.chatId, 'Chat ID');
-        validateRequired(data.publicKey, 'Public key');
-        validateString(data.publicKey, 'Public key');
+        return new Promise((resolve, reject) => {
+            const date = Date.now();
+            const query = { _id: data.chatId };
+            const update = { $set: { 'publicKey': data.publicKey } };
 
-        const query = { _id: data.chatId };
-        const update = { $set: { 'publicKey': data.publicKey } };
-
-        const chat = await this.model.findOneAndUpdate(query, update).lean().exec();
-
-        if (!chat) {
-            throw new Error('Nothing to update for chat');
-        }
-
-        return chat;
+            this.model.findOneAndUpdate(query, update).lean().then(chat => {
+                if (chat) {
+                    resolve(chat);
+                } else {
+                    reject(new Error('Nothing to update for chat'));
+                }
+            }).catch(err => {
+                reject(err);
+            });
+        });
     }
 }
 

@@ -3,14 +3,11 @@ const Schema = mongoose.Schema;
 const mongoosePaginate = require('mongoose-paginate');
 
 const Message = new Schema({
-    // This id is for current messages from the other DB
-    id: { type: Number, default: null },
+    // This id is for current messages from the other DB 
     tempId: { type: String, default: null },
     uniqueId: { type: String, default: null },
     content: { type: String, required: false, default: null },
-    from: { type: Schema.Types.ObjectId, ref: 'User' },
-    // FOr old conversation
-    _chatId: { type: Number },
+    from: { type: Schema.Types.ObjectId, ref: 'User' }, 
     chatId: { type: Schema.Types.ObjectId, ref: 'Chat' },
     sentOn: { type: Date, default: Date.now },
     kind: { type: String, enum: ['text', 'image', 'video', 'audio', 'document', 'GIF', 'generic', 'share contact'], default: 'text' },

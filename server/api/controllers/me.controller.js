@@ -293,7 +293,7 @@ const updateCurrentUserLocation = async (req, res) => {
     user.location = {
       latitude: lat,
       longitude: lon,
-      updatedAt: new Date()
+      updatedOn: new Date()
     };
 
     await user.save();
@@ -308,6 +308,183 @@ const updateCurrentUserLocation = async (req, res) => {
     return res.status(500).json({
       status: 'error',
       message: 'Failed to update location'
+    });
+  }
+};
+
+/**
+ * Update Radar Visibility Settings
+ * POST /me/radar/visibility
+ * Sets visibility duration and women-only preference
+ */
+const updateRadarVisibility = async (req, res) => {
+  try {
+    const userId = req.decodedToken?.userId;
+    const { duration, womenOnly, show } = req.body;
+
+    if (!userId) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'User not authenticated'
+      });
+    }
+
+    const user = await UserModel.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'User not found'
+      });
+    }
+
+    // Update radar settings
+    if (typeof show === 'boolean') {
+      user.radar.show = show;
+    }
+
+    // Set women-only preference (only female users can enable this)
+    if (typeof womenOnly === 'boolean') {
+      if (womenOnly === true && user.gender !== 'female') {
+        return res.status(403).json({
+          status: 'error',
+          message: 'Women-only visibility can only be enabled by female users'
+        });
+      }
+      user.radar.womenOnly = womenOnly;
+    }
+
+    // Set visibility duration (in minutes)
+    if (duration) {
+      if (duration === 'indefinite' || duration === 0) {
+        user.radar.expiresAt = null;
+      } else {
+        const durationMinutes = parseInt(duration);
+        if (isNaN(durationMinutes) || durationMinutes < 0) {
+          return res.status(400).json({
+            status: 'error',
+            message: 'Invalid duration. Must be a positive number or "indefinite"'
+          });
+        }
+        user.radar.expiresAt = new Date(Date.now() + durationMinutes * 60 * 1000);
+      }
+    }
+
+    user.radar.updatedOn = new Date();
+    await user.save();
+
+    return res.status(200).json({
+      status: 'success',
+      message: 'Radar visibility updated',
+      data: {
+        show: user.radar.show,
+        womenOnly: user.radar.womenOnly,
+        expiresAt: user.radar.expiresAt,
+        remainingMinutes: user.radar.expiresAt
+          ? Math.max(0, Math.floor((user.radar.expiresAt.getTime() - Date.now()) / 60000))
+          : null
+      }
+    });
+
+  } catch (error) {
+    console.error('Update radar visibility error:', error);
+    return res.status(500).json({
+      status: 'error',
+      message: 'Failed to update radar visibility'
+    });
+  }
+};
+
+/**
+ * Disappear Now - Instant hide from radar
+ * POST /me/radar/disappear
+ */
+const disappearFromRadar = async (req, res) => {
+  try {
+    const userId = req.decodedToken?.userId;
+
+    if (!userId) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'User not authenticated'
+      });
+    }
+
+    const user = await UserModel.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'User not found'
+      });
+    }
+
+    // Hide from radar immediately
+    user.radar.show = false;
+    user.radar.expiresAt = null;
+    user.radar.updatedOn = new Date();
+    await user.save();
+
+    return res.status(200).json({
+      status: 'success',
+      message: 'You are now hidden from radar'
+    });
+
+  } catch (error) {
+    console.error('Disappear from radar error:', error);
+    return res.status(500).json({
+      status: 'error',
+      message: 'Failed to hide from radar'
+    });
+  }
+};
+
+/**
+ * Get Radar Status
+ * GET /me/radar
+ */
+const getRadarStatus = async (req, res) => {
+  try {
+    const userId = req.decodedToken?.userId;
+
+    if (!userId) {
+      return res.status(401).json({
+        status: 'error',
+        message: 'User not authenticated'
+      });
+    }
+
+    const user = await UserModel.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'User not found'
+      });
+    }
+
+    // Check if expired
+    let isVisible = user.radar.show;
+    if (user.radar.expiresAt && user.radar.expiresAt < new Date()) {
+      isVisible = false;
+    }
+
+    const remainingMinutes = user.radar.expiresAt && isVisible
+      ? Math.max(0, Math.floor((user.radar.expiresAt.getTime() - Date.now()) / 60000))
+      : null;
+
+    return res.status(200).json({
+      status: 'success',
+      data: {
+        show: isVisible,
+        womenOnly: user.radar.womenOnly || false,
+        expiresAt: user.radar.expiresAt,
+        remainingMinutes: remainingMinutes
+      }
+    });
+
+  } catch (error) {
+    console.error('Get radar status error:', error);
+    return res.status(500).json({
+      status: 'error',
+      message: 'Failed to get radar status'
     });
   }
 };
@@ -388,5 +565,8 @@ module.exports = {
   updateCurrentUserPicture,
   updateCurrentUserDeviceToken,
   updateCurrentUserLocation,
+  updateRadarVisibility,
+  disappearFromRadar,
+  getRadarStatus,
   deleteCurrentUserAccount
 };

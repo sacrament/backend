@@ -29,6 +29,7 @@ async function startServer() {
 
     // 4. Initialize Socket.IO
     console.log('⚡ Initializing Socket.IO...');
+    /** @type {import("socket.io").Server} */
     const io = await bootstrap.socket.initializeSocket(server);
     express.set('socketIO', io);
 

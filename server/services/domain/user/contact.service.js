@@ -1,171 +1,232 @@
-const mongoose = require('mongoose');  
-const UserModel = mongoose.model('User');  
+const mongoose = require('mongoose');
+const UserModel = mongoose.model('User');
+const { validateRequired, validateObjectId, validateArray, validateString } = require('../../../utils/validation.utils');
 
-const _ = require('lodash');
-const { isBuffer } = require('lodash');
-
+/**
+ * Contact Service for managing user contacts
+ * Handles storing, editing, and removing contacts from user profiles
+ */
 class ContactService {
-    constructor(userModel) { 
-        this.model = userModel
+    constructor(userModel) {
+        this.model = userModel;
     }
 
     /**
-     * Store my winkyer for a user
+     * Store/update contacts for a user
+     * Updates existing contacts with new names or adds new contacts
      *
-     * @param {*} contacts
-     * @param {*} userId
-     * @return {*} 
-     * @memberof UserService
+     * @param {Array<Object>} contacts - Array of contact objects
+     * @param {string} contacts[]._id - Contact user ID
+     * @param {string} contacts[].changedName - New/updated contact name
+     * @param {string} userId - User ID to store contacts for
+     * @returns {Promise<Object>} Updated user object
+     * @throws {Error} If user not found or validation fails
+     *
+     * @example
+     * await contactService.storeContacts([
+     *   { _id: "507f...", changedName: "John Doe" },
+     *   { _id: "507f...", changedName: "Jane Smith" }
+     * ], "507f...");
      */
     async storeContacts(contacts, userId) {
-        return new Promise((resolve, reject) => {
-            try { 
-                const date = Date.now();
-                let contactList = [];
-                contacts.forEach((contact, index, array) => {
-                    let cnt = { 
-                        id: contact._id,
-                        name: contact.changedName
-                    } 
-    
-                    contactList.push(cnt);
-                });
-    
-                const update = { $set: { 'contacts': contactList, updatedOn: date } };
-    
-                this.model.findById(userId)
-                .then((user) => {  
-                    if (user) {   
-                        user.updatedOn = date;
-                        let save = false;
+        validateRequired(userId, 'User ID');
+        validateObjectId(userId, 'User ID');
+        validateArray(contacts, 'Contacts', 1);
 
-                        contacts.forEach((contact, index, array) => {
-                            const exists = user.contacts.find(u => u.id === contact._id);
-                            if (exists) {  
-                                const index = user.contacts.findIndex(member => member.id == contact._id); 
-                                if (contact.changedName != "" && exists.name != contact.changedName) {
-                                    // user.contacts.push({ 
-                                    //     id: contact._id,
-                                    //     name: contact.changedName
-                                    // });
-                                    user.contacts[index].name = contact.changedName;
-                                    save = true;
-                                } 
-                            } else {
-                                user.contacts.push({ 
-                                    id: contact._id,
-                                    name: contact.changedName || null
-                                })
-                                save = true;
-                            } 
-                        });
+        const user = await this.model.findById(userId);
 
-                        if (save) {
-                            user.save((err) => {
-                                if (err) return reject(err);
-    
-                                resolve(user);
-                            });
-                        } 
-                    } else {
-                        reject(new Error('No user found'));
-                    }
-                }).catch(err => { 
-                    reject(err); 
+        if (!user) {
+            throw new Error('User not found');
+        }
+
+        const date = Date.now();
+        user.updatedOn = date;
+
+        let hasChanges = false;
+
+        for (const contact of contacts) {
+            validateRequired(contact._id, 'Contact ID');
+
+            const existingContact = user.contacts.find(u => u.id === contact._id);
+
+            if (existingContact) {
+                // Update existing contact if name changed
+                const contactIndex = user.contacts.findIndex(member => member.id === contact._id);
+
+                if (contact.changedName && contact.changedName !== '' && existingContact.name !== contact.changedName) {
+                    user.contacts[contactIndex].name = contact.changedName;
+                    user.contacts[contactIndex].editedOn = date;
+                    hasChanges = true;
+                }
+            } else {
+                // Add new contact
+                user.contacts.push({
+                    id: contact._id,
+                    name: contact.changedName || null,
+                    editedOn: date
                 });
-            } catch (ex) {
-                console.error('Generic Error storing contacts: ' + ex.message)
-                reject(ex); 
-            } 
-        });
+                hasChanges = true;
+            }
+        }
+
+        if (hasChanges) {
+            await user.save();
+            console.log(`Contacts updated for user: ${userId}`);
+        }
+
+        return user;
     }
 
     /**
-     * Remove winkyer from my list
+     * Remove a contact from user's contact list
+     * Marks contact as removed by setting removedOn timestamp
      *
-     * @param {*} contact
-     * @param {*} from
-     * @return {*} 
-     * @memberof ContactService
+     * @param {Object} contact - Contact to remove
+     * @param {string} contact._id - Contact user ID
+     * @param {string} from - User ID removing the contact
+     * @returns {Promise<Object>} Updated user object
+     * @throws {Error} If user or contact not found
+     *
+     * @example
+     * await contactService.remove({ _id: "507f..." }, "507f...");
      */
     async remove(contact, from) {
-        return new Promise((resolve, reject) => {
-            try { 
-                const date = Date.now();
-                // const filter = { _id: from, 'contacts.id': { "$in": [contact._id] } };  
-                // const update = { $set: { 'contacts.$.removedOn': date } };
-                this.model.findById(from)
-                .then((user) => {  
-                    if (user) {
-                        const index = user.contacts.findIndex(member => member.id == contact._id); 
-                        if (index === -1) return reject('No user found');
+        validateRequired(from, 'User ID');
+        validateObjectId(from, 'User ID');
+        validateRequired(contact, 'Contact');
+        validateRequired(contact._id, 'Contact ID');
 
-                        user.contacts[index].removedOn = date;
-                        user.contacts[index].editedOn = date;
-                        user.save((err) => {
-                            if (err) return reject(err);
+        const user = await this.model.findById(from);
 
-                            console.log('zootvcher updated')
-                            resolve(user);
-                        });
-                    } else {
-                        let err = new Error('No winkyer found for criteria');
-                        console.error(err.message)
-                        reject(err);
-                    }
-                }).catch(err => { 
-                    console.error(err.message)
-                    reject(err); 
-                });
-            } catch (ex) {
-                console.error('Generic Error removing winkyer: ' + ex.message)
-                reject(ex); 
-            } 
-        })
+        if (!user) {
+            throw new Error('User not found');
+        }
+
+        const contactIndex = user.contacts.findIndex(member => member.id === contact._id);
+
+        if (contactIndex === -1) {
+            throw new Error('Contact not found in user\'s contact list');
+        }
+
+        const date = Date.now();
+        user.contacts[contactIndex].removedOn = date;
+        user.contacts[contactIndex].editedOn = date;
+
+        await user.save();
+
+        console.log(`Contact removed for user: ${from}`);
+
+        return user;
     }
 
     /**
-     * Edit zottcher name
+     * Edit contact name in user's contact list
      *
-     * @param {*} contact
-     * @param {*} from
-     * @return {*} 
-     * @memberof ContactService
+     * @param {Object} contact - Contact to edit
+     * @param {string} contact._id - Contact user ID
+     * @param {string} contact.changedName - New contact name
+     * @param {string} from - User ID editing the contact
+     * @returns {Promise<Object>} Updated user object
+     * @throws {Error} If user or contact not found
+     *
+     * @example
+     * await contactService.edit(
+     *   { _id: "507f...", changedName: "New Name" },
+     *   "507f..."
+     * );
      */
     async edit(contact, from) {
-        return new Promise((resolve, reject) => {
-            try { 
-                const date = Date.now();
-                // const filter = { _id: from, 'contacts.id': { "$in": [contact._id] } };  
-                // const update = { $set: { 'contacts.$.removedOn': date } };
-                this.model.findById(from)
-                .then((user) => {  
-                    if (user) {
-                        const index = user.contacts.findIndex(member => member.id == contact._id); 
-                        if (index === -1) return reject('No user found');
+        validateRequired(from, 'User ID');
+        validateObjectId(from, 'User ID');
+        validateRequired(contact, 'Contact');
+        validateRequired(contact._id, 'Contact ID');
+        validateString(contact.changedName, 'Contact name');
 
-                        user.contacts[index].name = contact.changedName;
-                        user.contacts[index].editedOn = date;
-                        user.save((err) => {
-                            if (err) return reject(err);
+        const user = await this.model.findById(from);
 
-                            console.log('winkyer updated')
-                            resolve(user);
-                        });
-                    } else {
-                        let err = new Error('No winkyer found for criteria');
-                        console.error(err.message)
-                        reject(err);
-                    }
-                }).catch(err => { 
-                    console.error(err.message)
-                    reject(err); 
-                });
-            } catch (ex) {
-                console.error('Generic Error removing winkyer: ' + ex.message)
-                reject(ex); 
-            } 
-        })
+        if (!user) {
+            throw new Error('User not found');
+        }
+
+        const contactIndex = user.contacts.findIndex(member => member.id === contact._id);
+
+        if (contactIndex === -1) {
+            throw new Error('Contact not found in user\'s contact list');
+        }
+
+        const date = Date.now();
+        user.contacts[contactIndex].name = contact.changedName;
+        user.contacts[contactIndex].editedOn = date;
+
+        await user.save();
+
+        console.log(`Contact name updated for user: ${from}`);
+
+        return user;
+    }
+
+    /**
+     * Get all contacts for a user
+     *
+     * @param {string} userId - User ID
+     * @returns {Promise<Array<Object>>} Array of user contacts
+     * @throws {Error} If user not found
+     */
+    async getContacts(userId) {
+        validateRequired(userId, 'User ID');
+        validateObjectId(userId, 'User ID');
+
+        const user = await this.model.findById(userId).select('contacts');
+
+        if (!user) {
+            throw new Error('User not found');
+        }
+
+        return user.contacts || [];
+    }
+
+    /**
+     * Get active (non-removed) contacts for a user
+     *
+     * @param {string} userId - User ID
+     * @returns {Promise<Array<Object>>} Array of active contacts
+     * @throws {Error} If user not found
+     */
+    async getActiveContacts(userId) {
+        validateRequired(userId, 'User ID');
+        validateObjectId(userId, 'User ID');
+
+        const user = await this.model.findById(userId).select('contacts');
+
+        if (!user) {
+            throw new Error('User not found');
+        }
+
+        // Filter out removed contacts
+        return (user.contacts || []).filter(contact => !contact.removedOn);
+    }
+
+    /**
+     * Check if a user has a specific contact
+     *
+     * @param {string} userId - User ID
+     * @param {string} contactId - Contact user ID to check
+     * @returns {Promise<boolean>} True if contact exists and is not removed
+     * @throws {Error} If user not found
+     */
+    async hasContact(userId, contactId) {
+        validateRequired(userId, 'User ID');
+        validateObjectId(userId, 'User ID');
+        validateRequired(contactId, 'Contact ID');
+
+        const user = await this.model.findById(userId).select('contacts');
+
+        if (!user) {
+            throw new Error('User not found');
+        }
+
+        const contact = user.contacts.find(c => c.id === contactId && !c.removedOn);
+        return !!contact;
     }
 }
 

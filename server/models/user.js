@@ -14,6 +14,20 @@ const User = new Schema({
     facebookId: { type: String, default: null },
     lastLogin: { type: Date, default: null },
     status: { type: String, default: null },
+    // Gender and age information for women-only visibility feature
+    gender: {
+        type: String,
+        enum: ['male', 'female', 'other', null],
+        default: null,
+        index: true
+    },
+    dateOfBirth: { type: Date, default: null },
+    // Location for proximity-based discovery
+    location: {
+        latitude: { type: Number, default: null },
+        longitude: { type: Number, default: null },
+        updatedOn: { type: Date, default: null }
+    },
     device: {
         token: { type: String, default: null },
         voipToken: { type: String, default: null },
@@ -27,7 +41,7 @@ const User = new Schema({
     refreshToken: { type: String, default: null },
     contacts: [{
         id: { type: String },
-        name: { type: String }, 
+        name: { type: String },
         // removed: { type: Boolean },
         removedOn: { type: Date, default: null },
         editedOn: { type: Date, default: null }
@@ -35,7 +49,11 @@ const User = new Schema({
     requests: [{ type: Schema.Types.ObjectId, ref: 'Request'}],
     radar: {
         show: { type: Boolean, default: true },
-        updatedOn: { type: Date, default: null }
+        updatedOn: { type: Date, default: null },
+        // Women-only visibility feature - if true, user only visible to women
+        womenOnly: { type: Boolean, default: false },
+        // Visibility expiration timestamp for temporary presence
+        expiresAt: { type: Date, default: null }
     },
     deleted: {
         date: { type: Date, default: null },

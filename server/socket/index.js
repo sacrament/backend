@@ -10,24 +10,33 @@
 
 const config = require('../utils/config');
 const socketAuth = require('../middleware/socket.auth');
-const { UserService } = require('../services');
-const mongoose = require('mongoose');
-const UserModel = mongoose.model('User');
+const { UserService } = require('../services'); 
 
 // Import event handlers
 const { ChatHandler, CallsHandler, UserHandler } = require('./handlers');
 
+// Import socket services manager
+const socketServicesManager = require('./services');
+
 // Global state - initialized once
+/** */
 let eventHandlers = null;
 let handlersInitialized = false;
 
+/**
+ * Initialize Socket.IO with authentication and event handlers
+ * @param { import("socket.io").Server } io - Socket.IO instance
+ */
 module.exports = async (io) => {
     console.log('Socket.IO started at: ' + new Date().toISOString());
+    
+    // Initialize socket services once
+    socketServicesManager.initialize(io);
     
     // Register authentication middleware first
     io.use(socketAuth);
     
-    // Initialize event handlers ONCE
+    // Initialize and register event handlers ONCE at startup
     if (!handlersInitialized) {
         initializeHandlers(io);
         handlersInitialized = true;
@@ -42,37 +51,39 @@ module.exports = async (io) => {
 
 /**
  * Initialize all event handlers once when server starts
- * @param {*} io
+ * @param {import("socket.io").Server} io - Socket.IO instance
  */
 const initializeHandlers = (io) => {
     console.log('Initializing event handlers (one-time setup)');
     
-    const chat = new ChatHandler(io); 
-    const calls = new CallsHandler(io);
-    const user = new UserHandler(io);
-
-    const chatHandler = chat.handler || {};
-    const callsHandler = calls.handler || {};
-    const usersHandler = user.handler || {};
+    const chat = new ChatHandler(); 
+    const calls = new CallsHandler();
+    const user = new UserHandler();
     
     // Merge all handlers into a single object
     eventHandlers = { 
-        ...chatHandler, 
-        ...callsHandler, 
-        ...usersHandler 
+        ...chat.handler, 
+        ...calls.handler, 
+        ...user.handler 
     };
 
+    // Register all handlers globally on io instance (once)
+    Object.entries(eventHandlers).forEach(([event, handler]) => {
+        io.on(event, function(data, ack) {
+            handler.call(this, data, ack);
+        });
+    });
+
     const eventCount = Object.keys(eventHandlers).length;
-    console.log(`Total event handlers initialized: ${eventCount}`);
+    console.log(`✓ Event handlers initialized: ${eventCount} events registered`);
 };
 
 /**
- * Socket connected - register handlers for this socket only once
- * @param {*} socket
+ * Socket connected - setup user and join room
+ * @param {import("socket.io").Socket} socket
  */
 const onConnected = async (socket) => {
     const userId = socket.decoded_token?.userId;
-    const userType = socket.decoded_token?.type || 'mobile';
     
     if (!userId) {
         console.error('No userId in decoded token');
@@ -80,41 +91,34 @@ const onConnected = async (socket) => {
         return;
     }
 
-    // Attach user info to socket
-    socket.user = { 
-        id: userId, 
-        socket: socket.id, 
-        type: userType, 
-        token: socket.token 
-    };
-    
-    socket.authenticated = true;
-    console.log(`New user connected: ${userId} from device: ${userType} with socket id: ${socket.id}`);
-
     try {
-        // Register event handlers for this socket - ONLY ONCE
-        registerSocketHandlers(socket);
-
-        // Get user from service
-        const userService = new UserService(UserModel);
+        const userService = new UserService();
         const id = await userService.getUserIds([userId]);
         
-        socket.user.originalId = userId;
-        socket.user.id = id;
+        // Attach user info to socket
+        socket.user = { 
+            id: id,
+            originalId: userId,
+            socket: socket.id, 
+            type: socket.decoded_token?.type || 'mobile',
+            token: socket.token 
+        };
+        
+        console.log(`User connected: ${id} (${socket.user.type}) socket: ${socket.id}`);
 
         // Join user-specific room
-        joinUserRoom(socket);
+        socket.join(id);
 
         // Notify others
         socket.broadcast.emit('new user connected', {
             userId: id,
-            originalId: socket.user.originalId
+            originalId: userId
         });
 
         // Notify this client
         socket.emit('connected', {
             userId: id,
-            originalId: socket.user.originalId
+            originalId: userId
         });
     } catch (error) {
         console.error('Error in onConnected:', error);
@@ -123,94 +127,22 @@ const onConnected = async (socket) => {
 };
 
 /**
- * Register socket event handlers - ensure handlers are added only once
- * @param {*} socket
- */
-const registerSocketHandlers = (socket) => {
-    if (socket._handlersRegistered) {
-        console.warn(`Handlers already registered for socket: ${socket.id}`);
-        return;
-    }
-
-    console.log(`Registering event handlers for socket: ${socket.id}`);
-    
-    // Register all event handlers for this socket
-    for (const [event, handler] of Object.entries(eventHandlers)) {
-        // Bind handler to socket context and add error handling
-        const boundHandler = handler.bind(socket);
-        
-        socket.on(event, (data, ack) => {
-            try {
-                boundHandler(data, ack);
-            } catch (error) {
-                console.error(`Error in event handler '${event}':`, error);
-                if (typeof ack === 'function') {
-                    ack({ error: error.message });
-                }
-            }
-        });
-    }
-
-    // Mark handlers as registered for this socket
-    socket._handlersRegistered = true;
-    console.log(`Event handlers registered for socket: ${socket.id}`);
-};
-
-/**
  * Socket disconnected - clean up user state
- * @param {*} socket
+ * @param {import("socket.io").Socket} socket
  */
 const onDisconnected = (socket) => {
     socket.on('disconnect', (reason) => {
-        if (socket.user?.id) {
-            console.log(`User disconnected: ${socket.user.id} (socket: ${socket.id}) reason: ${reason}`);
+        const userId = socket.user?.id;
+        
+        if (userId) {
+            console.log(`User disconnected: ${userId} (socket: ${socket.id}) reason: ${reason}`);
             socket.broadcast.emit('user disconnected', { 
-                userId: socket.user.id, 
+                userId: userId, 
                 id: socket.user.originalId 
             });
         } else {
             console.log(`Socket disconnected before authentication: ${socket.id} reason: ${reason}`);
         }
-        
-        // Leave user room (socket will be destroyed by socket.io)
-        leaveUserRoom(socket);
     });
 };
 
-/**
- * Join user-specific room
- * @param {*} socket
- */
-const joinUserRoom = (socket) => {
-    console.log(`Attempting to join room for user: ${socket.user.id}`);
-    
-    // Leave all previous rooms
-    socket.leaveAll();
-    
-    // Join user-specific room
-    socket.join(socket.user.id, (err) => {
-        if (err) {
-            console.error(`Error joining room ${socket.user.id}:`, err);
-        } else { 
-            console.log(`User ${socket.user.id} joined room: ${socket.user.id}`);
-        }
-    });
-};
-
-/**
- * Leave user room on disconnect
- * @param {*} socket
- */
-const leaveUserRoom = (socket) => { 
-    if (!socket.user?.id) {
-        return;
-    }
-
-    socket.leave(socket.user.id, (err) => {
-        if (err) {
-            console.error(`Error leaving room ${socket.user.id}:`, err);
-        } else {
-            console.log(`User ${socket.user.id} left room: ${socket.user.id}`);
-        }
-    });
-};

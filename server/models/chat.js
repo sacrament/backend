@@ -16,14 +16,17 @@ const ChatSchema = new Schema({
     {
       user: { type: Schema.Types.ObjectId, ref: "User", index: true },
       canChat: { type: Boolean, default: true, index: true },
+      // Permission system: Chat -> Calls -> Video progression
+      canCall: { type: Boolean, default: false, index: true },
+      canVideo: { type: Boolean, default: false, index: true },
       joinedOn: { type: Date, default: Date.now },
       // This is when a user has triggered any action based below: mute, favourite, admin or blocked the chat
       updatedOn: { type: Date, default: null },
       leftOn: { type: Date, default: null },
       creator: { type: Boolean, default: false },
-      admin: { type: Boolean, default: false },  
+      admin: { type: Boolean, default: false },
       options: {
-        favorite: { type: Boolean, default: false }, 
+        favorite: { type: Boolean, default: false },
         blocked: { type: Boolean, default: false },
         muted: { type: Boolean, default: false }
       }

@@ -2,24 +2,24 @@ const utils = require('../../../utils/index');
 const mongoose = require('mongoose');
 const UserModel = mongoose.model('User');
 const ChatModel = mongoose.model('Chat');
-const MessageModel = mongoose.model('Message');
-const { ChatService } = require('../../../services');
-const ChatServiceDB = require('../../../services/domain/chat/chat.service.db');
-const MessageServiceDB = require('../../../services/domain/chat/message.service.db');
-const { UserService } = require('../../../services');
-const CS = require('../../chat.service');
-const PushNotificationService = require('../../../notifications');
+const MessageModel = mongoose.model('Message'); 
+const ChatServiceDB = require('../../services/domain/chat/chat.service.db');
+const MessageServiceDB = require('../../services/domain/chat/message.service.db');
+const { UserService, ChatService, CallService, ContactService } = require('../../services');
+const { getChatService } = require('../services');
+const PushNotificationService = require('../../notifications');
 
-let ChatSocketService; 
+// Get ChatService from singleton manager
+const chatSocketService = getChatService(); 
 
 module.exports = class Chat {
-    constructor(io) { 
-        ChatSocketService = new CS(io);
+    constructor() {  
+        
         this.handler = {
             'new chat': newChat,
             'edit chat': editChat,
-            'add new chat members': newChatMembers,
-            'remove members from chat': removeMembersFromChat,
+            // 'add new chat members': newChatMembers,
+            // 'remove members from chat': removeMembersFromChat,
             'new message': newMessage,
             'react on message': reactOnMessage,
             'delete message': deleteMessage,
@@ -27,7 +27,7 @@ module.exports = class Chat {
             'leave chat': leaveChat,
             'favorite chat': favoriteChat,
             'block chat': blockChat,
-            'mute chat': muteChat,
+            // 'mute chat': muteChat,
             'message seen': messageSeen,
             'message received': messageDelivered,
             'chat messages': messages,
@@ -119,7 +119,7 @@ const editChat = async function(data, ack) {
             const members = chat.members.filter(member => member.user._id != userId);
             for (const member of members) {
                 const to = member._id.toString();
-                const isUserConnected = await ChatSocketService.isUserConnected(to);
+                const isUserConnected = await chatSocketService.isUserConnected(to);
                 if (isUserConnected) {
                     this.to(to).emit('chat edited', {
                         chat: chat,
@@ -143,7 +143,7 @@ const editChat = async function(data, ack) {
             ack({error: err.message});
         });
     } catch (ex) {
-        console.error(`[ERROR]:Generic ${err.message}`);
+        console.error(`[ERROR]:Generic ${ex.message}`);
         ack(ex.message);
     } 
 }
@@ -199,7 +199,7 @@ const newChatMembers = async function(data, ack) {
 
                 if (to == from.id) continue;
                 
-                const isUserConnected = await ChatSocketService.isUserConnected(to);
+                const isUserConnected = await chatSocketService.isUserConnected(to);
 
                 if (isUserConnected) {
                     // Send the message to online users
@@ -286,7 +286,7 @@ const removeMembersFromChat = async function(data, ack) {
 
                 // if (to == from) continue;
                 
-                const isUserConnected = await ChatSocketService.isUserConnected(to);
+                const isUserConnected = await chatSocketService.isUserConnected(to);
 
                 if (isUserConnected) {
                     // Send the message to online users
@@ -364,7 +364,7 @@ const deleteChat = async function(data, ack) {
 
                 const to = member.user._id.toString();
 
-                const isUserConnected = await ChatSocketService.isUserConnected(to);
+                const isUserConnected = await chatSocketService.isUserConnected(to);
 
                 if (isUserConnected) {
                     this.to(to).emit('chat deleted', {
@@ -383,9 +383,9 @@ const deleteChat = async function(data, ack) {
             return new Promise((resolve) => {
                 resolve(obj)
             });
-        }).then(result => { 
+        }).then(result => {
             // send the push notification to offline users
-            if (offlineReceivers.length) {
+            if (result.offlineReceivers && result.offlineReceivers.length) {
                 const pushNotification = new PushNotificationService();
                 result.from = from;
                 pushNotification.chatDeleted(result)
@@ -462,7 +462,7 @@ const leaveChat = async function(data, ack) {
                 // Skip me
                 if (to == from.id) continue; 
 
-                const isUserConnected = await ChatSocketService.isUserConnected(to);
+                const isUserConnected = await chatSocketService.isUserConnected(to);
 
                 if (isUserConnected) {
                     this.to(to).emit('member left chat', {
@@ -563,7 +563,7 @@ const blockChat = async function(data, ack) {
                 // Skip me
                 if (to == userFrom.id) return nil; 
 
-                const isUserConnected = await ChatSocketService.isUserConnected(to);
+                const isUserConnected = await chatSocketService.isUserConnected(to);
  
                 if (isUserConnected) {
                     this.to(to).emit('member blocked chat', {
@@ -696,7 +696,7 @@ const startTyping = async function(data, ack) {
         for (const member of chatMembers) {
             if (member.toString() === from) continue;
 
-            const memberIsOnline = await ChatSocketService.isUserConnected(member.toString());
+            const memberIsOnline = await chatSocketService.isUserConnected(member.toString());
 
             if (memberIsOnline) {
                 // Send the message to online users 
@@ -735,7 +735,7 @@ const stopTyping = async function(data, ack) {
         for (const member of chatMembers) {
             if (member.toString() === from) continue;
 
-            const memberIsOnline = await ChatSocketService.isUserConnected(member.toString());
+            const memberIsOnline = await chatSocketService.isUserConnected(member.toString());
 
             if (memberIsOnline) {
                 // Send the message to online users 
@@ -824,7 +824,7 @@ const newMessage = async function(data, ack) {
                 const to = member.user._id.toString();
                 if (to == from.id) return member; 
 
-                const memberIsOnline = await ChatSocketService.isUserConnected(to);
+                const memberIsOnline = await chatSocketService.isUserConnected(to);
 
                 if (memberIsOnline) {
                     // const unreadMessages = await chatService.countUnreadMessagesForChat(chat._id, to)
@@ -911,7 +911,7 @@ const messages = async function(data, ack) {
 
             if (senders.length) {
                 const promises = senders.map(async member => {
-                    const socket = await ChatSocketService.isUserConnected(member);
+                    const socket = await chatSocketService.isUserConnected(member);
 
                     if (socket) {
                         this.to(member).emit('conversation read', { chatId: chatId, date: Date.now(), by: userId });
@@ -991,7 +991,7 @@ const reactOnMessage = async function(data, ack) {
                 const to = member.user._id.toString();
                 if (to == from.id) continue;
                  
-                const memberIsOnline = await ChatSocketService.isUserConnected(to); 
+                const memberIsOnline = await chatSocketService.isUserConnected(to); 
                 if (memberIsOnline) {
                     // Send the message to online users
                     this.to(to).emit('message reaction', {
@@ -1074,7 +1074,7 @@ const deleteMessage = async function(data, ack) {
                     const to = member.user._id.toString();
                     if (to == from.id) continue;
 
-                    const memberIsOnline = await ChatSocketService.isUserConnected(to);
+                    const memberIsOnline = await chatSocketService.isUserConnected(to);
                     if (memberIsOnline) {
                         // Send the message to online users
                         this.to(to).emit('message deleted', {
@@ -1123,8 +1123,8 @@ const deleteMessage = async function(data, ack) {
             ack({ error: err.message, deleted: false });
         }) 
     } catch (ex) {
-        console.error(`Error deleting message: ${ex.message}`) 
-        ack({ error: err.message, deleted: false });
+        console.error(`Error deleting message: ${ex.message}`)
+        ack({ error: ex.message, deleted: false });
     } 
 }
 
@@ -1137,7 +1137,7 @@ const deleteMessage = async function(data, ack) {
 const messageSeen = async function(data, ack) {
     try {
         console.log(`Marking Message seen/read`)
-        // var offlineReceivers = [];
+        const offlineReceivers = [];
         // Instantiate a message service
         const messageService = new MessageServiceDB(MessageModel); 
         const from = this.user.id;
@@ -1147,7 +1147,7 @@ const messageSeen = async function(data, ack) {
         messageService.messageSeen(from, messageId, messageDate).then( async (message) => {  
             const creator = message.from.toString();
             // Get the creator of the message
-            const memberIsOnline = await ChatSocketService.isUserConnected(creator);
+            const memberIsOnline = await chatSocketService.isUserConnected(creator);
 
             if (memberIsOnline) {
                 // Send the message to online users
@@ -1206,7 +1206,7 @@ const messageDelivered = async function(data, ack) {
         messageService.messageDelivered(from, messageId, messageDate).then( async (message) => {  
             const creator = message.from.toString();
             // Get the creator of the message
-            const memberIsOnline = await ChatSocketService.isUserConnected(creator);
+            const memberIsOnline = await chatSocketService.isUserConnected(creator);
 
             if (memberIsOnline) {
                 // Send the message to online users
@@ -1292,7 +1292,7 @@ const markConversationSeen = async function(data, ack) {
         // console.log('From: ' + from);
         const promises = senders.map(async member => {
             // console.log('To Sender: ' + member);
-            const socket = await ChatSocketService.isUserConnected(member);
+            const socket = await chatSocketService.isUserConnected(member);
 
             if (socket) {
                 this.to(member).emit('conversation read', { chatId: chatId, date: date, by: from });
@@ -1362,7 +1362,7 @@ const exchangeInfo = async function(data, ack) {
         const promises = chatMembers.map(async member => {
             if (member.toString() === from) return null;
 
-            const memberIsOnline = await ChatSocketService.isUserConnected(member.toString());
+            const memberIsOnline = await chatSocketService.isUserConnected(member.toString());
 
             if (memberIsOnline) {
                 // Send the message to online users 
