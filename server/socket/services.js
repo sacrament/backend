@@ -5,8 +5,6 @@
  * Provides shared services to all socket handlers
  */
 
-const ChatService = require('./chat.service');
-
 class SocketServicesManager {
     constructor() {
         this.io = null;
@@ -24,7 +22,8 @@ class SocketServicesManager {
         }
 
         this.io = io;
-        this.chatService = new ChatService(io);
+        const ChatService = require('./chat.service');
+        this.chatService = new ChatService();
         
         console.log('✓ Socket services initialized');
     }
@@ -42,7 +41,7 @@ class SocketServicesManager {
 
     /**
      * Get Socket.IO instance
-     * @returns {*} Socket.IO instance
+     * @returns {SocketIO} Socket.IO instance
      */
     getIO() {
         return this.io;
@@ -59,5 +58,12 @@ class SocketServicesManager {
     }
 }
 
-// Export singleton instance
-module.exports = new SocketServicesManager();
+// Export singleton instance and helper functions
+const manager = new SocketServicesManager();
+
+module.exports = {
+    initialize: (io) => manager.initialize(io),
+    getChatService: () => manager.getChatService(),
+    getIO: () => manager.getIO(),
+    shutdown: () => manager.shutdown()
+};

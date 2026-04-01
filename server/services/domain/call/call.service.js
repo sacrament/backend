@@ -10,21 +10,17 @@ const CallHistory = mongoose.model('CallHistory');
 const Chat = mongoose.model('Chat');
 const Message = mongoose.model('Message');
 const BlockUser = mongoose.model('BlockUser');
-const ChatService = require('../chat/chat.service');
 
 const helper = require('../../../utils/index');
 
 /**
- * CallService with permission validation and safety checks
- * Implements PDF requirements for call permissions
- *
- * @class CallService
- * @extends {ChatService}
+ * CallService — voice/video call management with Twilio integration.
+ * Standalone service; uses Chat/Message models directly for permission checks.
  */
-class CallService extends ChatService {
+class CallService {
     /**
-     * Check if a user can call another user
-     * Validates: chat exists, messages exchanged, permissions granted, not blocked, rate limits
+     * Check if a user can call another user.
+     * Validates: block status, chat exists, messages exchanged, permissions granted, rate limits.
      *
      * @param {string} fromUserId - Caller user ID
      * @param {string} toUserId - Callee user ID
@@ -45,7 +41,7 @@ class CallService extends ChatService {
                 return {
                     allowed: false,
                     reason: 'Cannot call blocked users',
-                    code: 'BLOCKED'
+                    code: 'blocked'
                 };
             }
 
@@ -98,7 +94,7 @@ class CallService extends ChatService {
                 };
             }
 
-            // 5. Check call permission (canCall must be true for voice calls)
+            // 5. Check call permission
             if (!callerMember.canCall) {
                 return {
                     allowed: false,
@@ -121,7 +117,7 @@ class CallService extends ChatService {
                 from: fromUserId,
                 to: toUserId,
                 type: 'missed',
-                date: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } // Last 24 hours
+                date: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
             });
 
             if (recentMissedCalls >= 3) {
@@ -132,7 +128,6 @@ class CallService extends ChatService {
                 };
             }
 
-            // All checks passed
             return {
                 allowed: true,
                 reason: 'Call allowed',
@@ -147,9 +142,6 @@ class CallService extends ChatService {
 
     /**
      * Get Twilio access token for identity
-     *
-     * @param {string} identity - User identity
-     * @returns {Promise<Object>} JWT token
      */
     async getAccessToken(identity) {
         if (!identity) {
@@ -172,14 +164,8 @@ class CallService extends ChatService {
 
     /**
      * Create call room with permission validation
-     *
-     * @param {string} caller - Caller user ID
-     * @param {string} callee - Callee user ID
-     * @param {string} callType - 'voice' or 'video'
-     * @returns {Promise<Object>} Call details with token
      */
     async createCallRoom(caller, callee, callType = 'voice') {
-        // Validate permissions first
         const permissionCheck = await this.canUserCall(caller, callee, callType);
         if (!permissionCheck.allowed) {
             throw new Error(permissionCheck.reason);
@@ -203,7 +189,6 @@ class CallService extends ChatService {
 
             console.log(`Call room created: ${call.sid}`);
 
-            // Store call in database
             await this.addCall({
                 roomId: call.sid,
                 type: 'outgoing',
@@ -221,7 +206,6 @@ class CallService extends ChatService {
         } catch (err) {
             console.error(`Error while creating room: ${err.message}`);
 
-            // Log failed call
             await this.addCall({
                 roomId: 'error',
                 type: 'error',
@@ -239,11 +223,6 @@ class CallService extends ChatService {
 
     /**
      * Invite user to join call room
-     *
-     * @param {string} roomId - Twilio room ID
-     * @param {string} caller - Caller user ID
-     * @param {string} callee - Callee user ID
-     * @returns {Promise<Object>} Call details with token
      */
     async call(roomId, caller, callee) {
         const call = await client.video.rooms(roomId).fetch();
@@ -255,7 +234,6 @@ class CallService extends ChatService {
         const token = await this.getAccessToken(callee);
         const jwt = token.jwt || token.toJwt();
 
-        // Store incoming call
         await this.addCall({
             roomId: call.sid,
             type: 'incoming',
@@ -273,9 +251,6 @@ class CallService extends ChatService {
 
     /**
      * Complete call room
-     *
-     * @param {string} id - Room ID
-     * @returns {Promise<Object>} Completed call
      */
     async completeRoom(id) {
         const call = await client.video.rooms(id).update({
@@ -288,9 +263,6 @@ class CallService extends ChatService {
 
     /**
      * Get call history for a user
-     *
-     * @param {string} user - User ID
-     * @returns {Promise<Array>} Call history
      */
     async getHistory(user) {
         console.log(`Getting call history for: ${user}`);
@@ -298,23 +270,20 @@ class CallService extends ChatService {
         const calls = await CallHistory.find({
             $or: [{ from: user }, { to: user }]
         })
-        .select('-__v')
-        .populate({
-            path: "from to",
-            select: '_id id name email phone imageUrl device'
-        })
-        .sort({ date: -1 })
-        .lean()
-        .exec();
+            .select('-__v')
+            .populate({
+                path: "from to",
+                select: '_id id name email phone imageUrl device'
+            })
+            .sort({ date: -1 })
+            .lean()
+            .exec();
 
         return calls;
     }
 
     /**
      * Add a call to database
-     *
-     * @param {Object} data - Call data
-     * @returns {Promise<Object>} Saved call
      */
     async addCall(data) {
         console.log(`Adding info for call: ${data.type}`);
@@ -337,30 +306,24 @@ class CallService extends ChatService {
 
     /**
      * Get call history details by room ID
-     *
-     * @param {string} roomId - Room ID
-     * @returns {Promise<Object>} Call details
      */
     async getCall(roomId) {
         console.log(`Get info for call: ${roomId}`);
 
         const call = await CallHistory.findOne({ roomId: roomId })
-        .select('-__v')
-        .populate({
-            path: "from to",
-            select: '_id id name email phone imageUrl device'
-        })
-        .lean()
-        .exec();
+            .select('-__v')
+            .populate({
+                path: "from to",
+                select: '_id id name email phone imageUrl device'
+            })
+            .lean()
+            .exec();
 
         return call;
     }
 
     /**
      * Update call status from Twilio webhook
-     *
-     * @param {Object} callDetails - Twilio webhook data
-     * @returns {Promise<Object>} Updated call
      */
     async callStatusUpdate(callDetails) {
         console.log(`Call status update info for call: ${callDetails.RoomSid}`);
@@ -395,11 +358,6 @@ class CallService extends ChatService {
 
     /**
      * End an active call
-     *
-     * @param {string} callId - Call/Room ID
-     * @param {string} callee - Callee user ID
-     * @param {string} caller - Caller user ID
-     * @returns {Promise<Object>} Ended call
      */
     async endCall(callId, callee, caller) {
         const call = await client.video.rooms(callId).update({
@@ -408,7 +366,6 @@ class CallService extends ChatService {
 
         console.log(`Call Ended: ${call.sid}`);
 
-        // Store ended call
         await this.addCall({
             roomId: call.sid,
             type: 'ended',
@@ -424,9 +381,6 @@ class CallService extends ChatService {
 
     /**
      * Mark call as missed and increment counter
-     *
-     * @param {string} callId - Call history ID
-     * @returns {Promise<Object>} Updated call
      */
     async markCallAsMissed(callId) {
         const call = await CallHistory.findByIdAndUpdate(

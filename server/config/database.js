@@ -1,5 +1,4 @@
 const mongoose = require('mongoose');
-const config = require('../../utils/config')
 
 class Database {
     constructor() {
@@ -15,7 +14,7 @@ class Database {
 
     async _connectWithRetry() {
         try {
-            const url = config.MONGODB.HOST;
+            const url = process.env.MONGO_HOST;
             
             await mongoose.connect(url, {
                 retryWrites: true,
@@ -89,7 +88,7 @@ class Database {
         await this._sleep(delay);
 
         try {
-            const url = config.MONGODB.HOST;
+            const url = process.env.MONGO_HOST;
             await mongoose.connect(url, {
                 retryWrites: true,
                 w: 'majority',

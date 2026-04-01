@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(brew install poppler)",
+      "Bash(brew list poppler)",
+      "Bash(brew install poppler --force)",
+      "Read(//usr/local/Cellar/**)",
+      "Bash(brew link poppler)",
+      "Bash(pip3 install pdfminer.six)",
+      "Bash(python3 -c \":*)",
+      "Bash(pip3 install pymupdf)",
+      "Bash(node -e \"require\\(''''./index.js''''\\)\")",
+      "Bash(for f:*)",
+      "Bash(do node:*)",
+      "Bash(echo \"✓ $f\")",
+      "Bash(echo \"✗ $f\")",
+      "Bash(done)",
+      "Read(//Users/petritselmani/**)",
+      "Bash(npm show:*)",
+      "Bash(npm install:*)",
+      "Bash(npm uninstall:*)"
+    ]
+  }
+}

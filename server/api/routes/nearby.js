@@ -13,21 +13,22 @@ const {
  * Nearby Users Endpoints
  * Base path: /users-nearby
  */
+ 
 
 // Get nearby users within radius
-// GET /users-nearby?radius=5&unit=kilometer
-router.get('/', verifyToken, getNearbyUsers);
+// GET /nearby?radius=5&unit=kilometer
+router.get('/users', verifyToken, getNearbyUsers);
 
 // Get all nearby users history
-// GET /users-nearby/history/users
-router.get('/history/users', verifyToken, getNearbyUsersHistory);
+// GET /nearby/history/users
+router.get('/users/history', verifyToken, getNearbyUsersHistory);
 
 // Get specific nearby user history
-// GET /users-nearby/history/users/{userId}
-router.get('/history/users/:userId', verifyToken, getNearbyUserSpecificHistory);
+// GET /nearby/history/users/{userId}
+router.get('/users/history/:userId', verifyToken, getNearbyUserSpecificHistory);
 
 // Delete nearby user history
-// DELETE /users-nearby/history/users/{userId}
-router.delete('/history/users/:userId', verifyToken, deleteNearbyUserHistory);
+// DELETE /nearby/history/users/{userId}
+router.delete('/users/history/:userId', verifyToken, deleteNearbyUserHistory);
 
 module.exports = router;

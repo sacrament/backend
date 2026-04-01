@@ -5,11 +5,12 @@
  */
 
 const config = require('../utils/config');
+const { initIO } = require('./io');
+const socketIO = require('socket.io');
 
 module.exports = {
   async initializeSocket(server) {
-    const socketIO = require('socket.io');
-    
+
     const io = socketIO(server, {
       pingInterval: config.HEARTBEAT_INTERVAL,
       pingTimeout: config.HEARTBEAT_TIMEOUT,
@@ -29,23 +30,23 @@ module.exports = {
       }
     }
 
+    initIO(io);
     console.log('✓ Socket.IO initialized on port', config.PORT);
     return io;
   },
 
   async _setupRedisAdapter(io) {
     const { createClient } = require('redis');
-    const ioRedis = require('socket.io-redis');
+    const { createAdapter } = require('@socket.io/redis-adapter');
 
-    const pubClient = createClient({ 
-      host: config.REDIS_HOST, 
-      port: config.REDIS_PORT 
+    const pubClient = createClient({
+      socket: { host: config.REDIS_HOST, port: config.REDIS_PORT }
     });
     const subClient = pubClient.duplicate();
 
     await Promise.all([pubClient.connect(), subClient.connect()]);
-    io.adapter(ioRedis(pubClient, subClient));
-    
+    io.adapter(createAdapter(pubClient, subClient));
+
     console.log('✓ Redis adapter configured for Socket.IO');
   }
 };

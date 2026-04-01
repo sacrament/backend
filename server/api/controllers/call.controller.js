@@ -1,15 +1,14 @@
 const CallService = require('../../services/domain/call/call.service');
 const PushNotificationService = require('../../services/external/push/push.service');
 const CS = require('../../socket');
-const UserService = require('../../services/domain/user/user.service');
-const mongoose = require('mongoose');
-const UserModel = mongoose.model('User');
-const ChatModel = mongoose.model('Chat');
+const UserService = require('../../services/domain/user/user.service');  
+
+const callService = new CallService();
+const userService = new UserService();
+const pushService = new PushNotificationService();
 
 const getAccessToken = (req, res) => {
     let identity = req.decodedToken.userId;
-
-    const callService = new CallService(ChatModel);
 
     callService.getAccessToken(identity).then((token) => {
         res.status(200).json({status: 'success', token});
@@ -23,24 +22,20 @@ const bindDevice = async (req, res) => {
         identity: req.decodedToken.userId,
         type: req.body.type,
         token: req.body.token
-    };
-
-    const pushService = new PushNotificationService();
+    }; 
 
     pushService.bindDevice(bind).then((binding) => {
         res.status(200).json({status: 'success', sid: binding.sid});
     }).catch((err) => {
         res.status(500).json({status: 'error', message: err.message});
     });
-
-    const userService = new UserService(UserModel);
+ 
     await userService.updateVoipDeviceToken(bind.identity, bind.token);
 };
 
 const unbindDevice = (req, res) => {
     let sid = req.body.sid;
     let userId = req.decodedToken.userId
-    const pushService = new PushNotificationService();
 
     pushService.unbindDevice(sid, userId).then(() => {
         res.status(200).json({status: 'success'});
@@ -56,9 +51,7 @@ const sendNotification = (req, res) => {
     let body = req.body.body;
     let data = req.body.data;
 
-    let notification = {identity: recipient, title, body, data: {data}};
-
-    const pushService = new PushNotificationService();
+    let notification = {identity: recipient, title, body, data: {data}}; 
 
     //MARK: TODO: Store call to db
 
@@ -73,8 +66,7 @@ const declineCall = async (req, res) => {
     const userId = req.decodedToken.userId;
     let { to, callId } = req.body; 
 
-    if (typeof to === 'number') {
-        const userService = new UserService(UserModel);
+    if (typeof to === 'number') { 
         to = await userService.getUserIds([to]);
     }
 
@@ -91,13 +83,11 @@ const storeCallInfo = async (req, res) => {
     let { date, type, userId, userName, description, other } = req.body;
     
     if (typeof userId === 'string') {
-        const userService = new UserService(UserModel);
         userId = await userService.getUserIds([userId]);
     }
 
     let user = req.decodedToken.userId;
-    if (typeof user === 'number') {
-        const userService = new UserService(UserModel);
+    if (typeof user === 'number') { 
         user = await userService.getUserIds([user]);
     }
 
@@ -110,8 +100,6 @@ const storeCallInfo = async (req, res) => {
         description: description,
         other: other
     }
-
-    const callService = new CallService();
     
     callService.addCall(data).then(result => {
         res.status(200).json({status: 'success', calls: result}); 
@@ -120,19 +108,16 @@ const storeCallInfo = async (req, res) => {
 
 const callHistory = async (req, res) => {
     let userId = req.decodedToken.userId;
-    if (typeof userId === 'number') {
-        const userService = new UserService(UserModel);
+    if (typeof userId === 'number') { 
         userId = await userService.getUserIds([userId]);
-    }
-    const callService = new CallService();
+    } 
     callService.getHistory(userId).then(result => {
         res.status(200).json({status: 'success', calls: result}); 
     }).catch(err => res.status(400).json({status: 'error', message: err.message}))
 }
 
 const callDetails = async (req, res) => {
-    const roomId = req.params.roomId;
-    const callService = new CallService();
+    const roomId = req.params.roomId; 
     callService.getCall(roomId).then(result => {
         res.status(200).json({status: 'success', call: result}); 
     }).catch(err => res.status(400).json({status: 'error', message: err.message}))
@@ -140,8 +125,7 @@ const callDetails = async (req, res) => {
 
 const twilioCallStatusCallbackDetails = async (req, res) => {
     // console.log(`Call details from Twilio: ${JSON.stringify(req.body, undefined, 4)}`)
-    const data = req.body;
-    const callService = new CallService();
+    const data = req.body; 
 
     await callService.callStatusUpdate(data);
 //     AccountSid:"REDACTED"

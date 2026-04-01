@@ -1,34 +1,26 @@
-const ChatService = require('./chat.service');
 const mongoose = require('mongoose');
 const ObjectId = mongoose.Types.ObjectId;
 const Reaction = mongoose.model('Reaction');
 
-const ChatModel = mongoose.model('Chat');
+const MessageModel = mongoose.model('Message');
 const MediaModel = mongoose.model('Media');
 
+const ChatService = require('./chat.service');
 const UserService = require('../user/user.service');
-const UserModel = mongoose.model('User');
 const utils = require('../../../utils/index');
 const { normalizeUserId } = require('../../../utils/user.utils');
-const { validateRequired, validateObjectId, validateString, validateEnum, validateFields } = require('../../../utils/validation.utils');
+const { validateRequired, validateObjectId, validateString, validateFields } = require('../../../utils/validation.utils');
 
-class MessageServiceDB extends ChatService {
+class MessageService {
+    constructor() {
+        this.model = MessageModel;
+        this.chatService = new ChatService();
+    }
+
     /**
      * Create a new Message object in memory (not saved to database)
-     *
-     * @param {Object} data - Message data
-     * @param {string} data.tempId - Temporary message ID
-     * @param {string} data.chatId - Chat ID
-     * @param {string} data.from - Sender user ID
-     * @param {string} data.type - Message type (text, image, video, audio, document, share contact)
-     * @param {Date} data.sentOn - Message sent timestamp
-     * @param {string} [data.content] - Message content (for text messages)
-     * @param {Array} data.members - Chat members
-     * @param {string} [data.replyTo] - ID of message being replied to
-     * @returns {Object} Message object (not saved)
      */
     async create(data) {
-        // Validate required fields
         validateFields(data, {
             tempId: { type: 'string', required: true },
             chatId: { type: 'objectId', required: true },
@@ -59,7 +51,6 @@ class MessageServiceDB extends ChatService {
             message.content = data.content;
             message.sharedContact = data.sharedContact;
         } else {
-            // Media message (image, video, audio, document)
             const media = new MediaModel({
                 from: data.from,
                 type: data.type,
@@ -71,7 +62,6 @@ class MessageServiceDB extends ChatService {
             message.media.push(media);
         }
 
-        // Set message status for all members
         for (const to of data.members) {
             if (to.user._id.toString() === data.from) continue;
 
@@ -87,11 +77,6 @@ class MessageServiceDB extends ChatService {
 
     /**
      * Create a generic message object (e.g., when new member is added to group)
-     *
-     * @param {string} title - Message content/title
-     * @param {string} chatId - Chat ID
-     * @param {string} from - Sender user ID
-     * @returns {Object} Generic message object
      */
     createGeneric(title, chatId, from) {
         validateRequired(title, 'Title');
@@ -112,11 +97,6 @@ class MessageServiceDB extends ChatService {
 
     /**
      * Save message to database with optional population
-     *
-     * @param {Object} message - Message object to save
-     * @param {boolean} [shouldPopulateFrom=true] - Whether to populate related fields
-     * @returns {Promise<Object>} Saved message with title
-     * @throws {Error} If save operation fails
      */
     async save(message, shouldPopulateFrom = true) {
         if (!message) {
@@ -124,7 +104,6 @@ class MessageServiceDB extends ChatService {
         }
 
         try {
-            // Save media if message contains media
             if (['image', 'video', 'audio', 'document'].includes(message.kind)) {
                 const mediaExists = await MediaModel.countDocuments({ message: message._id }).exec();
 
@@ -137,10 +116,8 @@ class MessageServiceDB extends ChatService {
                 }
             }
 
-            // Save the message
             await message.save();
 
-            // Populate if requested
             if (shouldPopulateFrom) {
                 await message.populate([
                     {
@@ -172,18 +149,12 @@ class MessageServiceDB extends ChatService {
                         select: utils.userColumnsToShow()
                     }
                 ]);
-
-                return {
-                    title: 'Message is saved',
-                    message: message
-                };
             }
 
             return {
                 title: 'Message is saved',
                 message: message
             };
-
         } catch (ex) {
             console.error(`Error occurred while saving message: ${ex.message}`);
             throw ex;
@@ -192,19 +163,12 @@ class MessageServiceDB extends ChatService {
 
     /**
      * Mark message as delivered for specific users
-     *
-     * @param {Array<string>|string|number} users - User ID(s) to mark as delivered
-     * @param {string} messageId - Message MongoDB ObjectId
-     * @param {Date|number} date - Delivery timestamp
-     * @returns {Promise<Object>} Updated message
-     * @throws {Error} If message not found or user not part of chat
      */
     async messageDelivered(users, messageId, date) {
         validateRequired(messageId, 'Message ID');
         validateObjectId(messageId, 'Message ID');
         validateRequired(date, 'Date');
 
-        // Normalize users to array of ObjectIds
         if (typeof users === 'number') {
             users = await normalizeUserId(users);
         }
@@ -233,10 +197,6 @@ class MessageServiceDB extends ChatService {
 
     /**
      * Set message status to sent for multiple users
-     *
-     * @param {Array<string>} users - Array of user IDs
-     * @param {Object} message - Message object
-     * @returns {Promise<void>}
      */
     async setMessageSentTo(users, message) {
         if (!Array.isArray(users)) {
@@ -265,12 +225,6 @@ class MessageServiceDB extends ChatService {
 
     /**
      * Mark message as read/seen by user
-     *
-     * @param {string} byUser - User ID who read the message
-     * @param {string} messageId - Message MongoDB ObjectId
-     * @param {number} date - Unix timestamp (seconds)
-     * @returns {Promise<Object>} Updated message
-     * @throws {Error} If message not found or user not part of chat
      */
     async messageSeen(byUser, messageId, date) {
         validateRequired(byUser, 'User ID');
@@ -294,12 +248,6 @@ class MessageServiceDB extends ChatService {
 
     /**
      * Delete a message (for myself or for everyone)
-     *
-     * @param {string} messageId - Message MongoDB ObjectId
-     * @param {string} from - User ID deleting the message
-     * @param {boolean} forEveryone - True if deleting for everyone, false if only for self
-     * @returns {Promise<Object>} Result with title and updated message
-     * @throws {Error} If message not found
      */
     async deleteMessage(messageId, from, forEveryone) {
         validateObjectId(messageId, 'Message ID');
@@ -346,13 +294,6 @@ class MessageServiceDB extends ChatService {
 
     /**
      * React to a message with emoji
-     *
-     * @param {string} messageId - Message MongoDB ObjectId
-     * @param {string} kind - Reaction type/emoji
-     * @param {string} from - User ID reacting
-     * @param {number} date - Unix timestamp (seconds)
-     * @returns {Promise<Object>} Result with reaction, message, and title
-     * @throws {Error} If message not found or operation fails
      */
     async reactOnMessage(messageId, kind, from, date) {
         validateObjectId(messageId, 'Message ID');
@@ -363,20 +304,18 @@ class MessageServiceDB extends ChatService {
         const message = await this.getById(messageId);
         const newDate = new Date(date * 1000);
 
-        // Check if reaction already exists
         const reactExists = await Reaction.findOne({ from: from, message: messageId })
             .populate({
                 path: 'from',
                 select: utils.userColumnsToShow()
             });
 
-        const userService = new UserService(UserModel);
+        const userService = new UserService();
         const userFrom = await userService.getUserById(from, true);
 
         let reaction;
 
         if (reactExists) {
-            // Update existing reaction
             reactExists.kind = kind;
             reactExists.date = newDate;
             reactExists.editedOn = newDate;
@@ -388,7 +327,6 @@ class MessageServiceDB extends ChatService {
             message.reactions[reactionIndex] = reactExists;
             reaction = reactExists.toObject();
         } else {
-            // Create new reaction
             const rct = new Reaction({
                 from: from,
                 kind: kind,
@@ -402,10 +340,8 @@ class MessageServiceDB extends ChatService {
             message.reactions.push(react);
         }
 
-        // Populate user from
         reaction.from = userFrom;
 
-        // Update the message
         await message.save();
 
         return {
@@ -417,14 +353,7 @@ class MessageServiceDB extends ChatService {
 
     /**
      * Get messages for a chat (with pagination)
-     * NOT IN USE - deprecated method
-     *
      * @deprecated Use getMessages() instead
-     * @param {string} chatId - Chat MongoDB ObjectId
-     * @param {string|number} userId - User ID
-     * @param {number} [skip=-1] - Number of messages to skip
-     * @param {Function} callback - Callback function
-     * @returns {Promise<Object>} Messages and metadata
      */
     async getMessagesForChat(chatId, userId, skip = -1, callback) {
         validateObjectId(chatId, 'Chat ID');
@@ -432,8 +361,7 @@ class MessageServiceDB extends ChatService {
 
         userId = await normalizeUserId(userId);
 
-        const cs = new ChatService(ChatModel);
-        const member = await cs.getChatMember(chatId, userId);
+        const member = await this.chatService.getChatMember(chatId, userId);
 
         console.log(`Date joined: ${member.joinedOn}`);
 
@@ -518,16 +446,6 @@ class MessageServiceDB extends ChatService {
 
     /**
      * Get chat messages with pagination and filtering
-     *
-     * @param {string} chatId - Chat MongoDB ObjectId
-     * @param {string|number} userId - User ID
-     * @param {Date|null} [toMessageDate=null] - Filter messages before/after this date
-     * @param {number} [howMany=-1] - Limit number of messages (-1 for all)
-     * @param {string} [startValue] - Start from this message ID
-     * @param {boolean} [isInitial] - Whether this is initial load
-     * @param {Function} callback - Callback for marking messages as read
-     * @returns {Promise<Object>} Messages array
-     * @throws {Error} If required parameters are missing
      */
     async getMessages(chatId, userId, toMessageDate = null, howMany = -1, startValue, isInitial, callback) {
         validateObjectId(chatId, 'Chat ID');
@@ -535,8 +453,7 @@ class MessageServiceDB extends ChatService {
 
         userId = await normalizeUserId(userId);
 
-        const cs = new ChatService(ChatModel);
-        const member = await cs.getChatMember(chatId, userId);
+        const member = await this.chatService.getChatMember(chatId, userId);
 
         console.log(`toMessageDate: ${toMessageDate}`);
 
@@ -642,10 +559,6 @@ class MessageServiceDB extends ChatService {
 
     /**
      * Get message by ID with full population
-     *
-     * @param {string} id - Message MongoDB ObjectId
-     * @returns {Promise<Object>} Populated message object
-     * @throws {Error} If message not found
      */
     async getById(id) {
         validateObjectId(id, 'Message ID');
@@ -694,35 +607,16 @@ class MessageServiceDB extends ChatService {
         return message;
     }
 
-    /**
-     * Get last message for a chat
-     *
-     * @param {string} chatId - Chat MongoDB ObjectId
-     * @returns {Promise<Array<Object>>} Array with last message
-     */
     async getLastMessageForChat(chatId) {
         validateObjectId(chatId, 'Chat ID');
         return this.model.find({ chatId: chatId }).sort({ sentOn: -1 }).limit(1).exec();
     }
 
-    /**
-     * Get first message for a chat
-     *
-     * @param {string} chatId - Chat MongoDB ObjectId
-     * @returns {Promise<Array<Object>>} Array with first message
-     */
     async getFirstMessageForChat(chatId) {
         validateObjectId(chatId, 'Chat ID');
         return this.model.find({ chatId: chatId }).sort({ sentOn: 1 }).limit(1).exec();
     }
 
-    /**
-     * Set message type/kind
-     *
-     * @param {string} messageId - Message unique ID
-     * @param {string} kind - Message kind/type
-     * @returns {Promise<boolean>} True if updated, false otherwise
-     */
     async setMessageType(messageId, kind) {
         validateRequired(messageId, 'Message ID');
         validateString(kind, 'Message kind');
@@ -751,11 +645,6 @@ class MessageServiceDB extends ChatService {
         }
     }
 
-    /**
-     * Get all messages without status array
-     *
-     * @returns {Promise<Array<Object>>} Messages without status
-     */
     async getMessageWithoutStatus() {
         try {
             const filter = { status: [] };
@@ -769,12 +658,6 @@ class MessageServiceDB extends ChatService {
 
     /**
      * Mark all messages in a conversation as seen/read
-     *
-     * @param {string} userId - User ID marking messages as seen
-     * @param {string} chatId - Chat MongoDB ObjectId
-     * @param {Date|number|null} [date=null] - Optional date to mark (default: now)
-     * @returns {Promise<Object>} Result with status and total modified count
-     * @throws {Error} If update fails
      */
     async markConversationSeen(userId, chatId, date = null) {
         validateRequired(userId, 'User ID');
@@ -804,13 +687,6 @@ class MessageServiceDB extends ChatService {
         };
     }
 
-    /**
-     * Mark message as not visible
-     *
-     * @param {string} messageId - Message MongoDB ObjectId
-     * @returns {Promise<Object>} Updated message
-     * @throws {Error} If message not found
-     */
     async setMessageNotVisible(messageId) {
         validateObjectId(messageId, 'Message ID');
 
@@ -829,4 +705,4 @@ class MessageServiceDB extends ChatService {
     }
 }
 
-module.exports = MessageServiceDB;
+module.exports = MessageService;

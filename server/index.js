@@ -1,89 +1,97 @@
 /**
  * Express Application Setup
- * 
- * Configures Express middleware, routes, and error handling
+ *
+ * Configures middleware only. All routing is handled by api/routes/index.js.
  */
 
-const express = require('express');
-const compression = require('compression');
+if (process.env.ENV_NAME !== 'production') {
+    require('dotenv').config({ path: '.env.local' });
+}
+
+const express      = require('express');
+const compression  = require('compression');
 const cookieParser = require('cookie-parser');
-const path = require('path');
+const helmet       = require('helmet');
+const cors         = require('cors');
+const rateLimit    = require('express-rate-limit');
+const mongoSanitize = require('express-mongo-sanitize');
+const path         = require('path');
+const routes       = require('./api/routes/index');
+const morgan       = require('morgan');
+const logger       = require('./utils/logger');
 
-// Route imports
-const chatRoute = require('./api/routes/chat');
-const indexRoute = require('./api/routes/index');
-const userRoute = require('./api/routes/user');
-const callRoute = require('./api/routes/call');
-
-// Middleware imports
-const { verifyToken } = require('./middleware/verify');
-
-// Initialize Express app
 const app = express();
 
-/**
- * Global Middleware - Applied to all requests
- */
-app.use(compression()); // Gzip compression
-app.use(express.json()); // Parse JSON bodies
-app.use(express.urlencoded({ extended: true })); // Parse URL-encoded bodies
-app.use(cookieParser()); // Parse cookies
-app.use(express.static(path.join(__dirname, 'public'))); // Serve static files
+// Trust proxy for accurate client IP (behind load balancer)
+app.set('trust proxy', 1);
 
-/**
- * API Routes Configuration
- */
-const apiRoutes = express.Router();
+// ─── Request logging ──────────────────────────────────────────────────────────
 
-// Chat routes (requires authentication)
-apiRoutes.use('/chat', verifyToken, chatRoute);
+const morganFormat = process.env.ENV_NAME === 'production' ? 'combined' : 'dev';
+app.use(morgan(morganFormat, { stream: logger.stream }));
 
-// User routes (public)
-apiRoutes.use('/user', userRoute);
+// ─── Security middleware ───────────────────────────────────────────────────────
 
-// Call routes (public)
-apiRoutes.use('/call', callRoute);
+app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
 
-// Health check and index routes
-app.use('/', indexRoute);
+app.use(cors({
+    origin: process.env.CORS_ORIGIN || '*',
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Signature-Winky-Code', 'Client-Winky-KeyCode', 'X-Client-Token'],
+}));
 
-// All API routes under /api prefix
-app.use('/api', apiRoutes);
+// Global API rate limit
+app.use('/api', rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 100,
+    message: { status: 'error', code: 429, message: 'Too many requests, please try again later' },
+    standardHeaders: true,
+    legacyHeaders: false,
+}));
 
-/**
- * Request/Response Logging Middleware (optional)
- * Uncomment to enable request logging
- */
-app.use((req, res, next) => {
-  // console.log(`${req.method} ${req.url}`);
-  next();
-});
+// ─── General middleware ────────────────────────────────────────────────────────
 
-/**
- * Global Error Handler
- * 
- * Must be the last middleware defined
- * Catches all errors thrown in route handlers and middleware
- */
+app.use(compression({ level: 6, threshold: 1024 }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(cookieParser());
+app.use(mongoSanitize({
+    replaceWith: '_',
+    onSanitize: ({ key }) => console.warn(`Sanitized potentially malicious input: ${key}`),
+}));
+app.use(express.static(path.join(__dirname, 'public'), { maxAge: '1d' }));
+
+// ─── Routes ───────────────────────────────────────────────────────────────────
+
+app.use(routes);
+
+// ─── 404 ──────────────────────────────────────────────────────────────────────
+
+app.use((req, res) => res.status(404).json({ status: 'error', code: 404, message: 'Route not found' }));
+
+// ─── Global error handler ─────────────────────────────────────────────────────
+
 app.use((error, req, res, next) => {
-  // Log error details
-  console.error('Error:', {
-    status: error.status || 500,
-    message: error.message,
-    stack: error.stack
-  });
+    logger.error('Unhandled error', {
+        status: error.status || 500,
+        message: error.message,
+        path: req.path,
+        method: req.method,
+        ...(process.env.ENV_NAME === 'development' && { stack: error.stack }),
+    });
 
-  // Prepare error response
-  const status = error.status || 500;
-  const message = error.message || 'Internal Server Error';
+    const status  = error.status || 500;
+    const message = process.env.ENV_NAME === 'production' && status === 500
+        ? 'Internal Server Error'
+        : error.message || 'Internal Server Error';
 
-  // Send response
-  res.status(status).json({
-    status: 'error',
-    code: status,
-    message: message,
-    ...(process.env.ENV_NAME === 'development' && { stack: error.stack })
-  });
+    res.status(status).json({
+        status: 'error',
+        code: status,
+        message,
+        ...(process.env.ENV_NAME === 'development' && { stack: error.stack }),
+    });
 });
 
 module.exports = app;

@@ -1,16 +1,15 @@
-
-const mongoose = require('mongoose'); 
-const Chat = mongoose.model('Chat');
-const Message = mongoose.model('Message');
-const MessageService = require('../../services/domain/chat/message.service.db');
+const MessageService = require('../../services/domain/chat/message.service');
 const ChatService = require('../../services/domain/chat/chat.service');
-const ChatServiceDB = require('../../services/domain/chat/chat.service.db');
 const UserService = require('../../services/domain/user/user.service');
-const UserModel = mongoose.model('User');
 const AWSS3Service = require('../../services/external/aws/s3.service');
-const CS = require('../../socket');
+const CS = require('../../socket/chat.service');
 const PushNotificationService = require('../../notifications/index');
-const ContentStorage = mongoose.model('ContentStorage');
+const { getIO } = require('../../bootstrap/io');
+
+const chatService = new ChatService(); 
+const userService = new UserService();
+const messageService = new MessageService();
+const awsUploadService = new AWSS3Service();
 /**
  * New chat
  *
@@ -19,9 +18,7 @@ const ContentStorage = mongoose.model('ContentStorage');
  */
 const newChat = async (req, res) => { 
     const { chat } = req.body; 
-
-    // Get chat service instance
-    const chatService = new ChatServiceDB(Chat); 
+ 
     const userId = req.decodedToken.userId;
     chat.userId = userId;
     const data = { chat: chat};
@@ -46,9 +43,7 @@ const newChat = async (req, res) => {
  */
 const edit = async (req, res) => { 
     const { id } = req.params;
-    const { name, imageUrl } = req.body; 
-
-    const chatService = new ChatServiceDB(Chat);  
+    const { name, imageUrl } = req.body;  
 
     // TODO: Set the response status codes accordingly to the response 
     chatService.edit(id, name, imageUrl).then((result) => {
@@ -66,10 +61,8 @@ const edit = async (req, res) => {
  */
 const addNewMembers = async (req, res) => {
     // const { id } = req.params;
-    const { chatId, members } = req.body; 
-    const chatService = new ChatServiceDB(Chat);
+    const { chatId, members } = req.body;  
 
-    const userService = new UserService(UserModel);
     const ids = await userService.getUserIds(members);
 
     // TODO: Set the response status codes accordingly to the response 
@@ -88,8 +81,7 @@ const addNewMembers = async (req, res) => {
  */
 const all = async (req, res) => {
     // const userId = req.body.userId;
-    const userId = req.decodedToken.userId;
-    const chatService = new ChatService(Chat);
+    const userId = req.decodedToken.userId; 
 
     const { skip } = req.query
 
@@ -113,8 +105,7 @@ const all = async (req, res) => {
  */
 const allFavorites = (req, res) => {
     // const userId = req.body.userId;
-    const userId = req.decodedToken.userId;
-    const chatService = new ChatService(Chat);
+    const userId = req.decodedToken.userId; 
 
     chatService.getAllFavoriteChats(userId).then((chats) => {
         res.status(200).json({status: 'success', result: { total: chats.length, chats: chats }})
@@ -131,8 +122,7 @@ const allFavorites = (req, res) => {
  */
 const chatById = (req, res) => {
     const { id } = req.params;
-    const userId = req.decodedToken.userId;
-    const chatService = new ChatService(Chat);
+    const userId = req.decodedToken.userId; 
 
     chatService.getById(id, userId).then((chat) => {
         res.status(200).json({ status: 'success', chat: chat })
@@ -149,8 +139,7 @@ const chatById = (req, res) => {
  */
 const deleteChat = (req, res) => {
     const {id} = req.params;
-    const userId = req.decodedToken.userId;
-    const chatService = new ChatServiceDB(Chat);
+    const userId = req.decodedToken.userId; 
 
     chatService.deleteChat(id).then((result) => {
         res.status(200).json({status: 'success', result: result})
@@ -167,8 +156,7 @@ const deleteChat = (req, res) => {
  */
 const favoriteChat = (req, res) => {
     const {id} = req.params;
-    const userId = req.decodedToken.userId;
-    const chatService = new ChatServiceDB(Chat);
+    const userId = req.decodedToken.userId; 
 
     chatService.favoriteChat(userId, id).then((result) => {
         res.status(200).json({status: 'success', result: result})
@@ -186,8 +174,7 @@ const favoriteChat = (req, res) => {
 const blockChat = (req, res) => {
     const { id } = req.params;
     const { reason, description, status } = req.body;
-    const userId = req.decodedToken.userId;
-    const chatService = new ChatServiceDB(Chat);
+    const userId = req.decodedToken.userId; 
 
     const shouldBlock = (status == 'true');
     chatService.blockChat(userId, id, shouldBlock, reason, description).then((result) => {
@@ -205,8 +192,7 @@ const blockChat = (req, res) => {
  */
 const muteChat = (req, res) => {
     const {id} = req.params;
-    const userId = req.decodedToken.userId;
-    const chatService = new ChatServiceDB(Chat);
+    const userId = req.decodedToken.userId; 
 
     chatService.muteChat(userId, id).then((result) => {
         res.status(200).json({status: 'success', result: result})
@@ -224,9 +210,7 @@ const muteChat = (req, res) => {
 const leaveChat = (req, res) => {
     // MARK: The user id in future will be taken from the Auth Token
     const {id} = req.params;
-    const userId = req.decodedToken.userId;
-
-    const chatService = new ChatServiceDB(Chat);
+    const userId = req.decodedToken.userId; 
     chatService.leaveChat(userId, id).then((result) => {
         res.status(200).json({status: 'success', result: result})
     }).catch((err) => {
@@ -239,7 +223,6 @@ const getMessagesForChat = (req, res) => {
     const { toMessageDate } = req.query;
     const userId = req.decodedToken.userId;
 
-    const messageService = new MessageService(Message);
     messageService.getMessages(id, userId, toMessageDate).then((result) => {
         //res.status(200).json({ status: 'success', total: result.totalMessages, totalPages: result.totalPages, messages: result.messages, currentPage: result.currentPage, messagesPerPage: result.messagesPerPage });
         res.status(200).json({status: 'success', total: result.length, messages: result})
@@ -255,8 +238,7 @@ const getMessagesForChat = (req, res) => {
  * @param {*} res
  */
 const allChats = async (req, res) => { 
-    const userId = req.decodedToken.userId;
-    const chatService = new ChatService(Chat);
+    const userId = req.decodedToken.userId; 
     const skip = req.params
 
     chatService.getChatsForUser(userId, false, -1).then(async (chats) => {
@@ -278,8 +260,7 @@ const allChats = async (req, res) => {
  * @param {*} res
  */
 const totalUnreadChatsForUser = (req, res) => {
-    const userId = req.decodedToken.userId;
-    const chatService = new ChatService(Chat);
+    const userId = req.decodedToken.userId; 
 
     chatService.countTotalUnreadChatsForUser(userId).then((result) => {
         res.status(200).json({status: 'success', result: result})
@@ -295,8 +276,7 @@ const totalUnreadChatsForUser = (req, res) => {
  * @param {*} res
  */
 const getUserIds = async (req, res) => {
-    const {users} = req.body;
-    const userService = new UserService(UserModel);
+    const {users} = req.body; 
 
     userService.getUserIds(users).then((userIds) => {
         res.status(200).json({status: 'success', users: userIds})
@@ -313,8 +293,7 @@ const getUserIds = async (req, res) => {
  */
 const uploadMedia = async (req, res) => {
     const file = req.file;
-    const fileName = req.body.fileName
-    const awsUploadService = new AWSS3Service();
+    const fileName = req.body.fileName 
 
     awsUploadService.uploadMedia(file, fileName).then((result) => {
         res.status(200).json({ status: 'success', result: result });
@@ -331,7 +310,6 @@ const uploadMedia = async (req, res) => {
  */
 const deleteMedia = async (req, res) => {
     const { id } = req.params;
-    const awsUploadService = new AWSS3Service();
 
     awsUploadService.deleteMedia(id).then(uploadedUrl => {
         res.status(200).json({ status: 'success', result: uploadedUrl });
@@ -347,8 +325,7 @@ const deleteMedia = async (req, res) => {
  * @param {*} res
  */
 const messageById = (req, res) => {
-    const { id } = req.params;  
-    const messageService = new MessageService(Message);
+    const { id } = req.params;   
 
     messageService.getById(id).then((message) => {
         res.status(200).json({ status: 'success', message: message })
@@ -371,8 +348,7 @@ const messageReceivedAck = async (req, res) => {
         return res.status(500).json({ status: 'error', error: new Error('message id is missing') });
     }
 
-    if (typeof from === 'number') {
-        const userService = new UserService(UserModel);
+    if (typeof from === 'number') { 
         from = await userService.getUserIds([from]);
     }
 
@@ -380,27 +356,23 @@ const messageReceivedAck = async (req, res) => {
         date = parseInt(date);
     }
 
-    const IO = req.app.get('socketIO');
-
-    updateMessageReceived(id, from, date, IO).then(result => {
+    updateMessageReceived(id, from, date).then(result => {
         res.status(200).json({status: "success", result: result})
     }).catch(err => {
         res.status(500).json({ status: 'error', error: err.message });
     });
 }
 
-const updateMessageReceived = async (messageById, from, date, IO) => {
+const updateMessageReceived = async (messageById, from, date) => {
     return new Promise((resolve, reject) => {
-        const messageService = new MessageService(Message);
         messageService.messageDelivered(from, messageById, date).then(async (message) => {
             const creator = message.from.toString();
-            // Get the creator of the message
-            const socketService = new CS(IO);
-    
+            const IO = getIO();
+            const socketService = new CS();
+
             const memberIsOnline = await socketService.isUserConnected(creator);
-    
+
             if (memberIsOnline) {
-                // Send the message to online users
                 IO.to(creator).emit('message received by', {
                     messageId: messageById,
                     by: from,
@@ -438,8 +410,7 @@ const messageSeenAck = async (req, res) => {
     let { id, date } = req.body;
     let from = req.decodedToken.userId;
 
-    if (typeof from === 'number') {
-        const userService = new UserService(UserModel);
+    if (typeof from === 'number') { 
         from = await userService.getUserIds([from]);
     }
 
@@ -447,28 +418,23 @@ const messageSeenAck = async (req, res) => {
         date = parseInt(date);
     }
 
-    const IO = req.app.get('socketIO');
-
-    updateMessageSeen(id, from, date, IO).then(result => {
+    updateMessageSeen(id, from, date).then(result => {
         res.status(200).json({status: "success", result: result})
     }).catch(err => {
         res.status(500).json({ status: 'error', error: err.message });
     });
 }
 
-const updateMessageSeen = async (messageById, from, date, IO) => {
+const updateMessageSeen = async (messageById, from, date) => {
     return new Promise((resolve, reject) => {
-        const messageService = new MessageService(Message);
         messageService.messageSeen(from, messageById, date).then(async (message) => {
             const creator = message.from.toString();
-            // Get the creator of the message
-            // const IO = req.app.get('socketIO');
-            const socketService = new CS(IO);
-    
+            const IO = getIO();
+            const socketService = new CS();
+
             const memberIsOnline = await socketService.isUserConnected(creator);
-    
+
             if (memberIsOnline) {
-                // Send the message to online users
                 IO.to(creator).emit('message seen by', {
                     messageId: messageById,
                     by: from,
@@ -508,13 +474,10 @@ const sendMessage = async (req, res) => {
         const { content, chatId, type, messageId, date } = req.body;
 
         var from = req.decodedToken.userId;
-
-        const userService = new UserService(UserModel);
+ 
         if (typeof from === 'number') {
             from = await userService.getUserIds([from]);
         }
-
-        const IO = req.app.get('socketIO');
 
         const data = {
             content: content,
@@ -522,12 +485,8 @@ const sendMessage = async (req, res) => {
             type: type
         } 
  
-        // Get the chat
-        const chatService = new ChatService(Chat);
-        const chat = await chatService.getById(chatId, from);
-
-        // Instantiate a message service
-        const messageService = new MessageService(Message);
+        // Get the chat 
+        const chat = await chatService.getById(chatId, from); 
         // // Remove the sender from the members
         const members = chat.members
 
@@ -544,9 +503,8 @@ const sendMessage = async (req, res) => {
             var deliveredTo = [];
             var offlineReceivers = [];
             // Set to chat this message
-            //MARK: If not necessary, move these two lines at the end
-            const chatServiceDB = new ChatServiceDB(Chat);
-            const update = await chatServiceDB.setLatestMessage(data.chatId, tempMessage._id, from);
+            //MARK: If not necessary, move these two lines at the end 
+            const update = await chatService.setLatestMessage(data.chatId, tempMessage._id, from);
             const chat = update.chat;  
 
             const object = {
@@ -554,12 +512,13 @@ const sendMessage = async (req, res) => {
                 chat: chat
             }
 
-            const socketService = new CS(IO);
+            const IO = getIO();
+            const socketService = new CS();
 
             // // Process the message
             for (const member of members) {
                 // Check if the user can chat
-                const canChat = member.canChat; 
+                const canChat = member.canChat;
                 if (!canChat) continue;
 
                 const to = member.user._id.toString();
@@ -570,8 +529,7 @@ const sendMessage = async (req, res) => {
                 if (memberIsOnline) {
                     const unreadMessages = await chatService.countUnreadMessagesForChat(chat._id, to)
                     object.chat.unreadMessages = unreadMessages;
-                    
-                    // Send the message to online users
+
                     IO.to(to).emit('new message received', object);
 
                     deliveredTo.push(to); 
@@ -612,7 +570,7 @@ const sendMessage = async (req, res) => {
                 console.log(`No offline users`)
             }
 
-            await updateMessageSeen(messageId, from, date, IO);
+            await updateMessageSeen(messageId, from, date);
         }).catch((err) => { 
             console.error(`Error: ${err.message}`)
             res.status(400).json({ status: 'error', message: err.message });
@@ -632,34 +590,29 @@ const conversationSeen = async (req, res) => {
     const { id, date, senders } = req.body;
     let from = req.decodedToken.userId;
 
-    if (typeof from === 'number') {
-        const userService = new UserService(UserModel);
+    if (typeof from === 'number') { 
         from = await userService.getUserIds([from]);
     }
 
-    const IO = req.app.get('socketIO');
-    
     console.log('API: Mark conversation seen');
-    
-    updateConversationSeen(id, from, date, senders, IO).then(result => {
+
+    updateConversationSeen(id, from, date, senders).then(result => {
         res.status(200).json({status: "success", result: result})
     }).catch(err => {
         res.status(500).json({ status: 'error', error: err.message });
     });
 }
 
-const updateConversationSeen = async (chatId, from, date, senders, IO) => {
+const updateConversationSeen = async (chatId, from, date, senders) => {
     return new Promise((resolve, reject) => {
-        const messageService = new MessageService(Message);
-        messageService.markConversationSeen(from, chatId, date).then(async (result) => { 
-            // Get the creator of the message
-            const socketService = new CS(IO);
+        messageService.markConversationSeen(from, chatId, date).then(async (result) => {
+            const IO = getIO();
+            const socketService = new CS();
 
             for (const member of senders) {
                 const memberIsOnline = await socketService.isUserConnected(member);
 
                 if (memberIsOnline) {
-                    // Send the message to online users
                     IO.to(member).emit('conversation read', {
                         chatId: chatId,
                         by: from,
@@ -683,12 +636,9 @@ const updateConversationSeen = async (chatId, from, date, senders, IO) => {
 module.exports = {
     all,
     allFavorites,
-    newChat,
-    edit,
+    newChat, 
     deleteChat,
-    chatById,
-    addNewMembers,
-    getUserIds,
+    chatById,  
     leaveChat,
     favoriteChat,
     muteChat,
@@ -702,5 +652,5 @@ module.exports = {
     messageReceivedAck,
     messageSeenAck,
     sendMessage,
-    conversationSeen
+    conversationSeen,
 }

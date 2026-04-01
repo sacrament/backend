@@ -33,6 +33,7 @@
 // ============================================================================
 
 const ChatService = require('./domain/chat/chat.service');
+const MessageService = require('./domain/chat/message.service');
 const UserService = require('./domain/user/user.service');
 const ContactService = require('./domain/user/contact.service');
 const CallService = require('./domain/call/call.service');
@@ -52,6 +53,7 @@ const { PushService } = require('./external/push');
 module.exports = {
   // Domain Services
   ChatService,
+  MessageService,
   UserService,
   ContactService,
   CallService,

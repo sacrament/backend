@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const SMSService = require('../../external/twilio/sms.service');
 const mongoose = require('mongoose');
 const UserModel = mongoose.model('User');
@@ -8,6 +9,7 @@ const UserRequestModel = require('../../../models/user.request').UserRequest;
 const UserConnectStatus = require('../../../models/user.connect').UserConnectStatus;
 
 const utils = require('../../../utils/index');
+const { getIO } = require('../../../bootstrap/io');
 const _ = require('lodash');
 
 class UserService {
@@ -16,24 +18,56 @@ class UserService {
     }
 
     /**
-     * Helper method to convert user ID (integer) to MongoDB ObjectId
-     *
-     * @private
-     * @param {number|string} userId - User ID to convert
-     * @returns {Promise<string>} MongoDB ObjectId as string
-     * @throws {Error} If user not found
+     * Derive a consistent, non-reversible hash for a phone number.
+     * Used for indexed lookups — same input always produces the same key.
      */
-    async _convertToMongoId(userId) {
-        if (typeof userId === 'number') {
-            const user = await UserModel.findOne({ id: userId }).select('_id');
-            if (!user) {
-                throw new Error(`User not found with id: ${userId}`);
-            }
-            return user._id.toString();
-        }
-        return userId;
+    #hashPhone(phoneNumber) {
+        const pepper = process.env.OTP_PHONE_HASH_SECRET;
+        if (!pepper) throw new Error('OTP_PHONE_HASH_SECRET is not set');
+        return crypto.createHmac('sha256', pepper).update(phoneNumber).digest('hex');
     }
 
+    /**
+     * Encrypt a phone number with AES-256-GCM using the current key version.
+     *
+     * Stored format: v{version}:{iv}:{authTag}:{ciphertext}  (iv/tag/data in base64)
+     *
+     * Key rotation: add PHONE_ENC_KEY_{n} and bump PHONE_ENC_KEY_VERSION to n.
+     * Old records are decrypted with their versioned key; new records use the current one.
+     */
+    #encryptPhone(phoneNumber) {
+        const version = process.env.PHONE_ENC_KEY_VERSION;
+        if (!version) throw new Error('PHONE_ENC_KEY_VERSION is not set');
+        const keyHex = process.env[`PHONE_ENC_KEY_${version}`];
+        if (!keyHex) throw new Error(`PHONE_ENC_KEY_${version} is not set`);
+
+        const key      = Buffer.from(keyHex, 'hex');
+        const iv       = crypto.randomBytes(12);
+        const cipher   = crypto.createCipheriv('aes-256-gcm', key, iv);
+        const data     = Buffer.concat([cipher.update(phoneNumber, 'utf8'), cipher.final()]);
+
+        return `v${version}:${iv.toString('base64')}:${cipher.getAuthTag().toString('base64')}:${data.toString('base64')}`;
+    }
+
+    /**
+     * Decrypt a phone number produced by #encryptPhone.
+     * Reads the key version from the stored value so old records survive key rotation.
+     * @param {string} stored  The v{n}:iv:authTag:ciphertext string from the DB
+     * @returns {string} The original phone number
+     */
+    decryptPhone(stored) {
+        const [versionTag, ivB64, tagB64, dataB64] = stored.split(':');
+        const version = versionTag.slice(1); // strip the leading 'v'
+        const keyHex  = process.env[`PHONE_ENC_KEY_${version}`];
+        if (!keyHex) throw new Error(`PHONE_ENC_KEY_${version} is not set — cannot decrypt`);
+
+        const key      = Buffer.from(keyHex, 'hex');
+        const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivB64, 'base64'));
+        decipher.setAuthTag(Buffer.from(tagB64, 'base64'));
+        return decipher.update(Buffer.from(dataB64, 'base64')) + decipher.final('utf8');
+    }
+
+    /**
     /**
      * Helper method to get user by integer ID
      *
@@ -81,11 +115,6 @@ class UserService {
             imageUrl: json.imageUrl,
             bio: json.bio,
             registeredOn: json.registeredOn,
-            device: {
-                token: json.device?.token,
-                type: json.device?.type,
-                description: json.device?.description || null
-            },
             isPublic: json.isPublic,
             status: json.status,
             facebookId: json.facebookId
@@ -139,14 +168,13 @@ class UserService {
      * @param {boolean} select - Whether to select specific fields only
      * @returns {Promise<Object|null>} User object or null
      */
-    async getUserById(userId, select = false) {
-        const query = this.model.findOne({ _id: userId }).lean();
-
-        if (select) {
-            query.select('_id id name email phone imageUrl status device');
-        }
-
-        return await query.exec();
+    async getUserById(userId) {
+        return this.model
+            .findOne({ _id: userId })
+            .populate('location', 'point recordedAt')
+            .populate('device')
+            .lean()
+            .exec();
     }
 
     /**
@@ -233,67 +261,6 @@ class UserService {
     }
 
     /**
-     * Update user's device token
-     *
-     * @param {number} userId - User integer ID
-     * @param {string} deviceToken - Device token
-     * @param {string} deviceType - Device type (ios, android, etc.)
-     * @returns {Promise<Object>} Updated user object
-     * @throws {Error} If user not found
-     */
-    async updateDeviceToken(userId, deviceToken, deviceType) {
-        console.log(`Update device token: ${deviceType}`);
-
-        const filter = { id: userId };
-        const update = {
-            $set: {
-                'device.token': deviceToken,
-                'device.type': deviceType,
-                updatedOn: Date.now()
-            }
-        };
-
-        const user = await this.model.findOneAndUpdate(filter, update, { new: true }).lean();
-
-        if (!user) {
-            throw new Error('No device found for user');
-        }
-
-        return user;
-    }
-
-    /**
-     * Update VoIP device token
-     *
-     * @param {number} userId - User integer ID
-     * @param {string} deviceToken - VoIP device token
-     * @returns {Promise<Object>} Updated user object
-     * @throws {Error} If user not found
-     */
-    async updateVoipDeviceToken(userId, deviceToken) {
-        console.log('Update device voip token');
-
-        const filter = { id: userId };
-        const date = Date.now();
-        const update = {
-            $set: {
-                'device.voipToken': deviceToken,
-                'device.updatedOn': date,
-                updatedOn: date
-            }
-        };
-
-        const user = await this.model.findOneAndUpdate(filter, update, { new: true }).lean();
-
-        if (!user) {
-            throw new Error('VOIPTOKEN: No device found for user');
-        }
-
-        console.log('Device updated with voip token');
-        return user;
-    }
-
-    /**
      * Verify users by phone numbers
      *
      * @param {Array<string>} phones - Array of phone numbers
@@ -306,15 +273,15 @@ class UserService {
             throw new Error('Phones array is required');
         }
 
-        const phonesString = phones.join(' ');
-        const query = { $text: { $search: phonesString } };
+        const entries  = phones.map(p => ({ phone: p, phoneHash: this.#hashPhone(p) }));
+        const hashes   = entries.map(e => e.phoneHash);
 
-        const users = await this.model.find(query)
-            .select('_id id name email phone imageUrl status')
+        const users = await this.model.find({ phoneHash: { $in: hashes } })
+            .select('_id id name email phoneHash imageUrl status')
             .lean();
 
-        const result = phones.map(phone => {
-            const user = users.find(u => u.phone === phone);
+        const result = entries.map(({ phone, phoneHash }) => {
+            const user = users.find(u => u.phoneHash === phoneHash);
             return {
                 user: user || phone,
                 hasAccount: !!user
@@ -338,64 +305,6 @@ class UserService {
         return SMSService.send(user, phones);
     }
 
-    /**
-     * Enable device for user after login
-     *
-     * @param {number} userId - User integer ID
-     * @param {string} newDeviceToken - New device token
-     * @returns {Promise<Object>} Updated user object
-     * @throws {Error} If user not found
-     */
-    async enableDeviceForUser(userId, newDeviceToken) {
-        console.log(`Activate device for user: ${userId}`);
-
-        const filter = { id: userId };
-        const date = Date.now();
-        const update = {
-            $set: {
-                'device.isActive': true,
-                'device.token': newDeviceToken,
-                'device.updatedOn': date,
-                updatedOn: date
-            }
-        };
-
-        const user = await this.model.findOneAndUpdate(filter, update, { new: true }).lean();
-
-        if (!user) {
-            throw new Error('No device found for user');
-        }
-
-        return user;
-    }
-
-    /**
-     * Disable user device
-     *
-     * @param {number} userId - User integer ID
-     * @returns {Promise<Object>} Updated user object
-     * @throws {Error} If user not found
-     */
-    async disableUserDeviceFor(userId) {
-        console.log(`Disable device for user: ${userId}`);
-
-        const filter = { id: userId };
-        const update = {
-            $set: {
-                'device.isActive': false,
-                'device.token': null,
-                updatedOn: Date.now()
-            }
-        };
-
-        const user = await this.model.findOneAndUpdate(filter, update, { new: true }).lean();
-
-        if (!user) {
-            throw new Error('No device found for user');
-        }
-
-        return user;
-    }
 
     /**
      * Save refresh token for user
@@ -408,7 +317,6 @@ class UserService {
     async saveRefreshToken(userId, refreshToken) {
         console.log(`Save refresh token for user: ${userId}`);
 
-        const filter = { id: userId };
         const date = Date.now();
         const update = {
             $set: {
@@ -417,7 +325,7 @@ class UserService {
             }
         };
 
-        const user = await this.model.findOneAndUpdate(filter, update, { new: true }).lean();
+        const user = await this.model.findByIdAndUpdate(userId, update, { new: true }).lean();
 
         if (!user) {
             throw new Error('No user found');
@@ -450,7 +358,7 @@ class UserService {
                 blockedOriginalId: member.id,
                 reason: reason || 'NO_REASON',
                 description: description || 'Blocked via chat',
-                status: 'ACTIVE'
+                status: 'active'
             });
 
             return await block.save();
@@ -494,9 +402,6 @@ class UserService {
      * @returns {Promise<Array>} Array of block records
      */
     async getAllBlockedUsers(userId) {
-        if (typeof userId === 'number') {
-            userId = await this._convertToMongoId(userId);
-        }
 
         console.log(`Get all blocked users: ${userId}`);
 
@@ -525,8 +430,8 @@ class UserService {
      */
     async blockUser(userId, me, reason, description) {
         try {
-            const myId = await this._convertToMongoId(me.userId);
-            const userIDString = await this._convertToMongoId(userId);
+            const myId = me.userId;
+            const userIDString = userId;
 
             const userBlocked = await this._getUserByIntId(userId);
 
@@ -546,11 +451,29 @@ class UserService {
                     blockedOriginalId: userId,
                     reason: reason || 'NO_REASON',
                     description: description || 'Misbehaving',
-                    status: 'ACTIVE'
+                    status: 'active'
                 });
 
                 await block.save();
             }
+
+            // Cascade block to all shared chats
+            const ChatModel = mongoose.model('Chat');
+            const now = Date.now();
+
+            // Blocked user loses canChat access
+            await ChatModel.updateMany(
+                { 'members.user': { $all: [myId, userIDString] } },
+                { $set: { 'members.$[m].canChat': false, 'members.$[m].options.blocked': true, 'members.$[m].updatedOn': now } },
+                { arrayFilters: [{ 'm.user': userIDString }] }
+            );
+
+            // Blocker's side is also flagged as blocked so the UI reflects it
+            await ChatModel.updateMany(
+                { 'members.user': { $all: [myId, userIDString] } },
+                { $set: { 'members.$[m].options.blocked': true, 'members.$[m].updatedOn': now } },
+                { arrayFilters: [{ 'm.user': myId }] }
+            );
 
             const apiGateway = new APIGateway();
             const res = await apiGateway.blockUser(userId, me.token);
@@ -574,12 +497,28 @@ class UserService {
      */
     async unblockUser(userId, me) {
         try {
-            const myId = await this._convertToMongoId(me.userId);
-            const userIDString = await this._convertToMongoId(userId);
+            const myId = me.userId;
+            const userIDString = userId;
 
             const userUnblocked = await this._getUserByIntId(userId);
 
             await this.model.findOneAndRemove({ blocker: myId, blocked: userIDString });
+
+            // Restore chat access in all shared chats
+            const ChatModel = mongoose.model('Chat');
+            const now = Date.now();
+
+            await ChatModel.updateMany(
+                { 'members.user': { $all: [myId, userIDString] } },
+                { $set: { 'members.$[m].canChat': true, 'members.$[m].options.blocked': false, 'members.$[m].updatedOn': now } },
+                { arrayFilters: [{ 'm.user': userIDString }] }
+            );
+
+            await ChatModel.updateMany(
+                { 'members.user': { $all: [myId, userIDString] } },
+                { $set: { 'members.$[m].options.blocked': false, 'members.$[m].updatedOn': now } },
+                { arrayFilters: [{ 'm.user': myId }] }
+            );
 
             const apiGateway = new APIGateway();
             const res = await apiGateway.unblockUser(userId, me.token);
@@ -601,9 +540,6 @@ class UserService {
      * @returns {Promise<Array>} Array of content storage records
      */
     async getContentStorageFor(user) {
-        if (typeof user === 'number') {
-            user = await this._convertToMongoId(user);
-        }
 
         const res = await ContentStorage.find({ receiver: user })
             .populate({
@@ -680,29 +616,29 @@ class UserService {
      * @returns {Promise<Object>} Result object with title and request
      */
     async sendConnectionRequest(from, to) {
-        to = await this._convertToMongoId(to);
+        const existing = await UserRequestModel.findOne({ from, to });
 
-        const request = await UserRequestModel.findOne({ from: from, to: to, status: 'new' })
-            .populate({
-                path: 'to from',
-                select: utils.userColumnsToShow()
-            });
+        if (existing) {
+            if (existing.status === 'new') {
+                return { title: 'Request already pending', request: existing.toObject() };
+            }
+            if (existing.status === 'accepted') {
+                throw new Error('Already connected');
+            }
+            // for declined we need to not allow resend for 24 hours, for cancelled we can allow resend immediately, for disconnected we can allow resend immediately
+            if (existing.status === 'declined' && (Date.now() - existing.updatedOn) < 24 * 60 * 60 * 1000) {
+                throw new Error('Cannot re-send request. Please wait 24 hours');
+            }
+            // declined / cancelled / disconnected — allow re-send
+            existing.status = 'new';
+            existing.howMany += 1;
+            await existing.save();
 
-        if (request) {
-            request.howMany += 1;
-            request.updatedOn = Date.now();
-            request.status = 'new';
-
-            await request.save();
-
-            return { title: 'Existing request updated', request: request.toObject() };
+            const populated = await existing.populate({ path: 'from to', select: utils.userColumnsToShow() });
+            return { title: 'Request resent', request: populated.toObject() };
         }
 
-        const userRequest = new UserRequestModel({
-            from: from,
-            to: to
-        });
-
+        const userRequest = new UserRequestModel({ from, to });
         await userRequest.save();
 
         const populatedRequest = await userRequest.populate({
@@ -711,17 +647,8 @@ class UserService {
         });
 
         // Create user connection status
-        const ucs = new UserConnectStatus({
-            users: [from, to]
-        });
-
-        ucs.save()
-            .then(() => {
-                console.info('User connection status is stored successfully');
-            })
-            .catch((err) => {
-                console.error('Error storing user connect status:', err);
-            });
+        const ucs = new UserConnectStatus({ users: [from, to] });
+        ucs.save().catch(err => console.error('Error storing user connect status:', err));
 
         return { title: 'New request saved', request: populatedRequest.toObject() };
     }
@@ -735,7 +662,6 @@ class UserService {
      * @returns {Promise<Object>} Result object with title and request
      */
     async respondConnectionRequest(from, to, response) {
-        to = await this._convertToMongoId(to);
 
         const request = await UserRequestModel.findOne({
             $or: [{ from: from, to: to }, { from: to, to: from }],
@@ -781,7 +707,17 @@ class UserService {
                 });
         }
 
-        return { title: 'Existing request updated', request: request.toObject() };
+        const result = { title: 'Existing request updated', request: request.toObject() };
+
+        try {
+            getIO().to(to).emit('connection request response', {
+                response,
+                from,
+                request: result.request
+            });
+        } catch (_) {}
+
+        return result;
     }
 
     /**
@@ -792,7 +728,6 @@ class UserService {
      * @returns {Promise<Object>} Result object with title and request
      */
     async cancelConnectionRequest(from, to) {
-        to = await this._convertToMongoId(to);
 
         const request = await UserRequestModel.findOne({
             from: from,
@@ -850,7 +785,6 @@ class UserService {
      * @returns {Promise<Object>} Result object with title and request
      */
     async undoFriendshipConnection(from, to, reason) {
-        to = await this._convertToMongoId(to);
 
         const request = await UserRequestModel.findOne({
             $or: [{ from: from, to: to }, { from: to, to: from }]
@@ -907,32 +841,42 @@ class UserService {
      * @returns {Promise<Object|null>} Connection request object or null
      */
     async getConnectionRequest(from, to) {
-        to = await this._convertToMongoId(to);
 
         return await UserRequestModel.findOne({
-            $or: [{ from: from, to: to }, { from: to, to: from }],
-            status: 'new'
+            $or: [{ from: from, to: to }, { from: to, to: from }]
         })
-            .populate({
-                path: 'to from',
-                select: utils.userColumnsToShow()
-            })
-            .lean();
+        .populate({
+            path: 'to from',
+            select: utils.userColumnsToShow()
+        })
+        .lean();
     }
 
     /**
-     * Get all connection requests for a user
+     * Get all connection requests and connection statuses for a user.
+     * Returns every request the user sent or received (all statuses), plus
+     * all UserConnectStatus records they are part of — so the client can
+     * fully reconstruct social state after a reinstall.
      *
      * @param {string} userId - User MongoDB ID
-     * @returns {Promise<Array>} Array of connection requests
+     * @returns {Promise<{requests: Array, connections: Array}>}
      */
     async allRequests(userId) {
-        return await UserRequestModel.find({ to: userId, status: 'new' })
-            .populate({
-                path: 'to from',
-                select: utils.userColumnsToShow()
+        const [requests, connections] = await Promise.all([
+            UserRequestModel.find({
+                $or: [{ from: userId }, { to: userId }]
             })
-            .lean();
+                .populate({ path: 'to from', select: utils.userColumnsToShow() })
+                .sort({ createdOn: -1 })
+                .lean(),
+
+            UserConnectStatus.find({ users: userId })
+                .populate({ path: 'users', select: utils.userColumnsToShow() })
+                .sort({ createdOn: -1 })
+                .lean(),
+        ]);
+
+        return { requests, connections };
     }
 
     /**
@@ -942,16 +886,28 @@ class UserService {
      * @param {boolean} status - Radar status
      * @returns {Promise<Object>} Updated user object
      */
-    async updateRadar(userId, status) {
-        const query = { _id: userId };
-        const date = Date.now();
-        const update = {
-            $set: {
-                radar: { show: status, updatedOn: date }
-            }
-        };
+    async updatePresence(userId) {
+        return await UserModel.findByIdAndUpdate(
+            userId,
+            { $set: { lastSeen: new Date() } },
+            { new: true }
+        ).lean();
+    }
 
-        return await UserModel.findOneAndUpdate(query, update, { new: true }).lean();
+    async updateRadarEnabled(userId, enabled) {
+        return await UserModel.findByIdAndUpdate(
+            userId,
+            { $set: { 'radar.enabled': enabled, 'radar.updatedOn': new Date() } },
+            { new: true }
+        ).lean();
+    }
+
+    async updateRadarInvisible(userId, invisible) {
+        return await UserModel.findByIdAndUpdate(
+            userId,
+            { $set: { 'radar.invisible': invisible, 'radar.updatedOn': new Date() } },
+            { new: true }
+        ).lean();
     }
 
     /**
@@ -961,23 +917,309 @@ class UserService {
      * @returns {Promise<Object>} Result object with status and deleted user
      */
     async deleteAccount(userId) {
-        const update = {
-            'deleted.date': Date.now(),
-            'deleted.reason': 'User initiated',
-            'deleted.status': true
-        };
-
-        const user = await UserModel.findOneAndUpdate(
-            { _id: userId },
-            update,
+        const user = await UserModel.findByIdAndUpdate(
+            userId,
+            { $set: { deleted: true, deletedOn: new Date(), deletedReason: 'User initiated' } },
             { new: true }
         );
 
-        if (!user) {
-            throw new Error('User not found');
-        }
+        if (!user) throw new Error('User not found');
 
         return { status: 'deleted', deletedUser: user };
+    }
+
+    async updateVisibilityPreferences(userId, prefs) {
+        const update = {};
+        if (typeof prefs.womenOnly === 'boolean') update['visibilityPreferences.womenOnly'] = prefs.womenOnly;
+        if (typeof prefs.menOnly   === 'boolean') update['visibilityPreferences.menOnly']   = prefs.menOnly;
+        if (typeof prefs.photoBlur === 'boolean') update['visibilityPreferences.photoBlur'] = prefs.photoBlur;
+
+        const user = await UserModel.findByIdAndUpdate(userId, { $set: update }, { new: true });
+        if (!user) throw new Error('User not found');
+        return user.visibilityPreferences;
+    }
+
+    async updateNotificationPreferences(userId, prefs) {
+        const fields = ['newMessages', 'chatRequests', 'connectionRequests', 'nearbyWinks', 'sound', 'vibration', 'badge'];
+        const update = {};
+        for (const key of fields) {
+            if (typeof prefs[key] === 'boolean') update[`notificationPreferences.${key}`] = prefs[key];
+        }
+
+        const user = await UserModel.findByIdAndUpdate(userId, { $set: update }, { new: true });
+        if (!user) throw new Error('User not found');
+        return user.notificationPreferences;
+    }
+
+    async updateProfilePrivacy(userId, prefs) {
+        const fields = ['showBio', 'showAge', 'showGender', 'showLocation', 'showContact'];
+        const update = {};
+        for (const key of fields) {
+            if (typeof prefs[key] === 'boolean') update[`privacySettings.${key}`] = prefs[key];
+        }
+
+        const user = await UserModel.findByIdAndUpdate(userId, { $set: update }, { new: true });
+        if (!user) throw new Error('User not found');
+        return user.privacySettings;
+    }
+
+    // ─── Auth helpers ──────────────────────────────────────────────────────────
+
+    async findOrCreateByFacebook(fbUser) {
+        let user = await UserModel.findOne({ facebookId: fbUser.id });
+        if (!user) {
+            user = await new UserModel({
+                facebookId: fbUser.id,
+                name: fbUser.name || 'Facebook User',
+                email: fbUser.email || null,
+                imageUrl: fbUser.picture?.data?.url || null,
+                status: 'active',
+                registeredOn: new Date(),
+                isPublic: false
+            }).save();
+        }
+        if (user.status === 'blocked') {
+            const err = new Error('User is blocked');
+            err.httpStatus = 403; err.code = 1010;
+            throw err;
+        }
+        return user;
+    }
+
+    async findOrCreateByApple(appleUser) {
+        let user = await UserModel.findOne({ appleId: appleUser.id });
+        if (!user) {
+            user = await new UserModel({
+                appleId: appleUser.id,
+                name: appleUser.name || 'Apple User',
+                email: appleUser.email || null,
+                status: 'active',
+                registeredOn: new Date(),
+                isPublic: false
+            }).save();
+        }
+        if (user.status === 'blocked') {
+            const err = new Error('User is blocked');
+            err.httpStatus = 403; err.code = 1010;
+            throw err;
+        }
+        return user;
+    }
+
+    async findOrCreateByGoogle(googleUser) {
+        let user = await UserModel.findOne({ googleId: googleUser.id });
+        if (!user) {
+            user = await new UserModel({
+                googleId:  googleUser.id,
+                name:      googleUser.name  || 'Google User',
+                email:     googleUser.email || null,
+                imageUrl:  googleUser.picture || null,
+                status:    'active',
+                registeredOn: new Date(),
+                isPublic:  false
+            }).save();
+        }
+        if (user.status === 'blocked') {
+            const err = new Error('User is blocked');
+            err.httpStatus = 403; err.code = 1010;
+            throw err;
+        }
+        return user;
+    }
+
+    async findOrCreateByPhone(phoneNumber) {
+        const phoneHash = this.#hashPhone(phoneNumber);
+        let user = await UserModel.findOne({ partition: phoneHash });
+        if (!user) {
+            user = await new UserModel({
+                partition: phoneHash,
+                phone: this.#encryptPhone(phoneNumber),
+                status: 'active',
+                registeredOn: new Date(),
+                isPublic: false
+            }).save();
+        }
+        if (user.status === 'blocked') {
+            const err = new Error('User is blocked');
+            err.httpStatus = 403; err.code = 1010;
+            throw err;
+        }
+        // decrypt phone for response if it's the same user
+        if (user.phone) {
+            user.phone = this.decryptPhone(user.phone);
+        }
+        return user;
+    }
+
+    async getActiveUserById(userId) {
+        return UserModel.findById(userId);
+    }
+
+    async clearRefreshToken(userId) {
+        await UserModel.findByIdAndUpdate(userId, { refreshToken: null });
+    }
+
+    // ─── Profile / picture / device / location ─────────────────────────────────
+
+    async updateProfile(userId, fields) {
+        const user = await UserModel.findById(userId);
+        if (!user) throw new Error('User not found');
+
+        const { name, email, imageUrl, isPublic, bio, gender, dateOfBirth, interestedIn } = fields;
+        if (name !== undefined)        user.name        = name;
+        if (email !== undefined)       user.email       = email;
+        if (imageUrl !== undefined)    user.imageUrl    = imageUrl;
+        if (bio !== undefined)         user.bio         = bio;
+        if (isPublic !== undefined)    user.isPublic    = isPublic;
+        if (gender !== undefined)      user.gender      = gender;
+        if (interestedIn !== undefined) user.interestedIn = interestedIn;
+        if (dateOfBirth !== undefined) {
+            user.dateOfBirth = new Date(dateOfBirth);
+            // keep age in sync
+            const ageDiff = Date.now() - user.dateOfBirth.getTime();
+            user.age = Math.floor(ageDiff / (1000 * 60 * 60 * 24 * 365.25));
+        }
+        user.updatedOn = new Date();
+
+        await user.save();
+        return user;
+    }
+
+    async updatePicture(userId, pictureUrl) {
+        const user = await UserModel.findByIdAndUpdate(
+            userId,
+            { $set: { imageUrl: pictureUrl } },
+            { new: true }
+        );
+        if (!user) throw new Error('User not found');
+        return user;
+    }
+
+    async updateDeviceWithHistory(userId, deviceToken, platform = 'IOS') {
+        const user = await UserModel.findByIdAndUpdate(
+            userId,
+            { $set: { device: { token: deviceToken, type: platform, updatedOn: new Date() } } },
+            { new: true }
+        );
+        if (!user) throw new Error('User not found');
+
+        try {
+            const DeviceModel = mongoose.model('Device');
+            await DeviceModel.findOneAndUpdate(
+                { user: userId },
+                { token: deviceToken, type: platform, updatedOn: new Date(), isActive: true },
+                { upsert: true, new: true }
+            );
+        } catch (err) {
+            console.error('Device collection update error:', err);
+        }
+
+        return user;
+    }
+
+    async updateLocation(userId, lat, lon) {
+        const LocationModel = mongoose.model('Location');
+        const thirtyDays = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+        // Supersede all previous current locations for this user
+        await LocationModel.updateMany(
+            { user: userId, isCurrent: true },
+            { $set: { isCurrent: false, expiresAt: thirtyDays } }
+        );
+
+        const locationDoc = await LocationModel.create({
+            user: userId,
+            point: { type: 'Point', coordinates: [lon, lat] },
+            isCurrent: true,
+            recordedAt: new Date(),
+        });
+
+        const user = await UserModel.findByIdAndUpdate(
+            userId,
+            { $set: { location: locationDoc._id, lastSeen: new Date() } },
+            { new: true }
+        );
+        if (!user) throw new Error('User not found');
+
+        return user;
+    }
+
+    async hardDeleteAccount(userId) {
+        const user = await UserModel.findByIdAndUpdate(
+            userId,
+            { $set: { deleted: true, deletedOn: new Date(), deletedReason: 'User initiated' } },
+            { new: true }
+        );
+        if (!user) throw new Error('User not found');
+        return user;
+    }
+
+    // ─── Device (embedded-only, no Device collection) ──────────────────────────
+
+    async updateDevice(userId, deviceToken, platform = 'IOS') {
+        const user = await UserModel.findByIdAndUpdate(
+            userId,
+            { $set: { device: { token: deviceToken, type: platform, updatedOn: new Date() } } },
+            { new: true }
+        );
+        if (!user) throw new Error('User not found');
+        return user;
+    }
+
+    // ─── Search / phone verification ───────────────────────────────────────────
+
+    async searchByName(name, page = 0, size = 20) {
+        const skip = page * size;
+        const filter = {
+            name: { $regex: name.trim(), $options: 'i' },
+            status: 'active',
+            deleted: { $ne: true }
+        };
+        const [users, total] = await Promise.all([
+            UserModel.find(filter).skip(skip).limit(size).sort({ name: 1 }),
+            UserModel.countDocuments(filter)
+        ]);
+        return { users, totalPages: Math.ceil(total / size) };
+    }
+
+    async findUsersByPhones(phones) {
+        // Hash each phone so we can match against the stored hashes.
+        // The original phone is carried through so the caller gets it back in the response.
+        const entries = phones.map(p => ({ phone: p, phoneHash: this.#hashPhone(p) }));
+        const hashes  = entries.map(e => e.phoneHash);
+
+        const users = await UserModel.find(
+            { phoneHash: { $in: hashes }, deleted: { $ne: true } },
+            { phoneHash: 1, name: 1, imageUrl: 1 }
+        );
+
+        return entries
+            .filter(e => users.some(u => u.phoneHash === e.phoneHash))
+            .map(e => {
+                const u = users.find(u => u.phoneHash === e.phoneHash);
+                return { phone: e.phone, id: u._id.toString(), name: u.name, pictureUrl: u.imageUrl };
+            });
+    }
+
+    // ─── Favorites ─────────────────────────────────────────────────────────────
+
+    async getFavorites(userId) {
+        const user = await UserModel.findById(userId).populate({
+            path: 'favorites',
+            select: '_id name imageUrl bio gender age interestedIn isPublic status'
+        });
+        if (!user) throw new Error('User not found');
+        return user.favorites || [];
+    }
+
+    async addFavorite(userId, favoriteUserId) {
+        const targetExists = await UserModel.exists({ _id: favoriteUserId, deleted: { $ne: true } });
+        if (!targetExists) throw new Error('User not found');
+        await UserModel.findByIdAndUpdate(userId, { $addToSet: { favorites: favoriteUserId } });
+    }
+
+    async removeFavorite(userId, targetUserId) {
+        await UserModel.findByIdAndUpdate(userId, { $pull: { favorites: targetUserId } });
     }
 }
 

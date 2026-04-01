@@ -24,14 +24,22 @@ async function startServer() {
     console.log('🔌 Connecting to database...');
     const db = await bootstrap.database.connectDatabase();
 
+    // 3a. Ensure geospatial index exists before serving requests
+    const mongoose = require('mongoose');
+    await mongoose.model('Location').ensureIndexes();
+    console.log('✓ Location indexes ensured');
+
+    // 3b. Start job scheduler
+    console.log('⏱ Starting job scheduler...');
+    await bootstrap.agenda.initAgenda();
+
     // 3. Create HTTP server
     const server = http.createServer(express);
 
     // 4. Initialize Socket.IO
     console.log('⚡ Initializing Socket.IO...');
     /** @type {import("socket.io").Server} */
-    const io = await bootstrap.socket.initializeSocket(server);
-    express.set('socketIO', io);
+    const io = await bootstrap.socket.initializeSocket(server); 
 
     // 5. Setup error handlers
     bootstrap.errors.setupErrorHandlers(server);

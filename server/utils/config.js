@@ -1,61 +1,58 @@
-// Load environment variables with fallbacks for development
-require('dotenv').config();
+require('dotenv').config({ path: '.env.local' });
 
 module.exports = {
-    ENV_NAME: process.env.ENV_NAME || 'production',
-    LOCAL: process.env.LOCAL === 'true' || process.env.ENV_NAME === 'development',
-    PORT: process.env.PORT || 3000,
-    HEARTBEAT_TIMEOUT: 40000,
-    HEARTBEAT_INTERVAL: 27000,
-    UPGRADE: 30000,
-    REGION: process.env.AWS_REGION || 'us-east-1',
+    ENV_NAME: process.env.ENV_NAME,
+    LOCAL: process.env.LOCAL === 'true',
+    PORT: parseInt(process.env.PORT) || 3000,
+    HEARTBEAT_TIMEOUT: parseInt(process.env.HEARTBEAT_TIMEOUT),
+    HEARTBEAT_INTERVAL: parseInt(process.env.HEARTBEAT_INTERVAL),
+    UPGRADE: parseInt(process.env.UPGRADE_TIMEOUT),
+    REGION: process.env.AWS_REGION,
+    URL: process.env.URL || `http://localhost:${process.env.PORT || 3000}`,
     
-    REDIS_HOST: process.env.REDIS_HOST || (process.env.ENV_NAME === 'development' 
-        ? 'localhost' 
-        : 'cha-re-bkzcc73ff5ak.j6vato.0001.use1.cache.amazonaws.com'),
-    REDIS_PORT: process.env.REDIS_PORT || 6379, 
+    REDIS_HOST: process.env.REDIS_HOST,
+    REDIS_PORT: parseInt(process.env.REDIS_PORT),
     
-    SECRET: 'Winky2019Chat',
-    APP_SECRET: process.env.APP_SECRET || 'mk6w5e5*TQT0',
-    APP_SECRET_REFRESH: process.env.APP_SECRET_REFRESH || '83ZucT1@&39@',
+    SECRET: process.env.SECRET,
+    APP_SECRET: process.env.APP_SECRET,
+    APP_SECRET_REFRESH: process.env.APP_SECRET_REFRESH,
+    CLIENT_JWT_BASE_SECRET: process.env.CLIENT_JWT_BASE_SECRET,
     
     MONGODB: {
-        HOST: process.env.MONGO_HOST || 'mongodb+srv://winky_ca_2022:Izkxsj40Ygqp2aay@cluster0.artad.mongodb.net/?retryWrites=true&w=majority',
-        PORT: process.env.MONGO_PORT || 27017,
-        NAME: 'winky',
+        HOST: process.env.MONGO_HOST,
+        PORT: parseInt(process.env.MONGO_PORT),
+        NAME: process.env.MONGO_DB_NAME,
     },
     
     MYSQL: {
         admin: {
-            USERNAME: process.env.MYSQL_ADMIN_USERNAME || 'admin',
-            PASSWORD: process.env.MYSQL_ADMIN_PASSWORD || 'Admin2022Winky'
+            USERNAME: process.env.MYSQL_ADMIN_USERNAME,
+            PASSWORD: process.env.MYSQL_ADMIN_PASSWORD
         }
     },
     
-    IOS_BUNDLE: process.env.IOS_BUNDLE || 'com.app.winky',
-    IOS_KEY_TOKEN: process.env.IOS_KEY_TOKEN || '2XCWJRBL6T',
-    IOS_TEAM_ID: process.env.IOS_TEAM_ID || 'EKH9RC2775',
+    IOS_BUNDLE: process.env.IOS_BUNDLE,
+    IOS_KEY_TOKEN: process.env.IOS_KEY_TOKEN,
+    IOS_TEAM_ID: process.env.IOS_TEAM_ID,
     
-    GCM_SERVER_ID: process.env.GCM_SERVER_ID || 'AAAA7AEKv3Y:APA91bEY2UbO8roUyGq1Q8LbQ6yvMneXW_E3X472kMh3fZsmGFbLD6Wf7FQrMAXYIIEPzZVJlH9Y4-DCUA6UUL6iQLsiYi2Dq0DCTsTfW_SayesjuNkzGAx8VAFsFrjlaYFQMpJNYjmE',
+    GCM_SERVER_ID: process.env.GCM_SERVER_ID,
     
     TWILIO: {
-        ACCOUNTSID: process.env.TWILIO_ACCOUNT_SID || 'REDACTED',
-        AUTHTOKEN: process.env.TWILIO_AUTH_TOKEN || 'REDACTED',
-        API_KEY: process.env.TWILIO_API_KEY || 'REDACTED',
-        API_KEY_SECRET: process.env.TWILIO_API_KEY_SECRET || 'REDACTED',
-        IOS_PUSH_CREDENTIAL_SID: process.env.TWILIO_IOS_PUSH_CREDENTIAL_SID || 'REDACTED',
-        ANDROID_PUSH_CREDENTIAL_SID: process.env.TWILIO_ANDROID_PUSH_CREDENTIAL_SID || 'REDACTED',
-        APP_SID: process.env.TWILIO_APP_SID || 'REDACTED',
-        NOTIFICATION_SERVICE_SID: process.env.TWILIO_NOTIFICATION_SERVICE_SID || 'REDACTED'
+        ACCOUNTSID: process.env.TWILIO_ACCOUNT_SID,
+        AUTHTOKEN: process.env.TWILIO_AUTH_TOKEN,
+        API_KEY: process.env.TWILIO_API_KEY,
+        API_KEY_SECRET: process.env.TWILIO_API_KEY_SECRET,
+        IOS_PUSH_CREDENTIAL_SID: process.env.TWILIO_IOS_PUSH_CREDENTIAL_SID,
+        ANDROID_PUSH_CREDENTIAL_SID: process.env.TWILIO_ANDROID_PUSH_CREDENTIAL_SID,
+        APP_SID: process.env.TWILIO_APP_SID,
+        NOTIFICATION_SERVICE_SID: process.env.TWILIO_NOTIFICATION_SERVICE_SID
     },
     
     AWS: {
-        BUCKET_NAME: process.env.AWS_BUCKET_NAME || 'winky-chat',
-        ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID || 'REDACTED',
-        SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY || 'REDACTED',
-        API_ENDPOINT: process.env.AWS_API_ENDPOINT || 'https://winky.com/',
-        REGION: process.env.AWS_REGION || 'us-east-1'
+        BUCKET_NAME: process.env.AWS_BUCKET_NAME,
+        ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID,
+        SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY,
+        API_ENDPOINT: process.env.AWS_API_ENDPOINT,
+        REGION: process.env.AWS_REGION
     }
 };
-
-module.exports.URL = process.env.URL || 'http://localhost:' + module.exports.PORT;

@@ -1,47 +1,62 @@
 /**
- * User Profile (Me) Routes
- * Handles authenticated user's own profile endpoints
+ * Me Routes — authenticated user's own profile.
+ * verifyClientToken + verifyToken are applied upstream in routes/index.js.
  */
 
-const express = require('express');
-const router = express.Router();
-const { verifyToken } = require('../../middleware/verify');
+const express      = require('express');
+const router       = express.Router();
 const meController = require('../controllers/me.controller');
 
-/**
- * GET /me
- * Get current user's profile
- */
-router.get('/', verifyToken, meController.getCurrentUserProfile);
+// GET  /me
+router.get('/', meController.getCurrentUserProfile);
 
-/**
- * PUT /me
- * Update current user's profile
- */
-router.put('/', verifyToken, meController.updateCurrentUserProfile);
+// PATCH /me/setup — onboarding: name, dateOfBirth, gender, imageUrl, location, device
+router.patch('/setup', meController.setupProfile);
 
-/**
- * PUT /me/picture
- * Update current user's picture
- */
-router.put('/picture', verifyToken, meController.updateCurrentUserPicture);
+// PUT  /me
+router.put('/', meController.updateCurrentUserProfile);
 
-/**
- * PUT /me/device-token
- * Update current user's device token
- */
-router.put('/device-token', verifyToken, meController.updateCurrentUserDeviceToken);
+// PUT  /me/picture
+router.put('/picture', meController.updateCurrentUserPicture);
 
-/**
- * PUT /me/location
- * Update current user's location
- */
-router.put('/location', verifyToken, meController.updateCurrentUserLocation);
+// PUT  /me/location
+router.put('/location', meController.updateCurrentUserLocation);
 
-/**
- * DELETE /me/deleteAccount
- * Delete current user's account
- */
-router.delete('/deleteAccount', verifyToken, meController.deleteCurrentUserAccount);
+// PUT  /me/presence  — heartbeat: updates lastSeen, keeps user visible in nearby
+router.put('/presence', meController.updatePresence);
+
+// PUT  /me/radar
+router.put('/radar', meController.updateRadarStatus);
+
+// PUT  /me/radar/invisible
+router.put('/radar/invisible', meController.updateRadarInvisible);
+
+// PUT  /me/notifications/preferences
+router.put('/notifications/preferences', meController.updateNotificationPreferences);
+
+// PUT  /me/visibility/preferences
+router.put('/visibility/preferences', meController.updateVisibilityPreferences);
+
+// PUT  /me/privacy
+router.put('/privacy', meController.updateProfilePrivacy);
+
+// DELETE /me
+router.delete('/', meController.deleteCurrentUserAccount);
+
+// ── Hidden Users (Radar) ──────────────────────────────────────────────────────
+// GET    /me/hidden/users
+router.get('/hidden/users', meController.getHiddenUsers);
+// POST   /me/hidden/users
+router.post('/hidden/users', meController.hideUser);
+// DELETE /me/hidden/users/:userId
+router.delete('/hidden/users/:userId', meController.unhideUser);
+
+// ── Hidden Connections (Contacts List) ───────────────────────────────────────
+// GET    /me/hidden/connections
+router.get('/hidden/connections', meController.getHiddenConnections);
+// POST   /me/hidden/connections
+router.post('/hidden/connections', meController.hideConnection);
+// DELETE /me/hidden/connections/:userId
+router.delete('/hidden/connections/:userId', meController.unhideConnection);
 
 module.exports = router;

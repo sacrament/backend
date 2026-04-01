@@ -4,29 +4,23 @@ const router = express.Router();
 const multer = require('multer');
 const upload = multer();
 
-const { 
+const {
     all,
     allFavorites,
     newChat,
-    edit,
     deleteChat,
     chatById,
-    addNewMembers,
-    getUserIds,
     leaveChat,
     favoriteChat,
     blockChat,
     muteChat,
     getMessagesForChat,
-    allChats,
     totalUnreadChatsForUser,
-    uploadMedia,
-    deleteMedia,
     messageById,
-    messageReceivedAck, 
+    messageReceivedAck,
     messageSeenAck,
     sendMessage,
-    conversationSeen
+    conversationSeen,
 } = require('../controllers/chat.controller');
 
 router.get('/', (req, res, next)  => {
@@ -34,13 +28,7 @@ router.get('/', (req, res, next)  => {
 })
 
 /// Create a new chat
-router.post('/new', newChat);
-
-/// Edit chat
-router.patch('/edit/:id', edit);
-
-/// Add new members to chat
-router.patch('/members/add', addNewMembers);
+router.post('/new', newChat); 
 
 /// Leave chat
 /// Admin can not leave chat
@@ -65,22 +53,12 @@ router.get('/all', all);
 router.get('/all/favorites', allFavorites);
 
 /// Single chat 
-router.get('/:id', chatById);
-
-/// ALl chats
-router.post('/users', getUserIds);
+router.get('/:id', chatById); 
 
 router.get('/:id/messages', getMessagesForChat)
 
 /// ALl chats
-router.get('/all/demo', allChats);
-
-/// ALl chats
-router.get('/all/unread', totalUnreadChatsForUser);
-
-router.put('/upload/media', upload.single('chat-media'), uploadMedia);
-
-router.delete('/media/:id', deleteMedia);
+router.get('/all/unread', totalUnreadChatsForUser);  
 
 router.get('/message/:id', messageById);
 

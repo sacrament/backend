@@ -44,7 +44,7 @@ class PushNotificationService {
                 console.log('Device was unbind');
                 resolve();
                 //MARK: Remove token
-                const userService = new UserService(UserModel);
+                const userService = new UserService();
                 // if (typeof userId === 'number') {  
                 //     userId = await userService.getUserIds([userId]);
                 // }
@@ -61,7 +61,7 @@ class PushNotificationService {
         console.log('Send user notification');
         return new Promise(async (resolve, reject) => {
             try {
-                const userService = new UserService(UserModel);
+                const userService = new UserService();
                 let user = await userService.getUserByIntId(userId);
                 notificationData.data.userName = user.name;
                 notificationData.data.userImage = user.imageUrl;

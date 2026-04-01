@@ -1,36 +1,112 @@
 const mongoose = require('mongoose');
 const ObjectId = mongoose.Types.ObjectId;
-const UserService = require('../user/user.service');
-const UserModel = mongoose.model('User');
 
 const MessageModel = mongoose.model('Message');
-const MessageMediaModel = mongoose.model('Media');
-const MessageReactionModel = mongoose.model('Reaction');
+const ChatModel = mongoose.model('Chat');
+
+const UserService = require('../user/user.service');
+const APIGateway = require('../../external/aws/api.gateway');
 
 const utils = require('../../../utils/index');
 const { normalizeUserId } = require('../../../utils/user.utils');
 const { validateRequired, validateObjectId, validateString, validateBoolean } = require('../../../utils/validation.utils');
 
+/**
+ * ChatService - Manages chat operations, member management, and messaging
+ * 
+ * This service handles:
+ * - Chat CRUD operations
+ * - Member management (add, remove, permissions)
+ * - Message tracking and unread counts
+ * - Chat settings (favorites, muted, blocked)
+ * 
+ * @class ChatService
+ */
 class ChatService {
-    /**
-     *Creates an instance of ChatService.
-     * @param {*} chatModel
-     * @memberof ChatService
-     */
-    constructor(chatModel) {
-        this.model = chatModel;
+    constructor() {
+        this.model = ChatModel;
+        this.userService = new UserService();
     }
+
+    // ─── Helper Methods ──────────────────────────────────────────────────────────────
+
     /**
-     * Get chat by ID with optional population
-     *
-     * @param {string} chatId - Chat ID to retrieve
+     * Build common populate options for member details
+     * @private
+     * @returns {Object} Populate configuration
+     */
+    #getMemberPopulateOpts() {
+        return {
+            path: "members.user",
+            select: utils.userColumnsToShow()
+        };
+    }
+
+    /**
+     * Build common populate options for last message
+     * @private
+     * @returns {Object} Populate configuration
+     */
+    #getLastMessagePopulateOpts() {
+        return {
+            path: 'lastMessage',
+            select: utils.lastMessageColumnsToShow(),
+            populate: {
+                path: 'from reactions media',
+                select: utils.userColumnsToShow() + utils.reactionColumnsToShow() + utils.mediaColumnsToShow(),
+                populate: {
+                    path: 'from',
+                    select: utils.userColumnsToShow()
+                }
+            }
+        };
+    }
+
+    /**
+     * Build query to check user is member of chat
+     * @private
+     * @param {string} chatId - Chat ID
+     * @param {string} userId - User ID (already normalized)
+     * @returns {Object} MongoDB query
+     */
+    #getMembershipQuery(chatId, userId) {
+        return {
+            _id: chatId,
+            members: {
+                $elemMatch: {
+                    $and: [
+                        { user: { $eq: new ObjectId(userId) } },
+                        { user: { $exists: true } }
+                    ],
+                    canChat: true,
+                }
+            }
+        };
+    }
+
+    /**
+     * Verify user is a member of chat
+     * @private
+     * @param {Object} chat - Chat document
+     * @param {string} userId - User ID to check
+     * @throws {Error} If user is not a member
+     */
+    #verifyMembership(chat, userId) {
+        if (!chat) {
+            throw new Error('Chat not found or user is not a member');
+        }
+    }
+
+    // ─── Read Operations ─────────────────────────────────────────────────────────
+
+    /**
+     * Get chat by ID with full details including member and message information
+     * @async
+     * @param {string} chatId - Chat ID
      * @param {string|number} userId - User ID requesting the chat
-     * @param {boolean} [populate=true] - Whether to populate related fields
-     * @returns {Promise<Object>} Chat object with optional populated fields
-     * @throws {Error} If chat not found or validation fails
-     *
-     * @example
-     * const chat = await chatService.getById('507f...', '507f...', true);
+     * @param {boolean} [populate=true] - Whether to populate referenced documents
+     * @returns {Promise<Object>} Chat document with populated details
+     * @throws {Error} If chat not found or user not a member
      */
     async getById(chatId, userId, populate = true) {
         validateRequired(chatId, 'Chat ID');
@@ -39,82 +115,41 @@ class ChatService {
 
         userId = await normalizeUserId(userId);
 
-        const query = {
-            _id: chatId,
-            members: {
-                $elemMatch: {
-                    $and: [{ user: { $eq: new ObjectId(userId) } }, { user: { $exists: true } }],
-                    canChat: true,
-                }
-            }
-        };
+        const query = this.#getMembershipQuery(chatId, userId);
 
         if (populate) {
             let chat = await this.model
                 .findOne(query)
                 .select(utils.chatColumnsToShow())
-                .populate({
-                    path: "members.user",
-                    select: utils.userColumnsToShow()
-                })
-                .populate({
-                    path: 'lastMessage',
-                    select: utils.lastMessageColumnsToShow(),
-                    populate: {
-                        path: 'from reactions media',
-                        select: utils.userColumnsToShow() + utils.reactionColumnsToShow() + utils.mediaColumnsToShow(),
-                        populate: {
-                            path: 'from',
-                            select: utils.userColumnsToShow()
-                        }
-                    }
-                })
+                .populate(this.#getMemberPopulateOpts())
+                .populate(this.#getLastMessagePopulateOpts())
                 .lean()
                 .exec();
 
-            if (!chat) {
-                throw new Error('No chat found for given id');
-            }
+            this.#verifyMembership(chat, userId);
 
-            if (chat.type === 'private') {
-                try {
-                    chat = await this.updatePrivateChatMembersToActive(chatId);
-                } catch (ex) {
-                    console.error(ex.message);
-                }
+            try {
+                chat = await this.updatePrivateChatMembersToActive(chatId);
+            } catch (error) {
+                console.warn(`[ChatService] Warning updating chat members to active: ${error.message}`);
             }
 
             try {
-                const total = await this.countUnreadMessagesForChat(chatId, userId);
-                chat.unreadMessages = total === 0 ? 1 : total;
-            } catch (err) {
-                chat.unreadMessages = 1;
-                console.error(`Error while getting total unread messages for chat: ${chatId} for user: ${userId}. Error: ${err.message}`);
+                const unreadCount = await this.countUnreadMessagesForChat(chatId, userId);
+                chat.unreadMessages = unreadCount || 0;
+            } catch (error) {
+                console.warn(`[ChatService] Error fetching unread count for chat ${chatId}: ${error.message}`);
+                chat.unreadMessages = 0;
             }
 
             return chat;
         } else {
             const chat = await this.model.findOne(query).exec();
-
-            if (!chat) {
-                throw new Error('No chat found for given id');
-            }
-
+            this.#verifyMembership(chat, userId);
             return chat;
         }
     }
 
-    /**
-     * Get all chats for a user
-     *
-     * @param {string|number} userId - User ID to get chats for
-     * @param {number} [skip=-1] - Number of chats to skip for pagination (-1 for no pagination)
-     * @returns {Promise<Array<Object>>} Array of chat objects with populated fields
-     * @throws {Error} If validation fails or query errors occur
-     *
-     * @example
-     * const chats = await chatService.getAll('507f...', 0);
-     */
     async getAll(userId, skip = -1) {
         validateRequired(userId, 'User ID');
 
@@ -123,17 +158,12 @@ class ChatService {
         console.log(`Get All chats for: ${userId} at ${Date.now()}`);
 
         const aggregate = this.model.aggregate([
-            // unwind the history array 
             {
                 $match: {
-                    // active: true,
-                    // deleted: false,
                     members: {
                         $elemMatch: {
                             $and: [{ user: { $eq: new ObjectId(userId) } }, { user: { $exists: true } }],
-                            // user: new ObjectId(userId),5df38dcb4b2986dc45effcbc
                             canChat: true,
-                            // 'options.blocked': false,
                         }
                     }
                 }
@@ -195,7 +225,7 @@ class ChatService {
                             }
                         },
                         {
-                            $project: { //TODO: MARK: Finish it up with reply
+                            $project: {
                                 _id: 1, content: 1, kind: 1, from: 1, sentOn: 1, reactions: 1, status: 1, sharedContact: 1, media: 1, deleted: 1, chatId: 1,
                                 replyTo: {
                                     _id: 1, kind: 1, sentOn: 1, reactions: 1, content: 1, media: 1, deleted: 1, chatId: 1,
@@ -263,10 +293,8 @@ class ChatService {
                     'reactions.from': {
                         $arrayElemAt: ['$fromUsers', 0]
                     },
-                    // 'me': { $arrayElemAt: ['$members.joinedOn', { "$indexOfArray": ["$members.user", new ObjectId(userId)] }] }
                 }
             },
-            // status of message 
             {
                 $lookup: {
                     from: 'users',
@@ -282,7 +310,6 @@ class ChatService {
                     }
                 }
             },
-            //members
             {
                 $unwind: '$members'
             },
@@ -298,7 +325,6 @@ class ChatService {
                 $addFields: {
                     'lastMessage.reactions': '$reactions',
                     'lastMessage.media': '$media',
-                    // 'me': { $arrayElemAt: ['$members.joinedOn', { "$indexOfArray": ["$users.user", new ObjectId(userId)] }] },
                     'members.user': {
                         $arrayElemAt: ['$users', 0]
                     }
@@ -307,9 +333,6 @@ class ChatService {
             {
                 $group: {
                     "_id": "$_id",
-                    id: { $first: "$id" },
-                    name: { $first: "$name" },
-                    // publicKey: { $first: "$publicKey" },
                     members: { "$push": "$members" },
                     lastMessage: {
                         $first: {
@@ -317,19 +340,14 @@ class ChatService {
                                 { $gte: ['$lastMessage.sentOn', '$me'] }, '$lastMessage', null
                             ]
                         }
-                    }, 
-                    type: { $first: "$type" },
-                    imageUrl: { $first: "$imageUrl" },
-                    createdOn: { $first: "$createdOn" },
-                    deleted: { $first: "$deleted" },
-                    deletedOn: { $first: "$deletedOn" }
-                    // me: { $first: '$me' }
+                    },
+                    active: { $first: "$active" },
+                    createdOn: { $first: "$createdOn" }
                 }
             },
             {
                 $addFields: {
                     'me': { $arrayElemAt: ['$members.joinedOn', { "$indexOfArray": ["$members.user", new ObjectId(userId)] }] },
-                    // lastMessage: '$lastMessage'
                 }
             },
             {
@@ -345,21 +363,20 @@ class ChatService {
                         ]
                     }
                 }
-            }, 
+            },
             {
-
                 $replaceRoot: { newRoot: { $mergeObjects: [{ lastMessage: null }, "$$ROOT"] } }
-
             },
             {
                 $project: {
+                    name: 0,
+                    imageUrl: 0,
+                    type: 0,
+                    id: 0,
                     members: {
                         user: { requests: 0, device: 0, updatedOn: 0, registeredOn: 0, facebookId: 0, __v: 0, contacts: 0, lastLogin: 0, isPublic: 0, chatToken: 0 }
                     },
                     lastMessage: {
-                        // $cond: [
-                        //     { $gte: ['$lastMessage.sentOn', '$me'] }, '$lastMessage', null
-                        // ]
                         from: { requests: 0, device: 0, updatedOn: 0, registeredOn: 0, facebookId: 0, lastLogin: 0, __v: 0, contacts: 0, isPublic: 0 },
                         status: {
                             user: { requests: 0, device: 0, updatedOn: 0, registeredOn: 0, facebookId: 0, lastLogin: 0, __v: 0, chatToken: 0, contacts: 0, isPublic: 0 }
@@ -370,11 +387,9 @@ class ChatService {
                         media: {
                             from: { requests: 0, device: 0, updatedOn: 0, registeredOn: 0, facebookId: 0, lastLogin: 0, __v: 0, contacts: 0, isPublic: 0 }
                         }
-                    },
+                    }
                 }
             },
-            // { $skip: skip },
-            // { $limit: 20 }
         ]);
 
         try {
@@ -399,194 +414,164 @@ class ChatService {
         }
     }
 
-    /**
-     * Get all favorite chats for a user
-     *
-     * @param {string|number} userId - User ID to get favorite chats for
-     * @returns {Promise<Array<Object>>} Array of favorite chat objects
-     * @throws {Error} If validation fails or query errors occur
-     *
-     * @example
-     * const favoriteChats = await chatService.getAllFavoriteChats('507f...');
-     */
     async getAllFavoriteChats(userId) {
         validateRequired(userId, 'User ID');
 
         userId = await normalizeUserId(userId);
 
         const chats = await this.model.aggregate([
-                // unwind the history array 
-                {
-                    $match: {
-                        active: true,
-                        members: {
-                            $elemMatch: {
-                                user: new ObjectId(userId),
-                                canChat: true,
-                                // 'options.blocked': false,
-                                'options.favorite': true
-                            }
-                        }
-                    }
-                },
-
-                {
-                    $lookup: {
-                        from: 'messages',
-                        let: {
-                            chatId: '$_id'
-                        },
-                        pipeline: [{
-                            $match: {
-                                $expr: {
-                                    $and: [{
-                                        $ne: [
-                                            '$from', new ObjectId(userId)
-                                        ]
-                                    }, {
-                                        $eq: [
-                                            '$chatId', '$$chatId'
-                                        ]
-                                    }, {
-                                        $eq: [
-                                            '$deleted.date', null
-                                        ]
-                                    }]
-                                }
-                            }
-                        }, {
-                            $unwind: {
-                                path: '$status',
-                                preserveNullAndEmptyArrays: true
-                            }
-                        }, {
-                            $match: {
-                                'status.read': {
-                                    $eq: null
-                                }
-                            }
-                        },
-                        {
-                            $group: {
-                                _id: "$_id"
-                            }
-                        }
-                        ],
-                        as: 'unreadMessages'
-                    }
-                },
-                {
-                    $project: {
-                        chat: '$$ROOT'
-                    }
-                },
-                {
-                    $replaceRoot: {
-                        newRoot: '$chat'
-                    }
-                },
-                {
-                    $addFields: {
-                        unreadMessages: {
-                            $size: '$unreadMessages'
-                        }
-                    }
-                },
-                {
-                    $lookup: {
-                        from: 'messages',
-                        let: {
-                            lm: '$lastMessage'
-                        },
-                        pipeline: [
-                            {
-                                $match: {
-                                    $expr: { $eq: ['$_id', '$$lm'] }
-                                }
-                            },
-                            {
-                                $lookup: {
-                                    from: 'users',
-                                    localField: 'from',
-                                    foreignField: '_id',
-                                    as: 'from'
-                                }
-                            },
-                            {
-                                $unwind: {
-                                    path: '$from',
-                                    preserveNullAndEmptyArrays: true
-                                }
-                            },
-                            {
-                                $project: { _id: 1, content: 1, kind: 1, from: 1, sentOn: 1, reactions: 1 }
-                            }
-                        ],
-                        as: 'lastMessage'
-                    }
-                },
-                {
-                    $unwind: '$lastMessage'
-                },
-                {
-                    $unwind: '$members'
-                },
-                {
-                    $lookup: {
-                        from: 'users',
-                        localField: 'members.user',
-                        foreignField: '_id',
-                        as: 'users'
-                    }
-                },
-
-                {
-                    $addFields: {
-                        'members.user': {
-                            $arrayElemAt: ['$users', 0]
-                        }
-                    }
-                },
-                {
-                    $group: {
-                        "_id": "$_id",
-                        id: { $first: "$id" },
-                        name: { $first: "$name" },
-                        members: { "$push": "$members" },
-                        lastMessage: { $first: "$lastMessage" },
-                        unreadMessages: { $first: "$unreadMessages" },
-                        type: { $first: "$type" },
-                        imageUrl: { $first: "$imageUrl" },
-                        createdOn: { $first: "$createdOn" }
-                    }
-                },
-                {
-                    $project: {
-                        members: {
-                            user: { device: 0, updatedOn: 0, registeredOn: 0, facebookId: 0, __v: 0 }
-                        },
-                        lastMessage: {
-                            from: { device: 0, updatedOn: 0, registeredOn: 0, facebookId: 0, lastLogin: 0, __v: 0 }
+            {
+                $match: {
+                    active: true,
+                    members: {
+                        $elemMatch: {
+                            user: new ObjectId(userId),
+                            canChat: true,
+                            'options.favorite': true
                         }
                     }
                 }
-            ]).exec();
+            },
+            {
+                $lookup: {
+                    from: 'messages',
+                    let: {
+                        chatId: '$_id'
+                    },
+                    pipeline: [{
+                        $match: {
+                            $expr: {
+                                $and: [{
+                                    $ne: [
+                                        '$from', new ObjectId(userId)
+                                    ]
+                                }, {
+                                    $eq: [
+                                        '$chatId', '$$chatId'
+                                    ]
+                                }, {
+                                    $eq: [
+                                        '$deleted.date', null
+                                    ]
+                                }]
+                            }
+                        }
+                    }, {
+                        $unwind: {
+                            path: '$status',
+                            preserveNullAndEmptyArrays: true
+                        }
+                    }, {
+                        $match: {
+                            'status.read': {
+                                $eq: null
+                            }
+                        }
+                    },
+                    {
+                        $group: {
+                            _id: "$_id"
+                        }
+                    }
+                    ],
+                    as: 'unreadMessages'
+                }
+            },
+            {
+                $project: {
+                    chat: '$$ROOT'
+                }
+            },
+            {
+                $replaceRoot: {
+                    newRoot: '$chat'
+                }
+            },
+            {
+                $addFields: {
+                    unreadMessages: {
+                        $size: '$unreadMessages'
+                    }
+                }
+            },
+            {
+                $lookup: {
+                    from: 'messages',
+                    let: {
+                        lm: '$lastMessage'
+                    },
+                    pipeline: [
+                        {
+                            $match: {
+                                $expr: { $eq: ['$_id', '$$lm'] }
+                            }
+                        },
+                        {
+                            $lookup: {
+                                from: 'users',
+                                localField: 'from',
+                                foreignField: '_id',
+                                as: 'from'
+                            }
+                        },
+                        {
+                            $unwind: {
+                                path: '$from',
+                                preserveNullAndEmptyArrays: true
+                            }
+                        },
+                        {
+                            $project: { _id: 1, content: 1, kind: 1, from: 1, sentOn: 1, reactions: 1 }
+                        }
+                    ],
+                    as: 'lastMessage'
+                }
+            },
+            {
+                $unwind: '$lastMessage'
+            },
+            {
+                $unwind: '$members'
+            },
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: 'members.user',
+                    foreignField: '_id',
+                    as: 'users'
+                }
+            },
+            {
+                $addFields: {
+                    'members.user': {
+                        $arrayElemAt: ['$users', 0]
+                    }
+                }
+            },
+            {
+                $group: {
+                    "_id": "$_id",
+                    members: { "$push": "$members" },
+                    lastMessage: { $first: "$lastMessage" },
+                    unreadMessages: { $first: "$unreadMessages" },
+                    createdOn: { $first: "$createdOn" }
+                }
+            },
+            {
+                $project: {
+                    members: {
+                        user: { device: 0, updatedOn: 0, registeredOn: 0, facebookId: 0, __v: 0 }
+                    },
+                    lastMessage: {
+                        from: { device: 0, updatedOn: 0, registeredOn: 0, facebookId: 0, lastLogin: 0, __v: 0 }
+                    }
+                }
+            }
+        ]).exec();
 
         return chats;
     }
 
-    /**
-     * Get chats for a user with optional filtering
-     *
-     * @param {string|number} user - User ID to get chats for
-     * @param {boolean} [showOnlyFavorites=false] - Whether to show only favorite chats
-     * @param {number} [skip=0] - Number of chats to skip for pagination
-     * @returns {Promise<Array<Object>>} Array of chat objects
-     * @throws {Error} If validation fails
-     *
-     * @example
-     * const chats = await chatService.getChatsForUser('507f...', false, 0);
-     */
     async getChatsForUser(user, showOnlyFavorites = false, skip = 0) {
         validateRequired(user, 'User ID');
         validateBoolean(showOnlyFavorites, 'Show only favorites');
@@ -598,17 +583,6 @@ class ChatService {
         }
     }
 
-    /**
-     * Get members of a chat
-     *
-     * @param {string} chatId - Chat ID to get members from
-     * @param {boolean} [onlyUser=true] - Whether to return only user IDs or full member objects
-     * @returns {Promise<Array>} Array of user IDs or member objects
-     * @throws {Error} If chat not found or validation fails
-     *
-     * @example
-     * const members = await chatService.getChatMembers('507f...', true);
-     */
     async getChatMembers(chatId, onlyUser = true) {
         validateRequired(chatId, 'Chat ID');
         validateObjectId(chatId, 'Chat ID');
@@ -634,14 +608,11 @@ class ChatService {
 
     /**
      * Get a specific member from a chat
-     *
-     * @param {string} chatId - Chat ID to search in
+     * @async
+     * @param {string} chatId - Chat ID
      * @param {string|number} userId - User ID to find
-     * @returns {Promise<Object>} Member object with user details
-     * @throws {Error} If user not found in chat or validation fails
-     *
-     * @example
-     * const member = await chatService.getChatMember('507f...', '507f...');
+     * @returns {Promise<Object>} Member document
+     * @throws {Error} If member not found
      */
     async getChatMember(chatId, userId) {
         validateRequired(chatId, 'Chat ID');
@@ -664,24 +635,18 @@ class ChatService {
         const chat = await this.model.findOne(query).lean().exec();
 
         if (!chat) {
-            throw new Error('User not found in this chat');
+            throw new Error(`User ${userId} is not an active member of this chat`);
         }
 
-        const member = chat.members.filter(member => member.user.toString() === userId)[0];
+        const member = chat.members.find(m => m.user.toString() === userId);
+        
+        if (!member) {
+            throw new Error(`Member not found in chat`);
+        }
+
         return member;
     }
 
-    /**
-     * Get total unread messages for a chat and specific user
-     *
-     * @param {string} chatId - Chat ID to count unread messages for
-     * @param {string|number} userId - User ID to count unread messages for
-     * @returns {Promise<number>} Count of unread messages
-     * @throws {Error} If validation fails
-     *
-     * @example
-     * const unreadCount = await chatService.countUnreadMessagesForChat('507f...', '507f...');
-     */
     async countUnreadMessagesForChat(chatId, userId) {
         validateRequired(chatId, 'Chat ID');
         validateObjectId(chatId, 'Chat ID');
@@ -706,27 +671,15 @@ class ChatService {
         }
     }
 
-    /**
-     * Get total unread messages for a single user across all chats
-     *
-     * @param {string|number} userId - User ID to count unread messages for
-     * @returns {Promise<number>} Total count of unread messages
-     * @throws {Error} If validation fails
-     *
-     * @example
-     * const totalUnread = await chatService.countUnreadMessagesForUser('507f...');
-     */
     async countUnreadMessagesForUser(userId) {
         validateRequired(userId, 'User ID');
 
         userId = await normalizeUserId(userId);
 
         const aggregate = this.model.aggregate([
-            // unwind the history array 
             {
                 $match: {
                     active: true,
-                    // deleted: false,
                     members: {
                         $elemMatch: {
                             $and: [{ user: { $eq: new ObjectId(userId) } }, { user: { $exists: true } }],
@@ -789,7 +742,6 @@ class ChatService {
                     }
                 }
             },
-
             {
                 $group: {
                     _id: null,
@@ -821,16 +773,6 @@ class ChatService {
         }
     }
 
-    /**
-     * Total unread chats for a user
-     *
-     * @param {string|number} userId - User ID to count unread chats for
-     * @returns {Promise<number>} Count of chats with unread messages
-     * @throws {Error} If validation fails
-     *
-     * @example
-     * const unreadChats = await chatService.countTotalUnreadChatsForUser('507f...');
-     */
     async countTotalUnreadChatsForUser(userId) {
         validateRequired(userId, 'User ID');
 
@@ -845,7 +787,6 @@ class ChatService {
                             '$elemMatch': {
                                 'user': new ObjectId(userId),
                                 'canChat': true,
-                                //   'options.blocked': false
                             }
                         }
                     }
@@ -869,11 +810,6 @@ class ChatService {
                                                     '$chatId', '$$chatId'
                                                 ]
                                             },
-                                            // {
-                                            //     '$ne': [
-                                            //         '$kind', 'generic'
-                                            //     ]
-                                            // },
                                             {
                                                 $eq: [
                                                     '$deleted.date', null
@@ -932,32 +868,12 @@ class ChatService {
         }
     }
 
-    /**
-     * @deprecated This method appears to be using incorrect API (findAll on Mongoose model)
-     * Should not be used - marked for removal
-     */
-    getAllMessagesWithChatsFromMySQL() {
-        return this.model.findAll({
-            // limit: 10
-        });
-    }
-
-    /**
-     * Get chat by imported group ID
-     *
-     * @param {number} importedGroupId - Imported group ID from legacy system
-     * @returns {Promise<Object>} Chat object
-     * @throws {Error} If chat not found or validation fails
-     *
-     * @example
-     * const chat = await chatService.getByImportedId(12345);
-     */
-    async getByImportedId(importedGroupId) {
-        validateRequired(importedGroupId, 'Imported group ID');
+    async getByImportedId(importedChatId) {
+        validateRequired(importedChatId, 'Imported chat ID');
 
         const query = {
             isImported: true,
-            id: importedGroupId
+            id: importedChatId
         };
 
         const chat = await this.model.findOne(query).lean().exec();
@@ -969,16 +885,6 @@ class ChatService {
         return chat;
     }
 
-    /**
-     * Get chat by unique ID
-     *
-     * @param {string} uniqueId - Unique identifier for imported chat
-     * @returns {Promise<Object>} Chat object
-     * @throws {Error} If chat not found or validation fails
-     *
-     * @example
-     * const chat = await chatService.getByUniqueId('abc123');
-     */
     async getByUniqueId(uniqueId) {
         validateRequired(uniqueId, 'Unique ID');
         validateString(uniqueId, 'Unique ID');
@@ -1002,16 +908,6 @@ class ChatService {
         }
     }
 
-    /**
-     * Get chat by ID with populated fields
-     *
-     * @param {string} chatId - Chat ID to retrieve
-     * @returns {Promise<Object>} Chat object with populated members and last message
-     * @throws {Error} If chat not found, deleted, or validation fails
-     *
-     * @example
-     * const chat = await chatService.getChatById('507f...');
-     */
     async getChatById(chatId) {
         validateRequired(chatId, 'Chat ID');
         validateObjectId(chatId, 'Chat ID');
@@ -1046,23 +942,13 @@ class ChatService {
             throw new Error('No chat found for given id');
         }
 
-        if (!chat.active && chat.deleted) {
-            throw new Error('Chat is not active, because it is deleted');
+        if (!chat.active) {
+            throw new Error('Chat is not active');
         }
 
         return chat;
     }
 
-    /**
-     * Get only chat data without activity check
-     *
-     * @param {string} id - Chat ID to retrieve
-     * @returns {Promise<Object>} Chat object with populated fields
-     * @throws {Error} If chat not found or validation fails
-     *
-     * @example
-     * const chat = await chatService.getOnlyChat('507f...');
-     */
     async getOnlyChat(id) {
         validateRequired(id, 'Chat ID');
         validateObjectId(id, 'Chat ID');
@@ -1095,16 +981,6 @@ class ChatService {
         return chat;
     }
 
-    /**
-     * Update private chat members to active status
-     *
-     * @param {string} chatId - Chat ID to update
-     * @returns {Promise<Object>} Updated chat object
-     * @throws {Error} If nothing to update or validation fails
-     *
-     * @example
-     * const updatedChat = await chatService.updatePrivateChatMembersToActive('507f...');
-     */
     async updatePrivateChatMembersToActive(chatId) {
         validateRequired(chatId, 'Chat ID');
         validateObjectId(chatId, 'Chat ID');
@@ -1136,21 +1012,6 @@ class ChatService {
         return chat;
     }
 
-    /**
-     * Update chat with public key
-     *
-     * @param {Object} data - Update data
-     * @param {string} data.chatId - Chat ID to update
-     * @param {string} data.publicKey - Public key to set
-     * @returns {Promise<Object>} Updated chat object
-     * @throws {Error} If chat not found or validation fails
-     *
-     * @example
-     * const chat = await chatService.updateChatWithPublicKey({
-     *   chatId: '507f...',
-     *   publicKey: 'abc123...'
-     * });
-     */
     async updateChatWithPublicKey(data) {
         validateRequired(data, 'Data');
         validateRequired(data.chatId, 'Chat ID');
@@ -1169,6 +1030,560 @@ class ChatService {
 
         return chat;
     }
+
+    // ─── Write / Mutation Operations ─────────────────────────────────────────────
+
+    /**
+     * Create a new chat or reactivate existing chat between members
+     * @async
+     * @param {Object} data - Chat creation data
+     * @param {Object} data.chat - Chat details
+     * @param {Array<string|number>} data.chat.users - User IDs to add to chat (includes all members)
+     * @returns {Promise<Object>} Response with message and chat document
+     * @throws {Error} If validation fails or database error occurs
+     */
+    async create(data) {
+        validateRequired(data, 'Chat data');
+        validateRequired(data.chat, 'Chat details');
+        validateRequired(data.chat.users, 'Chat users');
+
+        try {
+            // Get member IDs (contains all users)
+            const memberIds = await this.userService.getUserIds(data.chat.users);
+
+            // Check for existing chat with same members
+            const existingChat = await this.#findExistingChat(memberIds);
+
+            if (existingChat) {
+                return this.#reactivateExistingChat(existingChat);
+            }
+
+            // Create new chat
+            return await this.#createNewChat(memberIds);
+        } catch (error) {
+            console.error(`[ChatService] Error creating chat: ${error.message}`);
+            throw error;
+        }
+    }
+
+    /**
+     * Find existing chat between members
+     * @private
+     * @param {string|Array} memberIds - Member IDs to match
+     * @returns {Promise<Object|null>} Existing chat or null
+     */
+    async #findExistingChat(memberIds) {
+        const memberArray = Array.isArray(memberIds) ? memberIds : [memberIds];
+
+        return await this.model
+            .findOne({ 'members.user': { $all: memberArray } })
+            .populate(this.#getMemberPopulateOpts())
+            .populate({
+                path: 'lastMessage',
+                select: utils.messageColumnsToShow(),
+                populate: {
+                    path: 'from',
+                    select: utils.userColumnsToShow()
+                }
+            })
+            .exec();
+    }
+
+    /**
+     * Reactivate an existing chat
+     * @private
+     * @param {Object} chat - Existing chat document
+     * @returns {Object} Response with reactivated chat
+     */
+    #reactivateExistingChat(chat) {
+        chat.active = true;
+
+        // Reactivate all members in the chat
+        for (const member of chat.members) {
+            member.canChat = true;
+            member.options = member.options || {};
+            member.options.blocked = false;
+            member.updatedOn = Date.now();
+            member.joinedOn = Date.now();
+            member.leftOn = null;
+        }
+
+        chat.save();
+
+        return {
+            message: 'Chat reactivated',
+            chat: chat,
+            isNew: false
+        };
+    }
+
+    /**
+     * Create a brand new chat
+     * @private
+     * @param {string|Array} memberIds - Member IDs to add
+     * @returns {Promise<Object>} Response with newly created chat
+     */
+    async #createNewChat(memberIds) {
+        const chat = new this.model();
+        chat.uniqueId = chat._id.toString();
+
+        // Add all members (memberIds contains all users including creator)
+        if (Array.isArray(memberIds)) {
+            for (const memberId of memberIds) {
+                chat.members.push({ user: memberId });
+            }
+        } else {
+            chat.members.push({ user: memberIds });
+        }
+
+        await chat.save();
+
+        const newChat = await this.getOnlyChat(chat._id);
+
+        return {
+            message: 'Chat created successfully',
+            chat: newChat,
+            isNew: true
+        };
+    }
+
+    /**
+     * Save a chat document
+     * @async
+     * @param {Object} chat - Chat document to save
+     * @returns {Promise<Object>} Response with saved chat
+     * @throws {Error} If chat is invalid
+     */
+    async save(chat) {
+        validateRequired(chat, 'Chat document');
+
+        await chat.save();
+        await chat.populate(this.#getMemberPopulateOpts());
+
+        console.log(`[ChatService] Chat ${chat._id} saved successfully`);
+        return {
+            message: "Chat saved successfully",
+            chat: chat
+        };
+    }
+
+    /**
+     * Edit chat details (no editable properties for private chats)
+     * @async
+     * @param {Object} data - Chat update data (currently no fields editable for private chats)
+     * @param {string} data.id - Chat ID
+     * @returns {Promise<Object>} Response with chat
+     * @throws {Error} No updates available for private chats
+     */
+    async edit(data) {
+        validateRequired(data, 'Update data');
+        validateRequired(data.id, 'Chat ID');
+        validateObjectId(data.id, 'Chat ID');
+
+        // Private chats have no editable properties (name/imageUrl derived from members)
+        throw new Error('Private chats cannot be edited - properties are derived from members');
+
+    }
+
+    async newMembers(chatId, users, fromUser) {
+        validateRequired(chatId, 'Chat ID');
+        validateObjectId(chatId, 'Chat ID');
+        validateRequired(users, 'Users');
+
+        const userObjectIds = users.map(user => new ObjectId(user));
+        const q = {
+            _id: chatId,
+            'members.user': { $in: userObjectIds }
+        };
+
+        const foundChat = await this.model.findOne(q)
+            .populate(this.#getMemberPopulateOpts())
+            .populate({
+                path: 'lastMessage',
+                select: utils.messageColumnsToShow(),
+                populate: {
+                    path: 'from',
+                    select: utils.userColumnsToShow()
+                }
+            }).exec();
+
+        if (foundChat) {
+            console.log(`[ChatService] Members already exist in chat ${chatId}`);
+            return { chat: foundChat, exists: true };
+        }
+
+        const mapUsers = users.map((member) => {
+            return { user: member };
+        });
+
+        const query = { _id: chatId };
+        const update = { $addToSet: { members: { $each: mapUsers } } };
+
+        const chat = await this.model.findOneAndUpdate(query, update, { new: true })
+            .populate(this.#getMemberPopulateOpts())
+            .populate({
+                path: 'lastMessage',
+                select: utils.messageColumnsToShow(),
+                populate: {
+                    path: 'from',
+                    select: utils.userColumnsToShow()
+                }
+            })
+            .lean()
+            .exec();
+
+        if (!chat) throw new Error('Chat not found for given id');
+
+        console.log(`[ChatService] Added ${users.length} members to chat ${chatId}`);
+        return { chat: chat, exists: false };
+    }
+
+    async removeMembers(chatId, users) {
+        validateRequired(chatId, 'Chat ID');
+        validateObjectId(chatId, 'Chat ID');
+        validateRequired(users, 'Users');
+
+        const query = { _id: chatId };
+        const update = { $pull: { members: { user: { $in: users.map(user => new ObjectId(user)) } } } };
+
+        const chat = await this.model.findOneAndUpdate(query, update, { new: true })
+            .populate(this.#getMemberPopulateOpts())
+            .populate({
+                path: 'lastMessage',
+                select: utils.messageColumnsToShow(),
+                populate: {
+                    path: 'from',
+                    select: utils.userColumnsToShow()
+                }
+            })
+            .lean()
+            .exec();
+
+        if (!chat) throw new Error('Chat not found for given id');
+
+        console.log(`[ChatService] Removed ${users.length} members from chat ${chatId}`);
+        return chat;
+    }
+
+    async leaveChat(userId, chatId) {
+        validateRequired(userId, 'User ID');
+        validateRequired(chatId, 'Chat ID');
+        validateObjectId(chatId, 'Chat ID');
+
+        userId = await normalizeUserId(userId);
+
+        const filter = { 'members.user': userId, _id: chatId };
+        const update = { $pull: { members: { user: { $eq: new ObjectId(userId) } } } };
+
+        const chat = await this.model.findOneAndUpdate(filter, update, { new: true })
+            .populate(this.#getMemberPopulateOpts())
+            .populate({
+                path: 'lastMessage',
+                select: utils.messageColumnsToShow(),
+                populate: {
+                    path: 'from',
+                    select: utils.userColumnsToShow()
+                }
+            })
+            .lean()
+            .exec();
+
+        if (!chat) throw new Error('User is not a member of this chat');
+
+        console.log(`[ChatService] User ${userId} left chat ${chatId}`);
+        return {
+            message: "User left the chat",
+            chat: chat
+        };
+    }
+
+    async deleteChat(chatId, forUser) {
+        const chat = await this.getOnlyChat(chatId);
+        const date = Date.now();
+
+        const filter = { 'members.user': forUser, _id: chatId };
+        const noActiveMembers = chat.members.filter(member => member.canChat === true);
+        const update = noActiveMembers.length === 1
+            ? { $set: { 'members.$.canChat': false, 'members.$.leftOn': date, 'members.$.updatedOn': date, 'lastMessage': null } }
+            : { $set: { 'members.$.canChat': false, 'members.$.leftOn': date, 'members.$.updatedOn': date } };
+
+        const updatedChat = await this.model.findOneAndUpdate(filter, update, { new: true })
+            .populate({
+                path: "members.user",
+                select: utils.userColumnsToShow()
+            })
+            .populate({
+                path: 'lastMessage',
+                select: utils.messageColumnsToShow(),
+                populate: {
+                    path: 'from',
+                    select: utils.userColumnsToShow()
+                }
+            })
+            .lean()
+            .exec();
+
+        if (!updatedChat) throw new Error('No chat found to be deleted');
+
+        return {
+            message: "Chat is marked deleted",
+            chat: updatedChat
+        };
+    }
+
+    async favoriteChat(userId, chatId, status) {
+        userId = await normalizeUserId(userId);
+
+        const filter = { 'members.user': userId, _id: chatId };
+        const update = { $set: { 'members.$.options.favorite': status, 'members.$.updatedOn': Date.now() } };
+
+        const chat = await this.model.findOneAndUpdate(filter, update, { new: true, runValidators: true })
+            .populate({
+                path: "members.user",
+                select: utils.userColumnsToShow()
+            })
+            .populate({
+                path: 'lastMessage',
+                select: utils.messageColumnsToShow(),
+                populate: {
+                    path: 'from',
+                    select: utils.userColumnsToShow()
+                }
+            })
+            .lean()
+            .exec();
+
+        if (!chat) throw new Error('Not chat found');
+
+        return {
+            text: status ? "Added to favourites" : "Removed from favourites",
+            favoriteStatus: status,
+            chat: chat
+        };
+    }
+
+    async muteChat(userId, chatId, status) {
+        userId = await normalizeUserId(userId);
+
+        const filter = { 'members.user': userId, _id: chatId };
+        const update = { $set: { 'members.$.options.muted': status, 'members.$.updatedOn': Date.now() } };
+
+        const chat = await this.model.findOneAndUpdate(filter, update, { new: true, runValidators: true })
+            .populate({
+                path: "members.user",
+                select: utils.userColumnsToShow()
+            })
+            .populate({
+                path: 'lastMessage',
+                select: utils.messageColumnsToShow(),
+                populate: {
+                    path: 'from',
+                    select: utils.userColumnsToShow()
+                }
+            })
+            .lean()
+            .exec();
+
+        if (!chat) throw new Error('No chat found');
+
+        return {
+            text: status ? "Chat is muted" : "Chat is unmuted",
+            muteStatus: status,
+            chat: chat
+        };
+    }
+
+    async blockChat(me, chatId, status, reason = "", description = "") {
+        let userId = me.user || me;
+        userId = await normalizeUserId(userId);
+
+        const filter = { 'members.user': userId, _id: chatId };
+        const update = { $set: { 'members.$.options.blocked': status, 'members.$.updatedOn': Date.now() } };
+
+        const chat = await this.model.findOneAndUpdate(filter, update)
+            .populate({
+                path: "members.user",
+                select: utils.userColumnsToShow()
+            })
+            .populate({
+                path: 'lastMessage',
+                select: utils.messageColumnsToShow(),
+                populate: {
+                    path: 'from',
+                    select: utils.userColumnsToShow()
+                }
+            })
+            .lean()
+            .exec();
+
+        if (!chat) throw new Error('No chat found');
+
+        const chatMembers = chat.members.filter(m => m.user._id != userId);
+
+        const userService = new UserService();
+        await (status ? userService.blockUsers(chatMembers, userId, reason, description) : userService.unblockUsers(chatMembers, userId));
+
+        const apiGateway = new APIGateway();
+        const promises = chatMembers.map(async m => {
+            const member = m.user;
+            const res = status ? await apiGateway.blockUser(member.id, me.token) : await apiGateway.unblockUser(member.id, me.token);
+            return res;
+        });
+
+        const result = await Promise.all(promises);
+        console.log(`Result from API [${status ? 'BLOCK' : 'UNBLOCK'} user]: ${result}`);
+
+        return {
+            text: status ? "Chat is blocked" : "Chat is unblocked",
+            blockStatus: status,
+            chat: chat
+        };
+    }
+
+    async setLatestMessage(chatId, messageId, userId = null) {
+        const filter = { _id: chatId };
+
+        const chat = await this.model.findOneAndUpdate(filter, { lastMessage: messageId }, { new: true, runValidators: true })
+            .populate({
+                path: "members.user",
+                select: utils.userColumnsToShow()
+            })
+            .populate({
+                path: 'lastMessage',
+                select: utils.lastMessageColumnsToShow(),
+                populate: {
+                    path: 'from media',
+                    select: utils.userColumnsToShow() + utils.mediaColumnsToShow()
+                }
+            })
+            .lean()
+            .exec();
+
+        if (!chat) {
+            console.log(`Last message with id: ${messageId} is NOT set for chat: ${chatId}. Error thrown`);
+            throw new Error('No chat found');
+        }
+
+        if (userId) {
+            console.log(`Last message with id: ${messageId} is set for chat: ${chatId}`);
+            const totalUnread = await this.countUnreadMessagesForChat(chatId, userId);
+            chat.unreadMessages = totalUnread;
+        }
+
+        return {
+            message: "This chat is been set a last message",
+            chat: chat
+        };
+    }
+
+    async getAllImportedChats() {
+        return await this.model.find({ isImported: true }).exec();
+    }
+
+    async setCreatedDate(chatId, date) {
+        const filter = { _id: chatId };
+
+        const chat = await this.model.findOneAndUpdate(filter, { createdOn: date }, { new: true, runValidators: true })
+            .exec();
+
+        if (!chat) throw new Error('No chat found');
+
+        const update = { $set: { 'members.$[elem].joinedOn': date } };
+        const filter1 = { arrayFilters: [{ "elem.joinedOn": { $gt: date } }] };
+
+        await this.model.updateMany(filter, update, filter1);
+
+        return {
+            message: "This chat is been set a last message",
+            chat: chat
+        };
+    }
+
+    async updateChatWithLastMessage(chatId) {
+        try {
+            const lm = await MessageModel.find({ chatId: new ObjectId(chatId), 'deleted.date': null }).sort({ sentOn: -1 }).limit(1);
+
+            if (lm.length) {
+                const last = lm[0];
+                const result = await this.setLatestMessage(chatId, last._id);
+                return result;
+            } else {
+                return await this.setLatestMessage(chatId, null);
+            }
+        } catch (ex) {
+            throw ex;
+        }
+    }
+
+    async clearChat(chatId, forUser) {
+        const date = Date.now();
+
+        const filter = { 'members.user': forUser, _id: chatId };
+        const update = { $set: { 'members.$.canChat': true, 'members.$.joinedOn': date, 'members.$.updatedOn': date } };
+
+        const chat = await this.model.findOneAndUpdate(filter, update, { new: true })
+            .populate({
+                path: "members.user",
+                select: utils.userColumnsToShow()
+            })
+            .populate({
+                path: 'lastMessage',
+                select: utils.messageColumnsToShow(),
+                populate: {
+                    path: 'from',
+                    select: utils.userColumnsToShow()
+                }
+            })
+            .lean()
+            .exec();
+
+        if (!chat) throw new Error('No chat found to be cleared');
+
+        return {
+            message: "Chat is marked cleared",
+            chat: chat
+        };
+    }
+
+    async deleteAllChatsForUser(userId) {
+        const aggregate = this.model.aggregate([
+            {
+                $match: {
+                    members: {
+                        $elemMatch: {
+                            $and: [{ user: { $eq: new ObjectId(userId) } }, { user: { $exists: true } }]
+                        }
+                    }
+                }
+            }
+        ]);
+
+        const chats = await aggregate.exec();
+        console.log(`Total chats fetched: ${chats.length}`);
+
+        const promises = chats.map(async chat => {
+            const query = { chatId: chat._id, from: new ObjectId(userId) };
+
+            const update = {
+                "deleted.forMyself": true,
+                "deleted.by": userId,
+                "deleted.date": Date.now()
+            };
+
+            const messages = await MessageModel.updateMany(query, update, { new: true });
+            console.log('total messages deleted: ' + messages.nModified);
+
+            const deleteChat = await this.deleteChat(chat._id, userId);
+            console.log('Chat deleted: ' + deleteChat);
+
+            return chat;
+        });
+
+        const result = await Promise.all(promises);
+        console.log('result: ' + result);
+        return result;
+    }
+
 }
 
 module.exports = ChatService;

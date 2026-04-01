@@ -2,8 +2,8 @@ const mongoose = require('mongoose');
 const Schema = mongoose.Schema; 
 
 const UserRequest = new Schema({
-    from: { type: Schema.Types.ObjectId, ref: "User" },
-    to: { type: Schema.Types.ObjectId, ref: "User" }, 
+    from: { type: Schema.Types.ObjectId, ref: "User", index: true },
+    to: { type: Schema.Types.ObjectId, ref: "User", index: true },
     status: { type: String, default: 'new', enum: ['new', 'accepted', 'declined', 'cancelled', 'disconnected']},
     createdOn: { type: Date, default: Date.now },
     updatedOn: { type: Date, default: null },

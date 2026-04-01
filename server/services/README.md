@@ -15,7 +15,7 @@ const { UserService, ChatService, SMSService, S3Service } = require('./services'
 
 // Create instances
 const userService = new UserService(UserModel);
-const chatService = new ChatService(ChatModel);
+const chatService = new ChatService();
 ```
 
 ## Directory Structure
@@ -84,7 +84,7 @@ services/
 const { ChatService } = require('./services');
 const ChatModel = require('../models/chat');
 
-const chatService = new ChatService(ChatModel);
+const chatService = new ChatService();
 
 // Get chat
 const chat = await chatService.getById(chatId, userId);

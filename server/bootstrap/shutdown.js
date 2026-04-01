@@ -37,6 +37,10 @@ module.exports = {
       }
 
       try {
+        // Stop job scheduler
+        const { stopAgenda } = require('./agenda');
+        await stopAgenda();
+
         // Close Socket.IO connections
         if (io) {
           io.close();

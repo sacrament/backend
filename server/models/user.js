@@ -1,67 +1,81 @@
 const mongoose = require('mongoose');
 const Schema = mongoose.Schema;
-const ObjectId = Schema.ObjectId; 
 
-const User = new Schema({
-    id: { type: Number, default: null, index: true },
+const User = new Schema({ 
     name: { type: String, default: null, index: true },
     email: { type: String, default: null, index: true },
-    phone: { type: String, default: null, index: true },
+    // Raw phone number is never stored in plain text.
+    // partition  — HMAC-SHA256 keyed hash, used for fast indexed lookups.
+    // phone — AES-256-GCM ciphertext, used when the plaintext is needed.
+    // sparse: true so the unique constraint ignores Apple/Facebook-only users.
+    partition: { type: String, default: null, index: true, unique: true, sparse: true },
+    phone: { type: String, default: null },
     imageUrl: { type: String, default: null },
     bio: { type: String, default: null },
-    registeredOn: { type: Date, default: Date.now },
-    updatedOn: { type: Date, default: null },
-    facebookId: { type: String, default: null },
+    registeredOn: { type: Date, default: Date.now() },
+    updatedOn: { type: Date, default: null }, 
+    appleId: { type: String, default: null },
+    googleId: { type: String, default: null },
     lastLogin: { type: Date, default: null },
-    status: { type: String, default: null },
-    // Gender and age information for women-only visibility feature
+    status: { type: String, enum: ['active', 'blocked', 'inactive', null], default: null },
     gender: {
         type: String,
         enum: ['male', 'female', 'other', null],
         default: null,
         index: true
     },
+    age: { type: Number, default: null },
     dateOfBirth: { type: Date, default: null },
-    // Location for proximity-based discovery
-    location: {
-        latitude: { type: Number, default: null },
-        longitude: { type: Number, default: null },
-        updatedOn: { type: Date, default: null }
-    },
-    device: {
-        token: { type: String, default: null },
-        voipToken: { type: String, default: null },
-        description: { type: String, default: null },
-        type: { type: String,  default: null },
-        updatedOn: { type: Date, default: null },
-        isActive: { type: Boolean, default: true }
-    },
-    chatToken: { type: String, default: null },
+    interestedIn: { type: String, enum: ['women', 'men', 'both', null], default: null },
+    // Reference to the latest Location document (full history in Location collection)
+    location: { type: Schema.Types.ObjectId, ref: 'Location', default: null },
+    // Active device for push notifications (one per account)
+    device: { type: Schema.Types.ObjectId, ref: 'Device', default: null },
+    // Favorites: list of user IDs the user has favorited
+    favorites: [{ type: Schema.Types.ObjectId, ref: 'User' }],
     isPublic: { type: Boolean, default: false },
     refreshToken: { type: String, default: null },
-    contacts: [{
-        id: { type: String },
-        name: { type: String },
-        // removed: { type: Boolean },
-        removedOn: { type: Date, default: null },
-        editedOn: { type: Date, default: null }
-    }],
-    requests: [{ type: Schema.Types.ObjectId, ref: 'Request'}],
+    lastSeen: { type: Date, default: null, index: true },
     radar: {
-        show: { type: Boolean, default: true },
+        enabled:   { type: Boolean, default: true },
+        invisible: { type: Boolean, default: false },
         updatedOn: { type: Date, default: null },
-        // Women-only visibility feature - if true, user only visible to women
-        womenOnly: { type: Boolean, default: false },
-        // Visibility expiration timestamp for temporary presence
-        expiresAt: { type: Date, default: null }
     },
-    deleted: {
-        date: { type: Date, default: null },
-        reason: { type: String, default: "No reason"},
-        status: { type: Boolean, default: false }
-    }
+    // Visibility preferences (Section 7.1)
+    visibilityPreferences: {
+        womenOnly: { type: Boolean, default: false },
+        menOnly: { type: Boolean, default: false },
+        photoBlur: { type: Boolean, default: false }
+    },
+    // Notification preferences (Section 7.1)
+    notificationPreferences: {
+        newMessages: { type: Boolean, default: true },
+        chatRequests: { type: Boolean, default: true },
+        connectionRequests: { type: Boolean, default: true },
+        nearbyWinks: { type: Boolean, default: true },
+        sound: { type: Boolean, default: true },
+        vibration: { type: Boolean, default: true },
+        badge: { type: Boolean, default: true }
+    },
+    // Profile privacy settings (Section 7.2)
+    privacySettings: {
+        showBio: { type: Boolean, default: true },
+        showAge: { type: Boolean, default: true },
+        showGender: { type: Boolean, default: true },
+        showLocation: { type: Boolean, default: true },
+        showContact: { type: Boolean, default: true }
+    },
+    // Users hidden from radar (won't appear in this user's nearby results)
+    hiddenUsers: [{ type: Schema.Types.ObjectId, ref: 'User' }],
+    // Connections hidden from the Winkys/contacts list view
+    hiddenConnections: [{
+        userId:   { type: Schema.Types.ObjectId, ref: 'User' },
+        hiddenAt: { type: Date, default: Date.now }
+    }],
+    deleted: { type: Boolean, default: false },
+    deletedOn: { type: Date, default: null },
+    deletedReason: { type: String, default: "No reason"}
 });
 
-User.index( { phone: "text" } )
 
 mongoose.model('User', User);

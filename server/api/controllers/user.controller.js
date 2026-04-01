@@ -1,292 +1,331 @@
-
-const mongoose = require('mongoose');    
 const UserService = require('../../services/domain/user/user.service');
-const UserModel = mongoose.model('User');
-
 const ChatService = require('../../services/domain/chat/chat.service');
-const ChatServiceDB = require('../../services/domain/chat/chat.service.db');
-const ChatModel = mongoose.model('Chat');
-const BlockUserModel = mongoose.model('BlockUser');
-const randomstring = require("randomstring");
-const { newToken } = require('../../middleware/verify');
-
-const ReactionModel = mongoose.model('Reaction');
-const MediaModel = mongoose.model('Media');
-const CallHistoryModel = mongoose.model('CallHistory');
-const ContentStorageModel = mongoose.model('ContentStorage');
-
-const UserRequestModel = mongoose.model('ContentStorage');
-
-
-const newUser = async (req, res) => {
-    const { user } = req.body;  
-    // Get chat service instance
-    const userService = new UserService(UserModel);     
-
-    // Save the chat
-    userService.newUser(user).then((result) => {
-        res.status(200).json({status: 'success', result: result })
-    }).catch((err) => { 
-        res.status(500).json({status: 'error', message: err.message})
-    });
-}
+const ReportService = require('../../services/domain/report/report.service');
+const userService = new UserService();
+const chatService = new ChatService();
+const reportService = new ReportService();
 
 /**
- * 
- *
- * @param {*} req
- * @param {*} res
+ * Search Users by Name
+ * GET /users?name=<name>&page=0&size=20
  */
-const updateDeviceToken = async (req, res) => { 
-    const userId = req.decodedToken.userId;
-    const { deviceToken, devicePlatform } = req.body
-    // Get chat service instance
-    const userService = new UserService(UserModel);     
-
-    // Update device 
-    userService.updateDeviceToken(userId, deviceToken, devicePlatform).then((result) => {
-        res.status(200).json({status: 'success', result: result })
-    }).catch((err) => { 
-        res.status(500).json({status: 'error', message: err.message})
-    })   
-}
-
-/**
- * Verify user's phone numbers against Winky account
- *
- * @param {*} req
- * @param {*} res
- */
-const verifyUsers = async (req, res) => {
+const searchUsers = async (req, res) => {
     try {
-        const { phones } = req.body
-        // Get chat service instance
-        const userService = new UserService(UserModel);
-        const result = await userService.verifyUsersByPhone(phones);
-        if (result) {
-            res.status(200).json({status: 'success', result })
-        }
-    }  catch (ex) {
-        res.status(500).json({status: 'error', message: ex.message})
-    } 
-}
+        const { name, page = 0, size = 20 } = req.query;
 
+        if (!name || name.trim() === '') {
+            return res.status(400).json({ status: 'error', message: 'Search name is required' });
+        }
+
+        const { users, totalPages } = await userService.searchByName(name, parseInt(page), parseInt(size));
+
+        return res.status(200).json({
+            content: users.map(formatPublicUserResponse),
+            totalPages
+        });
+    } catch (error) {
+        console.error('Search users error:', error);
+        return res.status(500).json({ status: 'error', message: 'Failed to search users' });
+    }
+};
+
+/**
+ * Get User by ID
+ * GET /users/:id
+ */
+const getUserById = async (req, res) => {
+    try {
+        const user = await userService.getUserById(req.params.id);
+        if (!user) return res.status(404).json({ status: 'error', message: 'User not found' });
+        return res.status(200).json({ status: 'success', user: formatPublicUserResponse(user) });
+    } catch (error) {
+        console.error('Get user error:', error);
+        return res.status(500).json({ status: 'error', message: 'Failed to get user' });
+    }
+};
+
+/**
+ * Verify phone numbers against Winky accounts
+ * POST /users/verify/phones
+ */
+const verifyPhones = async (req, res) => {
+    try {
+        const { phones } = req.body;
+
+        if (!phones || !Array.isArray(phones)) {
+            return res.status(400).json({ status: 'error', message: 'phones must be an array' });
+        }
+
+        const result = await userService.findUsersByPhones(phones);
+        return res.status(200).json({ status: 'success', result });
+    } catch (error) {
+        console.error('Verify phones error:', error);
+        return res.status(500).json({ status: 'error', message: 'Failed to verify phones' });
+    }
+};
+
+/**
+ * Send SMS to phone numbers
+ * POST /users/send/sms
+ */
 const sendSMSToUsers = async (req, res) => {
     try {
         const userId = req.decodedToken.userId;
-        const { phones } = req.body
-        // Get chat service instance
-        const userService = new UserService(UserModel);
+        const { phones } = req.body;
         const result = await userService.sendSMS(userId, phones);
-        if (result) {
-            res.status(200).json({status: 'success', result: result })
+        return res.status(200).json({ status: 'success', result });
+    } catch (error) {
+        return res.status(500).json({ status: 'error', message: error.message });
+    }
+};
+
+/**
+ * Get Blocked Users
+ * GET /users/blocked
+ */
+const getBlockedUsers = async (req, res) => {
+    try {
+        const result = await userService.getAllBlockedUsers(req.decodedToken.userId);
+        return res.status(200).json({ status: 'success', result });
+    } catch (error) {
+        return res.status(500).json({ status: 'error', message: error.message });
+    }
+};
+
+/**
+ * Block a User
+ * POST /users/block
+ */
+const blockUser = async (req, res) => {
+    const { userId, reason, description } = req.body;
+
+    if (!userId) return res.status(400).json({ status: 'error', message: 'userId is required' });
+
+    try {
+        const result = await userService.blockUser(userId, req.decodedToken, reason, description);
+        return res.status(200).json({ status: 'success', result: { blocked: true, ...result } });
+    } catch (error) {
+        return res.status(500).json({ status: 'error', message: error.message });
+    }
+};
+
+/**
+ * Unblock a User
+ * POST /users/unblock
+ */
+const unblockUser = async (req, res) => {
+    const { userId } = req.body;
+
+    if (!userId) return res.status(400).json({ status: 'error', message: 'userId is required' });
+
+    try {
+        const result = await userService.unblockUser(userId, req.decodedToken);
+        return res.status(200).json({ status: 'success', result: { unblocked: true, ...result } });
+    } catch (error) {
+        return res.status(500).json({ status: 'error', message: error.message });
+    }
+};
+
+/**
+ * Get Content Storage
+ * GET /users/content
+ */
+const contentStorage = async (req, res) => {
+    try {
+        const result = await userService.getContentStorageFor(req.decodedToken.userId);
+        return res.status(200).json({ status: 'success', result });
+    } catch (error) {
+        return res.status(400).json({ status: 'error', message: error.message });
+    }
+};
+
+/**
+ * Delete Content by ID
+ * DELETE /users/content/single
+ */
+const deleteContentById = async (req, res) => {
+    try {
+        const { id } = req.body;
+        const result = await userService.deleteMessageObjectBy(id);
+        return res.status(200).json({ status: 'success', result });
+    } catch (error) {
+        return res.status(400).json({ status: 'error', message: error.message });
+    }
+};
+
+/**
+ * Get Unread Message Count
+ * GET /users/unreadMessages
+ */
+const getUnreadMessagesForUser = async (req, res) => {
+    try {
+        const result = await chatService.countUnreadMessagesForUser(req.decodedToken.userId);
+        return res.status(200).json({ status: 'success', result });
+    } catch (error) {
+        return res.status(400).json({ status: 'error', message: error.message });
+    }
+};
+
+/**
+ * Respond to a Connection Request
+ * POST /users/respondConnectionRequest
+ */
+const respondConnectionRequest = async (req, res) => {
+    try {
+        const { to, response } = req.body;
+
+        if (!to || !response) {
+            return res.status(400).json({ status: 'error', message: 'to and response are required' });
         }
-    }  catch (ex) {
-        res.status(500).json({status: 'error', message: ex.message})
-    } 
-}
 
-const enableDevice = async (req, res) => { 
-    const userId = req.decodedToken.userId;
-    const { deviceToken } = req.body
-    // Get chat service instance
-    const userService = new UserService(UserModel);     
+        if (!['accepted', 'declined'].includes(response)) {
+            return res.status(400).json({ status: 'error', message: 'response must be "accepted" or "declined"' });
+        }
 
-    // Update device 
-    userService.enableDeviceForUser(userId, deviceToken).then((result) => {
-        res.status(200).json({status: 'success', result: result })
-    }).catch((err) => { 
-        res.status(500).json({status: 'error', message: err.message})
-    })   
-}
+        const result = await userService.respondConnectionRequest(req.decodedToken.userId, to, response);
+        return res.status(200).json({ status: 'success', result });
+    } catch (error) {
+        return res.status(500).json({ status: 'error', message: error.message });
+    }
+};
 
-const disableDevice = async (req, res) => { 
-    const userId = req.decodedToken.userId; 
-    // Get chat service instance
-    const userService = new UserService(UserModel);     
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
-    // Update device 
-    userService.disableUserDeviceFor(userId).then((result) => {
-        res.status(200).json({status: 'success', result: result })
-    }).catch((err) => { 
-        res.status(500).json({status: 'error', message: err.message})
-    })   
+function formatPublicUserResponse(user) {
+    let age = user.age ?? null;
+    if (age === null && user.dateOfBirth) {
+        const diff = Date.now() - new Date(user.dateOfBirth).getTime();
+        age = Math.floor(diff / (1000 * 60 * 60 * 24 * 365.25));
+    }
+
+    return {
+        id:           user._id?.toString() || user.id,
+        status:       user.status       ?? null,
+        name:         user.name         ?? null,
+        pictureUrl:   user.imageUrl     ?? null,
+        isPublic:     user.isPublic     ?? false,
+        bio:          user.bio          ?? null,
+        age,
+        gender:       user.gender       ?? null,
+        interestedIn: user.interestedIn ?? null,
+        showRadar:    user.radar?.show  ?? true,
+    };
 }
 
 /**
- *
- *
- * @param {*} req
- * @param {*} res
+ * Get Connection Requests
+ * GET /users/connectionRequests
  */
-const refreshAuthToken = async (req, res) => {
-    const { oldToken, userId } = req.body;
-
-    if (oldToken) {
-        const user = {
-            "userId": userId,
-            "scopes": "access"
-        }
-        
-        const token = await newToken(user);
-        const refreshToken = randomstring.generate()
-        res.status(200).json({ status: "success", token: token, refreshToken: refreshToken })
-        //save it to db
-        const userService = new UserService(UserModel);   
-        userService.saveRefreshToken(userId, refreshToken);
-    } else {
-        res.status(401).json({status: 'error', message: "No old token provided"});
+const getConnectionRequests = async (req, res) => {
+    try {
+        const { requests, connections } = await userService.allRequests(req.decodedToken.userId);
+        return res.status(200).json({ status: 'success', data: { requests, connections } });
+    } catch (error) {
+        console.error('Get connection requests error:', error);
+        return res.status(500).json({ status: 'error', message: 'Failed to get connection requests' });
     }
-}
-
-const getBlockedUsers = async (req, res) => { 
-    const userId = req.decodedToken.userId;
-    const userService = new UserService(BlockUserModel); 
-    
-    userService.getAllBlockedUsers(userId).then((result) => {
-        res.status(200).json({status: 'success', result: result})
-    }).catch((err) => {
-        res.status(500).json({status: 'error', message: err.message})
-    });
-}
-
-const blockUser = (req, res) => { 
-    const token = req.authToken;
-    let user = req.decodedToken;
-    user.token = token;
-
-    const { userId, reason, description } = req.body;
-
-    const userService = new UserService(BlockUserModel);  
-    const parsedId = parseInt(userId);
-    userService.blockUser(parsedId, user, reason, description).then((result) => {
-        res.status(200).json({status: 'success', result: result})
-    }).catch((err) => {
-        res.status(500).json({status: 'error', message: err.message})
-    });
 };
 
-const unblockUser = (req, res) => { 
-    const token = req.authToken;
-    let user = req.decodedToken;
-    user.token = token;
-    const { userId } = req.body;
-    const userService = new UserService(BlockUserModel); 
-    
-    const parsedId = parseInt(userId);
-    userService.unblockUser(parsedId, user).then((result) => {
-        res.status(200).json({status: 'success', result: result})
-    }).catch((err) => {
-        res.status(500).json({status: 'error', message: err.message})
-    });
+/**
+ * Check connection request status between current user and another user
+ * GET /users/checkConnectionRequest?to=<userId>
+ */
+const checkConnectionRequest = async (req, res) => {
+    try {
+        const { to } = req.query;
+        if (!to) return res.status(400).json({ status: 'error', message: 'Missing required query param: to' });
+        const request = await userService.getConnectionRequest(req.decodedToken.userId, to);
+        return res.status(200).json(request);
+    } catch (error) {
+        console.error('Check connection request error:', error);
+        return res.status(500).json({ status: 'error', message: 'Failed to check connection request' });
+    }
 };
- 
-const contentStorage = async (req, res) => {
+
+// ─── Reports ──────────────────────────────────────────────────────────────────
+
+const REPORT_TYPE_ENUM = ['harassment', 'inappropriate_content', 'spam', 'fake_profile', 'inappropriate_behavior', 'other'];
+
+/**
+ * Get user's filed reports
+ * GET /users/report
+ */
+const getMyReports = async (req, res) => {
     try {
-        const userId = req.decodedToken.userId;
-        const userService = new UserService(UserModel);
-        const result = await userService.getContentStorageFor(userId);
-
-        res.status(200).json({status: 'success', result: result});
-    } catch (ex) {
-        res.status(400).json({ status: 'error', message: ex.message });
+        const reports = await reportService.getReportsByReporter(req.decodedToken.userId);
+        const data = reports.map(r => ({
+            _id:            r._id?.toString(),
+            reportedUserId: r.reported?._id?.toString() ?? r.reported?.toString(),
+            userName:       r.reported?.name     ?? null,
+            userImageUrl:   r.reported?.imageUrl ?? null,
+            reason:         r.type               ?? r.reason ?? null,
+            status:         r.status             ?? null,
+            reportedAt:     r.createdOn          ?? null,
+        }));
+        return res.status(200).json({ status: 'success', data });
+    } catch (error) {
+        console.error('Get my reports error:', error);
+        return res.status(500).json({ status: 'error', message: 'Failed to get reports' });
     }
-}
+};
 
-const deleteContentById = async (req, res) => {
+/**
+ * File a report against a user
+ * POST /users/report
+ * Supports: userId, reason, description, evidence?: [messageId]
+ */
+const fileReport = async (req, res) => {
     try {
-        const userId = req.decodedToken.userId;
-        const { id } = req.body;
-        const userService = new UserService(UserModel);
-        const result = await userService.deleteMessageObjectBy(id);
+        const reporterId = req.decodedToken.userId;
+        const { userId, reason, description, evidence } = req.body;
 
-        res.status(200).json({status: 'success', result: result});
-    } catch (ex) {
-        res.status(400).json({ status: 'error', message: ex.message });
-    }
-}
+        if (!userId) return res.status(400).json({ status: 'error', message: 'userId is required' });
+        if (!reason) return res.status(400).json({ status: 'error', message: 'reason is required' });
 
-const getUnreadMessagesForUser = async (req, res) => { 
-    try { 
-        const userId = req.decodedToken.userId;
-        const chatService = new ChatService(ChatModel);
-        const result = await chatService.countUnreadMessagesForUser(userId);
+        const type = REPORT_TYPE_ENUM.includes(reason) ? reason : 'other';
 
-        res.status(200).json({status: 'success', result: result});
-    } catch (ex) {
-        res.status(400).json({ status: 'error', message: ex.message });
-    }
-}
-
-const me = async (req, res) => {
-    try { 
-        let userId = req.decodedToken.userId;
-        const userService = new UserService(UserModel);
-
-        if (typeof userId === 'number') {
-            userId = await userService.getUserIds([userId]);
+        // Support single message in evidence or messageId field
+        let messageId = null;
+        if (evidence && Array.isArray(evidence) && evidence.length > 0) {
+            messageId = evidence[0]; // Use first message ID if provided
+        } else if (evidence && typeof evidence === 'string') {
+            messageId = evidence;
         }
 
-        let result = await userService.getUserById(userId);
-        const showRadar = result.radar.show;
+        const report = await reportService.createReport({
+            reporterId,
+            reportedId: userId,
+            type,
+            reason,
+            description: description ?? null,
+            messageId: messageId ?? null,
+        });
 
-        delete result.radar;
-
-        result.showRadar = showRadar;
-
-        res.status(200).json({status: 'success', user: result});
-    } catch (ex) {
-        res.status(400).json({ status: 'error', message: ex.message });
+        return res.status(201).json({ 
+            status: 'success',
+            _id: report._id?.toString(), 
+            reportStatus: report.status 
+        });
+    } catch (error) {
+        console.error('File report error:', error);
+        return res.status(500).json({ status: 'error', message: error.message || 'Failed to file report' });
     }
-}
-
-const updateRadar = async(req, res) => {
-    try { 
-        let userId = req.decodedToken.userId;
-        const { status } = req.body;
-        const userService = new UserService(UserModel);
-
-        if (typeof userId === 'number') {
-            userId = await userService.getUserIds([userId]);
-        }
-
-        let result = await userService.updateRadar(userId, status)  
-        const showRadar = result.radar.show;
-
-        delete result.radar;
-
-        result.showRadar = showRadar;
-
-        res.status(200).json({status: 'success', user: result});
-    } catch (ex) {
-        res.status(400).json({ status: 'error', message: ex.message });
-    }
-}
-
-const deleteAccount = async (req, res) => {
-    try {
-        let userId = req.decodedToken.userId;
-        const userService = new UserService(UserModel);
-        const chatServiceDb = new ChatServiceDB(ChatModel);
-
-        if (typeof userId === 'number') {
-            userId = await userService.getUserIds([userId]);
-        }
-
-        const chatstDeleted = await chatServiceDb.deleteAllChatsForUser(userId);
-        const userAccountDeleted = await userService.deleteAccount(userId);
-
-        res.status(200).json({status: 'success', result: { totalChatsDeleted: chatstDeleted, userAccountDeleted }});
-    } catch (ex) {
-        res.status(400).json({ status: 'error', message: ex.message });
-    }
-}
+};
 
 module.exports = {
-    newUser, 
-    updateDeviceToken, 
-    verifyUsers, 
-    sendSMSToUsers, enableDevice, disableDevice, refreshAuthToken, 
-    getBlockedUsers, blockUser, unblockUser, contentStorage, 
-    deleteContentById, getUnreadMessagesForUser, me, updateRadar, deleteAccount
-}
+    searchUsers,
+    getUserById,
+    verifyPhones,
+    sendSMSToUsers,
+    getBlockedUsers,
+    blockUser,
+    unblockUser,
+    contentStorage,
+    deleteContentById,
+    getUnreadMessagesForUser,
+    respondConnectionRequest,
+    getConnectionRequests,
+    checkConnectionRequest,
+    getMyReports,
+    fileReport,
+};

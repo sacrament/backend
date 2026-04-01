@@ -1,33 +1,28 @@
-const utils = require('../../../utils/index'); 
-const mongoose = require('mongoose');
-const UserModel = mongoose.model('User');
-const ChatModel = mongoose.model('Chat');
-const MessageModel = mongoose.model('Message'); 
-const ChatServiceDB = require('../../services/domain/chat/chat.service.db');
-const MessageServiceDB = require('../../services/domain/chat/message.service.db');
-const { UserService, ChatService, CallService, ContactService } = require('../../services');
+ 
+const { UserService, ChatService, MessageService } = require('../../services');
 const { getChatService } = require('../services');
 const PushNotificationService = require('../../notifications');
+const chatService = new ChatService();
+// Instantiate a message service
+const messageService = new MessageService();
+const userService = new UserService();
 
-// Get ChatService from singleton manager
-const chatSocketService = getChatService(); 
+// Declared at module level so standalone handler functions can access it.
+// Assigned in the constructor, which runs after socketServicesManager is initialized.
+let chatSocketService;
 
 module.exports = class Chat {
-    constructor() {  
-        
+    constructor() {
+        chatSocketService = getChatService();
         this.handler = {
             'new chat': newChat,
-            'edit chat': editChat,
-            // 'add new chat members': newChatMembers,
-            // 'remove members from chat': removeMembersFromChat,
             'new message': newMessage,
             'react on message': reactOnMessage,
             'delete message': deleteMessage,
-            'delete chat': deleteChat,
-            'leave chat': leaveChat,
+            'delete chat': deleteChat, 
             'favorite chat': favoriteChat,
             'block chat': blockChat,
-            // 'mute chat': muteChat,
+            'mute chat': muteChat,
             'message seen': messageSeen,
             'message received': messageDelivered,
             'chat messages': messages,
@@ -55,287 +50,38 @@ const newChat = async function(data, ack) {
     try {
         console.log(`New Chat: ${JSON.stringify(data)}`)
 
-        const chatService = new ChatServiceDB(ChatModel);
         const from = this.user.id;
         data.userId = from;
         // const tempChat = await chatService.create(data);
         // Do something with the newly chat object
         // the temp chat is in memory object, not stored to db
     
-        chatService.create(data).then((result) => {
-            //MARK: Get the socket for the user
-            // const userSocket = getSocketForUser.bind(this, from);
-            // this.to(`${userSocket}`).emit('new chat created', {
-            //     chat: result.chat
-            // }) 
+        chatService.create(data).then(async (result) => {
             ack(result);
+
+            // Broadcast new chat to all other members
+            if (result.chat && result.chat.members) {
+                const members = result.chat.members.filter(member => {
+                    const memberId = member.user ? member.user._id.toString() : member._id.toString();
+                    return memberId !== from;
+                });
+
+                for (const member of members) {
+                    const to = member.user ? member.user._id.toString() : member._id.toString();
+                    const memberIsOnline = await chatSocketService.isUserConnected(to);
+                    if (memberIsOnline) {
+                        this.to(to).emit('new chat created', { chat: result.chat });
+                    }
+                }
+            }
         }).catch((err) => {
-            //MARK: Get the socket for the user
-            // const userSocket = getSocketForUser.bind(this, from);
-            // this.to(`${userSocket}`).emit('chat not created', {
-            //     error: err
-            // })
-    
             ack({error: err.message});
         })
     } catch (ex) {
         ack(ex.message);
     } 
 };
-
-
-/**
- *
- * Edit an existing chat
- * @param {*} data
- * @param {*} ack
- * * TODO: Need  to finish the push notifiation
- */
-const editChat = async function(data, ack) {
-    try {
-        console.log(`Edit Chat: ${JSON.stringify(data)}`)
-        const from = this.user;
-        const userId = this.user.id;
-
-        const chatService = new ChatServiceDB(ChatModel);
-        // Userservice
-        const userService = new UserService(UserModel);
-        // For push notifications
-        var offlineUsers = [];
-
-        chatService.edit(data.chat).then(async (result) => {
-            // Get user details
-            const userFrom = await userService.getUserById(userId, true);
-            // init message service
-            const messageService = new MessageServiceDB(MessageModel);
-            // create a generic message
-            const genericMessage = messageService.createGeneric(`${userFrom.name} edited group chat`, data.chat.id, userId);
-            // save the message
-            messageService.save(genericMessage);
-             
-            const update = await chatService.setLatestMessage(data.chat.id, genericMessage._id, userId);
-            const chat = update.chat;
-            //MARK: Get the socket for the user
-            const members = chat.members.filter(member => member.user._id != userId);
-            for (const member of members) {
-                const to = member._id.toString();
-                const isUserConnected = await chatSocketService.isUserConnected(to);
-                if (isUserConnected) {
-                    this.to(to).emit('chat edited', {
-                        chat: chat,
-                        message: genericMessage
-                    });
-                } else {
-                    offlineUsers.push(member);
-                }
-            } 
-            ack({title: 'Chat edited', chat: chat, message: genericMessage });
-            if (offlineUsers.length) { 
-                // Send the push notifications  
-                const data = { chat: chat, message: genericMessage, from: from, offlineReceivers: offlineUsers };
-                // result.from = from;
-
-                const pushNotification = new PushNotificationService();
-                pushNotification.groupChatEdited(data);
-            }
-        }).catch((err) => { 
-            console.error(`[ERROR]:${err.message}`);
-            ack({error: err.message});
-        });
-    } catch (ex) {
-        console.error(`[ERROR]:Generic ${ex.message}`);
-        ack(ex.message);
-    } 
-}
-
-/**
- *
- * add new member to a chat
- * @param {*} data
- * @param {*} ack
- */
-const newChatMembers = async function(data, ack) { 
-    try {
-        console.log(`New chat member: ${JSON.stringify(data)}`)
-        const from = this.user;
-        const userService = new UserService(UserModel);
-        let newUsers = await userService.getUserIds(data.chat.newMembers);
-      
-        const chatService = new ChatServiceDB(ChatModel); 
-        if (typeof newUsers === 'string') {  
-            newUsers = [newUsers]
-        }
-     
-        chatService.newMembers(data.chat.id, newUsers, from.id)
-        .then(async(result) => {
-            // const chat = result.chat;
-            if (result.exists) {
-                return new Promise((resolve) => {
-                    const obj = { chat: chat, offlineReceivers: [], newlyAdded: [], title: "Member is already in the chat" };
-                    ack(obj);
-                    resolve(obj)
-                });
-            }
-
-            const userFrom = await userService.getUserById(from.id, true)
-            // get current chat members, to notify that a new members has been added
-            // const chatMembers = await chatService.getChatMembers(data.chat.id);
-            const messageService = new MessageServiceDB(MessageModel);
-            const genericMessage = messageService.createGeneric(`${userFrom.name} added new members to the group`, data.chat.id, from.id)
-            messageService.save(genericMessage);
-            
-            const chatServiceDB = new ChatServiceDB(ChatModel);
-            const update = await chatServiceDB.setLatestMessage(data.chat.id, genericMessage._id, from.id);
-            const chat = update.chat;
-          
-            // Skip the client
-            const members = chat.members;
-            var offlineReceivers = [];
-
-            for (const member of members) {
-                if (!member.canChat) continue;
-
-                const to = member.user._id.toString();
-
-                if (to == from.id) continue;
-                
-                const isUserConnected = await chatSocketService.isUserConnected(to);
-
-                if (isUserConnected) {
-                    // Send the message to online users
-                    this.to(to).emit('new chat member added', {
-                        chat: chat,
-                        newMembers: newUsers,
-                        genericMessage: genericMessage,
-                        userFrom: userFrom
-                    });
-                } else {
-                    // if (!member.options.muted) { 
-                        /// Offline people. Send a push notification
-                        offlineReceivers.push(member);
-                    // }
-                }
-            }
-
-            const obj = { genericMessage: genericMessage, chat: chat, offlineReceivers: offlineReceivers, newMembers: newUsers };
-            ack(obj);
-
-            return new Promise((resolve) => {
-                resolve(obj)
-            });
-        }).then(result => { 
-            if (result.offlineReceivers.length) { 
-                // Send the push notifications 
-                const pushNotification = new PushNotificationService();
-                result.from = from;
-                pushNotification.newChatMemberAdded(result);
-            } else {
-                console.log(`No offline users`)
-            }
-        }).catch((err) => { 
-            ack(err.message);
-        });
-    } catch (ex) {
-        ack(ex.message);
-    } 
-}
-
-/**
- * Remove current members from the chat
- *
- * @param {*} data
- * @param {*} ack
- */
-const removeMembersFromChat = async function(data, ack) {
-    try {
-        console.log(`Remove chat member: ${JSON.stringify(data)}`)
-        const from = this.user;
-        const userService = new UserService(UserModel);
-        let usersToRemove = await userService.getUserIds(data.chat.membersToRemove);
-      
-        const chatService = new ChatServiceDB(ChatModel); 
-        if (typeof usersToRemove === 'string') {    
-            usersToRemove = [usersToRemove]
-        }
-
-        chatService.removeMembers(data.chat.id, usersToRemove).then(async chat => {
-            const userFrom = await userService.getUserById(from.id, true)
-            const messageService = new MessageServiceDB(MessageModel);
-            const genericMessage = messageService.createGeneric(`${userFrom.name} removed members from the group`, chat._id, from.id)
-            messageService.save(genericMessage);
-
-            const removedUsers = await userService.getUsersBy(usersToRemove);
-
-            const removed = removedUsers.map(member => member = {
-                options: {
-                    muted: false
-                },
-                user: member
-            })
-          
-            // Skip the client
-            const members = chat.members;
-            // merge arrays 
-            const mms = [...members, ...removed];
-            var offlineReceivers = [];
-
-            for (const member of mms) {
-                // if (!member.canChat) continue;
-
-                const to = member.user._id.toString();
-
-                // if (to == from) continue;
-                
-                const isUserConnected = await chatSocketService.isUserConnected(to);
-
-                if (isUserConnected) {
-                    // Send the message to online users
-                    this.to(to).emit('members removed from chat', {
-                        chat: chat,
-                        removeMembers: usersToRemove,
-                        genericMessage: genericMessage,
-                        userFrom: userFrom
-                    });
-                } else {
-                    //MARK: Bug in here
-                    /// Offline people. Send a push notification
-                    // const options = member.options;
-
-                    // if (options) {
-                    //     if (!options.muted) { 
-                    //         offlineReceivers.push(member.user);
-                    //     }
-                    // } else {
-                        offlineReceivers.push(member);
-                    // }
-                }
-            }
-
-            const obj = { genericMessage: genericMessage, chat: chat, offlineReceivers: offlineReceivers, removedMembers: usersToRemove };
-            ack(obj);
-
-            return new Promise((resolve) => {
-                resolve(obj)
-            });
-        }).then(result => {
-            if (result.offlineReceivers.length) { 
-                // Send the push notifications 
-                const pushNotification = new PushNotificationService();
-                result.from = from;
-                pushNotification.membersRemovedFromChat(result);
-            } else {
-                console.log(`No offline users`)
-            } 
-        }).catch(err => {
-            console.log(`Error while removing members: ${err.message}`)
-            ack(err.message);
-        })
-    } catch (ex) {
-        console.log(`Error occurred while removing members from chat: Error: ${ex.message}`)
-        ack(ex.message);
-    }
-}
-
+ 
 /**
  *
  * Delete chat group. Only admin/creator can delete the chat group
@@ -346,8 +92,7 @@ const deleteChat = async function(data, ack) {
     try {
         console.log(`Delete Chat: ${JSON.stringify(data)}`) 
         const from = this.user;
-
-        const chatService = new ChatServiceDB(ChatModel); 
+ 
         chatService.deleteChat(data.chatId, from.id).then(async (result) => {
             //MARK: Get the socket for the user 
             var offlineUsers = [];
@@ -407,8 +152,7 @@ const clearChat = async function(data, ack) {
     try {
         // console.log(`Clear Chat: ${JSON.stringify(data)}`) 
         const from = this.user;
-
-        const chatService = new ChatServiceDB(ChatModel); 
+ 
         chatService.clearChat(data.chatId, from.id)
         .then(async (result) => {  
             console.log('Result from clear: ', result.message)
@@ -420,86 +164,7 @@ const clearChat = async function(data, ack) {
     } catch (ex) {
         ack(ex.message);
     } 
-}
-
-//MARK: To be finished
-/**
- *
- *
- * @param {*} data
- * @param {*} ack
- */
-const leaveChat = async function(data, ack) {
-    try {
-        console.log(`Leave Chat: ${JSON.stringify(data)}`) 
-        const from = this.user;
-
-        const chatService = new ChatServiceDB(ChatModel); 
-        chatService.leaveChat(from.id, data.chatId).then(async (result) => {
-            //MARK: Get the socket for the user 
-            var offlineUsers = [];
-            // const chat = result.chat;
-            const members = result.chat.members;
-            // console.log(`Total members: ${members.length}`)
-            const userService = new UserService(UserModel);
-            const userFrom = await userService.getUserById(from.id, true)
-            // get current chat members, to notify that a new members has been added
-            // const chatMembers = await chatService.getChatMembers(data.chat.id);
-            const messageService = new MessageServiceDB(MessageModel);
-            const genericMessage = messageService.createGeneric(`${userFrom.name} left the group`, data.chatId, from.id)
-            messageService.save(genericMessage);
-
-            const chatServiceDB = new ChatServiceDB(ChatModel);
-            const update = await chatServiceDB.setLatestMessage(data.chatId, genericMessage._id, from.id);
-            const chat = update.chat;
-
-            for (const member of members) {
-                // CHeck if the member can chat, maybe they left the chat
-                if (!member.canChat) continue;
-
-                const to = member.user._id.toString();
-
-                // Skip me
-                if (to == from.id) continue; 
-
-                const isUserConnected = await chatSocketService.isUserConnected(to);
-
-                if (isUserConnected) {
-                    this.to(to).emit('member left chat', {
-                        chat: chat,
-                        memberLeft: from.id,
-                        genericMessage: genericMessage,
-                        userLeft: userFrom
-                    });
-                } else {
-                    // if (!member.options.muted) { 
-                        offlineUsers.push(member);
-                    // }
-                }
-            } 
-            
-            const obj = { chat: chat, offlineReceivers: offlineUsers, message: genericMessage, userLeft: userFrom };
-            ack(obj.chat);
-
-            return new Promise((resolve) => {
-                resolve(obj)
-            });
-        }).then(result => { 
-            // send the push notification to offline users
-            if (result.offlineReceivers.length) {
-                const pushNotification = new PushNotificationService();
-                result.from = from;
-                pushNotification.memberLeftChat(result);
-            }
-        }).catch((err) => { 
-            console.error(`Error while leaving chat: ${err.message}`)
-            ack({error: err.message});
-        });
-    } catch (ex) {
-        console.error(`Generic Error while leaving chat: ${ex.message}`)
-        ack(ex.message);
-    } 
-}
+} 
 
 /**
  *
@@ -509,9 +174,7 @@ const leaveChat = async function(data, ack) {
  */
 const favoriteChat = async function(data, ack) {
     try {
-        console.log(`Favorite Chat: ${JSON.stringify(data)}`)
-
-        const chatService = new ChatServiceDB(ChatModel);
+        console.log(`Favorite Chat: ${JSON.stringify(data)}`) 
         const userId = this.user.id;
         const chatId = data.chatId;
         const favStatus = data.status;
@@ -534,9 +197,7 @@ const favoriteChat = async function(data, ack) {
  */
 const blockChat = async function(data, ack) {
     try {
-        console.log(`Block Chat: ${JSON.stringify(data)}`)
-
-        const chatService = new ChatServiceDB(ChatModel);
+        console.log(`Block Chat: ${JSON.stringify(data)}`) 
         const userId = this.user.id;
         const chatId = data.chatId;
         const blockStatus = data.status;
@@ -550,7 +211,7 @@ const blockChat = async function(data, ack) {
             var offlineUsers = [];
             // const members = result.chat.members;
             // console.log(`Total members: ${members.length}`)
-            const userService = new UserService(UserModel);
+            const userService = new UserService();
             const userFrom = await userService.getUserById(userId, true);
             const from = userFrom;
             // delete from.device;
@@ -627,9 +288,7 @@ const blockChat = async function(data, ack) {
  */
 const muteChat = async function(data, ack) {
     try {
-        console.log(`Mute Chat: ${JSON.stringify(data)}`)
-
-        const chatService = new ChatServiceDB(ChatModel);
+        console.log(`Mute Chat: ${JSON.stringify(data)}`) 
 
         // this= is the current socket for the logged in user
         const userId = this.user.id;
@@ -661,8 +320,7 @@ const allChats = async function(data, ack) {
         let skip = data.skip;
         if (skip == undefined) {
             skip = -1
-        } 
-        const chatService = new ChatServiceDB(ChatModel);
+        }  
         
         chatService.getChatsForUser(userId, onlyFavorites, skip).then((chats) => {
             ack({ total: chats.length, chats: chats })
@@ -683,11 +341,9 @@ const startTyping = async function(data, ack) {
     try {
         console.log(`Start typing at: ${Date()}`)
         const from = this.user.id;
-        const chatId = data.chatId;
-        const chatService = new ChatService(ChatModel);
+        const chatId = data.chatId; 
 
-        const chatMembers = await chatService.getChatMembers(chatId);
-        const userService = new UserService(UserModel);
+        const chatMembers = await chatService.getChatMembers(chatId); 
         
         const typier = await userService.getUserById(from, true);
 
@@ -725,8 +381,7 @@ const startTyping = async function(data, ack) {
 const stopTyping = async function(data, ack) {
     try {
         const from = this.user.id;
-        const chatId = data.chatId;
-        const chatService = new ChatService(ChatModel);
+        const chatId = data.chatId; 
 
         const chatMembers = await chatService.getChatMembers(chatId);  
 
@@ -765,115 +420,150 @@ const stopTyping = async function(data, ack) {
  */
 const newMessage = async function(data, ack) {
     try {
-        console.log(`New message:`)
+        console.log(`New message: ${data.chatId}`);
 
         const from = this.user;
-        // Create chat service
-        const chatService = new ChatService(ChatModel);
-        // ~Get chat members
-        const chat = await chatService.getById(data.chatId, from.id);
+        
+        // Validate sender and get chat with validations
+        if (!from || !from.id) {
+            throw new Error('Sender identification failed');
+        }
 
-        // Instantiate a message service
-        const messageService = new MessageServiceDB(MessageModel);
-        // // Remove the sender from the members
-        const members = chat.members
+        // Get chat and verify sender is member
+        const chat = await chatService.getById(data.chatId, from.id);
+        const members = chat.members;
+
+        // Validate sender is in members list
+        const senderMember = members.find(m => m.user._id.toString() === from.id);
+        if (!senderMember || !senderMember.canChat) {
+            throw new Error('Sender is not authorized to send messages in this chat');
+        }
 
         const json = data;
         json.sentOn = Date.now();
         json.members = members;
         json.from = from.id;
 
-        // Create a temporary message 
-        const tempMessage = await messageService.create(json); 
-        // Save the message
+        // Create a temporary message
+        const tempMessage = await messageService.create(json);
+        
+        // Save the message to database
         messageService.save(tempMessage)
-        .then(async (result) => {
+            .then(async (result) => {
+                const deliveredTo = [];
+                const offlineReceivers = [];
+                
+                // Update chat's last message
+                const update = await chatService.setLatestMessage(data.chatId, tempMessage._id, from.id);
+                const updatedChat = update.chat;
 
-            // ack({ message: result.message });
+                // Send ACK immediately
+                ack({ message: result.message, chat: updatedChat });
 
-            var deliveredTo = [];
-            var offlineReceivers = [];
-            // Set to chat this message
-            //MARK: If not necessary, move these two lines at the end
-            const chatServiceDB = new ChatServiceDB(ChatModel);
-            const update = await chatServiceDB.setLatestMessage(data.chatId, tempMessage._id, from.id);
-            const chat = update.chat; 
+                // Build broadcast object (will be cloned for each recipient)
+                const baseObject = {
+                    message: tempMessage,
+                    chat: updatedChat,
+                    publicKey: data.publicKey,
+                    bytes: data.bytes
+                };
 
-            ack({ message: result.message, chat: chat });
+                // Process each member in sequence to handle blocked status and delivery tracking
+                for (const member of members) {
+                    try {
+                        // Skip if member cannot chat
+                        if (!member.canChat) {
+                            console.log(`Skipping member ${member.user._id}: cannot chat`);
+                            continue;
+                        }
 
-            // console.log(`Ack is sent: ${Date()}`)
+                        const to = member.user._id.toString();
+                        
+                        // Skip sender
+                        if (to === from.id) {
+                            console.log(`Skipping sender: ${to}`);
+                            continue;
+                        }
 
-            let object = {
-                message: tempMessage,
-                chat: chat,
-                publicKey: data.publicKey,
-                bytes: data.bytes
-            }
+                        // Check if message is blocked for this user
+                        if (member.options && member.options.blocked) {
+                            console.log(`Message blocked for user ${to}`);
+                            try {
+                                await messageService.setMessageNotVisible(tempMessage._id);
+                            } catch (err) {
+                                console.error(`Error marking message invisible: ${err.message}`);
+                            }
+                            continue;
+                        }
 
-            const promises = members.map(async member => {
-                const canChat = member.canChat;
-                if (!canChat) return member;
+                        // Check if receiver exists and is connected
+                        const memberIsOnline = await chatSocketService.isUserConnected(to);
 
-                const blocked = member.options.blocked;
-                if (blocked) {
-                    // update the message
-                    await messageService.setMessageNotVisible(tempMessage._id)
-                    return member;
+                        if (memberIsOnline) {
+                            // Create a fresh clone of the message object for this recipient
+                            // This prevents shared state issues with unreadMessages counter
+                            const recipientObject = JSON.parse(JSON.stringify(baseObject));
+                            
+                            // Emit to online user
+                            this.to(to).emit('new message received', recipientObject);
+                            
+                            deliveredTo.push(to);
+                            console.log(`Message delivered online to: ${to}`);
+                        } else {
+                            // Track offline receiver for push notification
+                            offlineReceivers.push(member);
+                            console.log(`User offline: ${to}, will send push notification`);
+                        }
+                    } catch (memberError) {
+                        console.error(`Error processing member delivery: ${memberError.message}`);
+                        // Continue processing other members
+                    }
                 }
 
-                const to = member.user._id.toString();
-                if (to == from.id) return member; 
-
-                const memberIsOnline = await chatSocketService.isUserConnected(to);
-
-                if (memberIsOnline) {
-                    // const unreadMessages = await chatService.countUnreadMessagesForChat(chat._id, to)
-                    object.chat.unreadMessages += 1;
-                    
-                    // Send the message to online users
-                    this.to(to).emit('new message received', object);
-
-                    deliveredTo.push(to); 
-                } else {
-                    /// Offline people. Send a push notification
-                    // console.log(`Offline member: ${member.user.device}`);
-                    // if (!member.options.muted) {
-                    offlineReceivers.push(member);
-                    // }
+                // Send push notifications to offline users
+                if (offlineReceivers.length > 0) {
+                    try {
+                        const pushNotificationObj = {
+                            message: result.message,
+                            chat: updatedChat,
+                            offlineReceivers: offlineReceivers,
+                            from: tempMessage.from
+                        };
+                        
+                        const pushNotification = new PushNotificationService();
+                        pushNotification.newMessage(pushNotificationObj);
+                        console.log(`Push notifications queued for ${offlineReceivers.length} users`);
+                    } catch (pushError) {
+                        console.error(`Error sending push notifications: ${pushError.message}`);
+                    }
                 }
 
-                return member;
+                // Update message delivery status for online users
+                if (deliveredTo.length > 0) {
+                    try {
+                        await messageService.messageDelivered(deliveredTo, result.message._id, Date.now());
+                        console.log(`Delivery confirmed for ${deliveredTo.length} users`);
+                        
+                        // Emit delivery confirmation event
+                        this.emit('message delivered to', {
+                            message: result.message,
+                            deliveredTo: deliveredTo
+                        });
+                    } catch (deliveryError) {
+                        console.error(`Error updating delivery status: ${deliveryError.message}`);
+                    }
+                }
+            }).catch((err) => {
+                console.error(`Error saving message: ${err.message}`);
+                if (ack) {
+                    ack({ error: err.message });
+                }
             });
-
-            await Promise.all(promises); 
-
-            const obj = { message: result.message, chat: chat, offlineReceivers: offlineReceivers }; 
-
-            if (offlineReceivers.length) {
-                // Send the push notifications 
-                // const userService = new UserService(UserModel); 
-                // const fromUser = await userService.getUserById(from.id, true);
-                obj.from = tempMessage.from;
-
-                const pushNotification = new PushNotificationService();
-                pushNotification.newMessage(obj);
-            }
-
-            if (deliveredTo.length) { 
-                //Update the status of the message to delivered for users
-                await messageService.messageDelivered(deliveredTo, result.message._id, Date.now());
-                // Emit event that the message has been delivered to these people
-                this.emit('message delivered to', { message: result.message, deliveredTo: deliveredTo });
-            } 
-        }).catch((err) => { 
-            console.error(`Error: ${err.message}`)
-            if (ack) { 
-                ack({error: err.message});
-            }
-        });
     } catch (ex) {
-        console.error(`Error: ${ex.message}`)
-        ack(ex.message)
+        console.error(`Error in newMessage handler: ${ex.message}`);
+        if (ack) {
+            ack({ error: ex.message });
+        }
     }
 };
 
@@ -886,8 +576,7 @@ const newMessage = async function(data, ack) {
 const messages = async function(data, ack) {
     try {
         const chatId = data.chatId;
-        console.log(`Getting conversation: ${chatId}`); 
-        const messageService = new MessageServiceDB(MessageModel);
+        console.log(`Getting conversation: ${chatId}`);  
         const toMessageDate = data.toMessageDate;
         const userId = this.user.id;
         let howMany = data.howMany;
@@ -970,12 +659,7 @@ const reactOnMessage = async function(data, ack) {
     try {
         console.log(`React on Message`)
         var offlineReceivers = [];
-        const from = this.user;
-        // Create chat service
-        const chatService = new ChatService(ChatModel);
-        // Instantiate a message service
-        const messageService = new MessageServiceDB(MessageModel);
-        const userService = new UserService(UserModel);
+        const from = this.user; 
         //Save the reaction
         messageService.reactOnMessage(data.messageId, data.reaction, from.id, data.date).then(async (result) => { 
             const message = result.message;
@@ -1047,19 +731,14 @@ const deleteMessage = async function(data, ack) {
     try { 
         console.log(`Delete message: ${data.messageId}`)
         var offlineReceivers = [];
-        // Instantiate a message service
-        const from = this.user;
-        const messageService = new MessageServiceDB(MessageModel);  
+        // Instantiate a message service 
 
         messageService.deleteMessage(data.messageId, from.id, data.forEveryone).then(async (result) => { 
-            const message = result.message;
-            // MARK: Update the last message
-            const chatService = new ChatServiceDB(ChatModel);
+            const message = result.message; 
             const res = await chatService.updateChatWithLastMessage(message.chatId);
             const chat = res.chat;
 
-            chat.unreadMessages = 0;
-            const userService = new UserService(UserModel);
+            chat.unreadMessages = 0; 
 
             let sender;
             if (data.forEveryone) {
@@ -1137,9 +816,7 @@ const deleteMessage = async function(data, ack) {
 const messageSeen = async function(data, ack) {
     try {
         console.log(`Marking Message seen/read`)
-        const offlineReceivers = [];
-        // Instantiate a message service
-        const messageService = new MessageServiceDB(MessageModel); 
+        const offlineReceivers = []; 
         const from = this.user.id;
         const messageId = data.messageId;
         const messageDate = data.date;
@@ -1196,9 +873,7 @@ const messageSeen = async function(data, ack) {
 const messageDelivered = async function(data, ack) {
     try { 
         console.log(`Marking Message Delivered`)
-        var offlineReceivers = [];
-        // Instantiate a message service
-        const messageService = new MessageServiceDB(MessageModel); 
+        var offlineReceivers = []; 
         const from = data.from;
         const messageId = data.messageId;
         const messageDate = data.date;
@@ -1212,7 +887,8 @@ const messageDelivered = async function(data, ack) {
                 // Send the message to online users
                 this.to(creator).emit('message received by', {
                     messageId: messageId,
-                    by: from
+                    by: from,
+                    date: messageDate
                 });
             } else {
                 /// Offline people. Send a push notification
@@ -1253,9 +929,7 @@ const messageDelivered = async function(data, ack) {
 const markConversationSeen = async function(data, ack) {
     try {
         console.log(`Marking conversation seen/read`)
-        var offlineReceivers = [];
-        // Instantiate a message service
-        const messageService = new MessageServiceDB(MessageModel); 
+        var offlineReceivers = []; 
         const from = this.user.id;
         const chatId = data.chatId;
         const date = data.date;
@@ -1332,9 +1006,7 @@ const totalUnreadChats = async function(ack) {
     try {
         console.log(`Get total unread chats for user`)
 
-        const from = this.user.id;
-        // Create chat service
-        const chatService = new ChatService(ChatModel);
+        const from = this.user.id; 
         // ~Get chat members
         const total = await chatService.countTotalUnreadChatsForUser(from);
 
@@ -1354,8 +1026,7 @@ const totalUnreadChats = async function(ack) {
 const exchangeInfo = async function(data, ack) {
     try { 
         const from = this.user.id;
-        const chatId = data.chatId;
-        const chatService = new ChatService(ChatModel);
+        const chatId = data.chatId; 
 
         const chatMembers = await chatService.getChatMembers(chatId);
         let receivers = [];

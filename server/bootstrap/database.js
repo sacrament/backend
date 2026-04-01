@@ -5,11 +5,15 @@
  * Provides graceful shutdown and reconnection management
  */
 
-let databaseInstance = null;
+const MongoDatabase = require('../config/database');
+
+const databaseInstance = new MongoDatabase();;
 
 module.exports = {
   loadModels() {
     require('../models/user');
+    require('../models/device');
+    require('../models/location');
     require('../models/reaction');
     require('../models/media');
     require('../models/message');
@@ -17,13 +21,15 @@ module.exports = {
     require('../models/calls/history');
     require('../models/user.blocked');
     require('../models/content.storage');
+    require('../models/nearby.users.log');
+    require('../models/otp.session');
+    require('../models/report');
+    require('../models/legal.content');
   },
 
   async connectDatabase() {
-    const MongoDatabase = require('../config/database');
     
     try {
-      databaseInstance = new MongoDatabase();
       await databaseInstance.connect();
       console.log('✓ Database connected successfully');
       return databaseInstance;

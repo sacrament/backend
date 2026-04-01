@@ -35,11 +35,11 @@ module.exports = {
     },
 }
 
-const chatColumnsToShow = "_id id name members lastMessage type imageUrl createdOn deleted deletedOn";
-const messageColumnsToShow = "_id id content status from chatId kind sentOn deleted reactions media replyTo sharedContact";
-const userColumnsToShow = "_id id name email phone imageUrl device options";
-const lastMessageColumnsToShow = "_id id content status reply from chatId kind sentOn deleted reactions media replyTo sharedContact";
-const replyMessageColumnsToShow = "_id id content from chatId kind sentOn deleted reactions media sharedContact";
+const chatColumnsToShow = "_id uniqueId members lastMessage active publicKey summary createdOn";
+const messageColumnsToShow = "_id content status from chatId kind sentOn deleted reactions media replyTo sharedContact";
+const userColumnsToShow = "_id name email phone imageUrl device";
+const lastMessageColumnsToShow = "_id content status reply from chatId kind sentOn deleted reactions media replyTo sharedContact";
+const replyMessageColumnsToShow = "_id content from chatId kind sentOn deleted reactions media sharedContact";
 
 const mediaColumnsToShow = "_id type date name url editedOn thumbnail";
 const reactionColumnsToShow = "_id date from kind editedOn chatId";

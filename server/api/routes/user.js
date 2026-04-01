@@ -1,58 +1,82 @@
-const express = require('express');
-const router = express.Router();  
+/**
+ * User Routes — public user data and social actions.
+ * verifyClientToken is applied upstream in routes/index.js.
+ */
 
-const { verifyToken } = require('../../middleware/verify');
+const express             = require('express');
+const router              = express.Router();
+const { verifyToken }     = require('../../middleware/verify');
+const favoritesController = require('../controllers/favorites.controller');
+const {
+    searchUsers,
+    getUserById,
+    verifyPhones,
+    sendSMSToUsers,
+    getBlockedUsers,
+    blockUser,
+    unblockUser,
+    contentStorage,
+    deleteContentById,
+    getUnreadMessagesForUser,
+    respondConnectionRequest,
+    getConnectionRequests,
+    checkConnectionRequest,
+    getMyReports,
+    fileReport,
+} = require('../controllers/user.controller');
 
-const { newUser, 
-        updateDeviceToken, 
-        verifyUsers, 
-        sendSMSToUsers, 
-        enableDevice, 
-        disableDevice, 
-        refreshAuthToken, 
-        getBlockedUsers, 
-        blockUser, 
-        unblockUser, 
-        contentStorage, 
-        deleteContentById, 
-        getUnreadMessagesForUser, me, updateRadar, deleteAccount } = require('../controllers/user.controller');
+// GET  /users?name=<name>&page=0&size=20
+router.get('/', verifyToken, searchUsers);
 
-router.get('/', (req, res, next)  => {
-    res.status(200).json({status: 'success', message: 'Chat Router'})
-})
-
-/// New user signup
-router.post('/new', newUser);
-
-router.put('/device/updateToken', verifyToken, updateDeviceToken);
-
-router.post('/verify/phones', verifyToken, verifyUsers);
-
-router.post('/send/sms', verifyToken, sendSMSToUsers);
-
-// -- Device
-router.put('/device/enable', verifyToken, enableDevice);
-
-router.put('/device/disable', verifyToken, disableDevice);
-
-router.post('/token', refreshAuthToken);
-
+// GET  /users/blocked
 router.get('/blocked', verifyToken, getBlockedUsers);
 
+// POST /users/block
 router.post('/block', verifyToken, blockUser);
 
+// POST /users/unblock
 router.post('/unblock', verifyToken, unblockUser);
 
+// POST /users/send/sms
+router.post('/send/sms', verifyToken, sendSMSToUsers);
+
+// POST /users/verify/phones
+router.post('/verify/phones', verifyToken, verifyPhones);
+
+// GET  /users/content
 router.get('/content', verifyToken, contentStorage);
 
+// DELETE /users/content/single
 router.delete('/content/single', verifyToken, deleteContentById);
 
+// GET  /users/connectionRequests
+router.get('/connectionRequests', verifyToken, getConnectionRequests);
+
+// GET  /users/checkConnectionRequest?to=<userId>
+router.get('/checkConnectionRequest', verifyToken, checkConnectionRequest);
+
+// GET  /users/unreadMessages
 router.get('/unreadMessages', verifyToken, getUnreadMessagesForUser);
 
-router.get('/me', verifyToken, me);
+// POST /users/respondConnectionRequest
+router.post('/respondConnectionRequest', verifyToken, respondConnectionRequest);
 
-router.post('/me/updateRadar', verifyToken, updateRadar);
+// GET  /users/favorites
+router.get('/favorites', verifyToken, favoritesController.getFavorites);
 
-router.delete('/me/deleteAccount', verifyToken, deleteAccount);
+// POST /users/favorites
+router.post('/favorites', verifyToken, favoritesController.addFavorite);
+
+// DELETE /users/favorites/:userId
+router.delete('/favorites/:userId', verifyToken, favoritesController.removeFavorite);
+
+// ── Reports ───────────────────────────────────────────────────────────────────
+// GET  /users/report
+router.get('/report', verifyToken, getMyReports);
+// POST /users/report
+router.post('/report', verifyToken, fileReport);
+
+// GET  /users/:id
+router.get('/:id', verifyToken, getUserById);
 
 module.exports = router;
