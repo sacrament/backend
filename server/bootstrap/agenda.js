@@ -32,6 +32,7 @@ const initAgenda = async () => {
     });
 
     require('../jobs/notifications')(_agenda);
+    require('../jobs/location')(_agenda);
 
     await _agenda.start();
     console.log('✓ Agenda job scheduler started');

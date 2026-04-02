@@ -13,6 +13,7 @@ const callRoutes    = require('./call');
 const deviceRoutes  = require('./device');
 const supportRoutes = require('./support');
 const genericRoutes = require('./generic');
+const e2eeRoutes    = require('./e2ee');
 
 // ─── Rate limiters ────────────────────────────────────────────────────────────
 
@@ -61,5 +62,6 @@ router.use('/api/me',           verifyClientToken, verifyToken, meRoutes);
 router.use('/api/nearby', verifyClientToken, verifyToken, nearbyRoutes);
 router.use('/api/chat',         verifyClientToken, verifyToken, chatRoutes);
 router.use('/api/support',      verifyClientToken, verifyToken, supportRoutes);
+router.use('/api/e2ee',         verifyClientToken, verifyToken, e2eeRoutes);
 
 module.exports = router;

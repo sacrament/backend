@@ -25,6 +25,8 @@ module.exports = {
     require('../models/otp.session');
     require('../models/report');
     require('../models/legal.content');
+    require('../models/e2ee.device');
+    require('../models/e2ee.key.backup');
   },
 
   async connectDatabase() {
