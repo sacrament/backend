@@ -42,42 +42,29 @@ resource "aws_lb_target_group" "app" {
 
 # ── Listeners ─────────────────────────────────────────────────────────────────
 
-# HTTP (80) → forward to ECS directly
-# Once ACM cert is set up, change this to redirect to HTTPS
+# HTTP (80) → redirect to HTTPS
 resource "aws_lb_listener" "http" {
   load_balancer_arn = aws_lb.main.arn
   port              = 80
   protocol          = "HTTP"
 
   default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.app.arn
+    type = "redirect"
+    redirect {
+      port        = "443"
+      protocol    = "HTTPS"
+      status_code = "HTTP_301"
+    }
   }
 }
 
-# HTTPS (443) → forward to ECS target group
-# Requires an ACM certificate. If you don't have one yet, comment out this
-# listener and use the HTTP listener temporarily during initial setup.
+# HTTPS (443) → forward to ECS
 resource "aws_lb_listener" "https" {
-  count             = var.acm_certificate_arn != "" ? 1 : 0
   load_balancer_arn = aws_lb.main.arn
   port              = 443
   protocol          = "HTTPS"
   ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
-  certificate_arn   = var.acm_certificate_arn
-
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.app.arn
-  }
-}
-
-# Temporary HTTP forward (used before ACM cert is ready)
-resource "aws_lb_listener" "http_forward" {
-  count             = var.acm_certificate_arn == "" ? 1 : 0
-  load_balancer_arn = aws_lb.main.arn
-  port              = 8080
-  protocol          = "HTTP"
+  certificate_arn   = aws_acm_certificate_validation.api.certificate_arn
 
   default_action {
     type             = "forward"
