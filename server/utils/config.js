@@ -1,7 +1,6 @@
 if (process.env.NODE_ENV !== 'production') {
-    require('dotenv').config({ path: '.env.development' });
+    require('dotenv').config({ path: '.env.local' });
 }
-require('dotenv').config({ path: '.env.local' });
 
 module.exports = {
     ENV_NAME: process.env.ENV_NAME,
