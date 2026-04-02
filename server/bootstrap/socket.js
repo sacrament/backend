@@ -11,13 +11,19 @@ const socketIO = require('socket.io');
 module.exports = {
   async initializeSocket(server) {
 
+    // transports order matters: polling first establishes the session,
+    // then upgrades to websocket. ALB sticky sessions (AWSALB cookie) must
+    // be enabled on the target group to ensure both requests hit the same task.
     const io = socketIO(server, {
+      transports: ['polling', 'websocket'],
+      allowUpgrades: true,
       pingInterval: config.HEARTBEAT_INTERVAL,
       pingTimeout: config.HEARTBEAT_TIMEOUT,
       upgradeTimeout: config.UPGRADE,
       cors: {
         origin: process.env.CORS_ORIGIN || '*',
-        methods: ['GET', 'POST']
+        methods: ['GET', 'POST'],
+        credentials: true,
       }
     });
 
