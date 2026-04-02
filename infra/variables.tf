@@ -88,3 +88,15 @@ variable "alert_email" {
   type        = string
   default     = ""
 }
+
+variable "ecs_min_tasks" {
+  description = "Minimum number of ECS tasks"
+  type        = number
+  default     = 1
+}
+
+variable "ecs_max_tasks" {
+  description = "Maximum number of ECS tasks"
+  type        = number
+  default     = 4
+}
