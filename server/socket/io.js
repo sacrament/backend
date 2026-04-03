@@ -5,7 +5,7 @@
  * then import `getIO` anywhere (controllers, services, etc.) to emit events.
  *
  * Usage:
- *   const { getIO } = require('../io');
+ *   const { getIO } = require('../socket/io');
  *   getIO().to(roomId).emit('event', data);
  */
 

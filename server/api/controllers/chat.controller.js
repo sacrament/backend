@@ -4,7 +4,7 @@ const UserService = require('../../services/domain/user/user.service');
 const AWSS3Service = require('../../services/external/aws/s3.service');
 const CS = require('../../socket/chat.service');
 const PushNotificationService = require('../../notifications/index');
-const { getIO } = require('../../bootstrap/io');
+const { getIO } = require('../../socket/io');
 
 const chatService = new ChatService(); 
 const userService = new UserService();

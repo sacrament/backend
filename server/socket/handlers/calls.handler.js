@@ -13,11 +13,19 @@ module.exports = class Calls {
         chatSocketService = getChatService();
 
         this.handler = {
+            // ── Legacy event names ────────────────────────────────────────────
             'send call request':    sendCallRequest,
             'respond call request': respondCallRequest,
             'cancel call request':  cancelCallRequest,
             'call':                 initiateCall,
             'end':                  endCall,
+            // ── Spec-compliant dot-notation event names ────────────────────────
+            'call.sendRequest':    sendCallRequest,
+            'call.respondRequest': respondCallRequest,
+            'call.cancelRequest':  cancelCallRequest,
+            'call.initiateCall':   initiateCall,
+            'call.end':            endCall,
+            'call.createRoom':     createRoom,
         };
     }
 };
@@ -38,7 +46,7 @@ const sendCallRequest = async function(data, ack) {
         const isCalleeOnline = await chatSocketService.isUserConnected(calleeId);
 
         if (isCalleeOnline) {
-            this.to(calleeId).emit('incoming call request', { requestId, from: callerObject, chatId, mode });
+            this.to(calleeId).emit('call.requestIncoming', { requestId, from: callerObject, chatId, mode });
         } else {
             const calleeObject = await userService.getUserById(calleeId, true);
             if (calleeObject.device?.type === 'ANDROID') {
@@ -81,7 +89,7 @@ const respondCallRequest = async function(data, ack) {
         pendingRequests.delete(requestId);
 
         if (status === 'declined') {
-            this.to(callerId).emit('call request declined', { requestId });
+            this.to(callerId).emit('call.requestResponse', { requestId, chatId: request.chatId, status: 'declined' });
             return ack({ success: true });
         }
 
@@ -93,7 +101,10 @@ const respondCallRequest = async function(data, ack) {
         // Generate a separate token for the callee
         const { jwt: calleeToken } = await callService.getAccessToken(calleeId);
 
-        this.to(callerId).emit('call request accepted', {
+        this.to(callerId).emit('call.requestResponse', {
+            requestId,
+            chatId: request.chatId,
+            status: 'accepted',
             callId: call.sid,
             roomName: call.uniqueName,
             token: callerToken,
@@ -123,7 +134,7 @@ const cancelCallRequest = async function(data, ack) {
         const request = pendingRequests.get(requestId);
 
         if (request) {
-            this.to(request.calleeId).emit('call request cancelled', { requestId });
+            this.to(request.calleeId).emit('call.requestCancelled', { requestId, chatId: request.chatId });
             pendingRequests.delete(requestId);
         }
 
@@ -150,7 +161,7 @@ const initiateCall = async function(data, ack) {
         const isCalleeOnline = await chatSocketService.isUserConnected(calleeId);
 
         if (isCalleeOnline) {
-            this.to(calleeId).emit('incoming call', { callId, roomName, mode, from: callerObject });
+            this.to(calleeId).emit('call.incoming', { callId, roomName, mode, from: callerObject });
         } else {
             const calleeObject = await userService.getUserById(calleeId, true);
             if (calleeObject.device?.type === 'ANDROID') {
@@ -201,7 +212,7 @@ const endCall = async function(data, ack) {
         ack({ success: true, call: endedCall });
 
         if (isOtherOnline) {
-            this.to(otherPartyId).emit('end call', { callId, roomName, from: senderObject });
+            this.to(otherPartyId).emit('call.ended', { callId, roomName, from: senderObject });
         } else {
             const otherObject = await userService.getUserById(otherPartyId, true);
             if (otherObject.device?.type === 'ANDROID') {
@@ -214,6 +225,27 @@ const endCall = async function(data, ack) {
         }
     } catch (ex) {
         console.error(`end call error: ${ex.message}`);
+        ack({ error: ex.message });
+    }
+};
+
+/**
+ * Create a Twilio room on behalf of the caller without a prior request/response handshake.
+ * Params: { userId } — the other party's userId
+ * Ack: { callId, roomName, token, mode }
+ */
+const createRoom = async function(data, ack) {
+    try {
+        const { userId: calleeId, mode = 'audio' } = data;
+        const callerId = this.user.id;
+
+        const callService = new CallService();
+        const callType = mode === 'video' ? 'video' : 'voice';
+        const { call, token } = await callService.createCallRoom(callerId, calleeId, callType);
+
+        ack({ success: true, callId: call.sid, roomName: call.uniqueName, token, mode });
+    } catch (ex) {
+        console.error(`create room error: ${ex.message}`);
         ack({ error: ex.message });
     }
 };
