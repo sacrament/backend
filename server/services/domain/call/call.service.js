@@ -164,8 +164,13 @@ class CallService {
 
     /**
      * Create call room with permission validation
+     *
+     * @param {string} caller
+     * @param {string} callee
+     * @param {string} callType - 'voice' or 'video'
+     * @param {Object} meta - optional { ipAddress, networkInfo }
      */
-    async createCallRoom(caller, callee, callType = 'voice') {
+    async createCallRoom(caller, callee, callType = 'voice', meta = {}) {
         const permissionCheck = await this.canUserCall(caller, callee, callType);
         if (!permissionCheck.allowed) {
             throw new Error(permissionCheck.reason);
@@ -199,7 +204,9 @@ class CallService {
                 description: JSON.stringify(call),
                 token: jwt,
                 other: JSON.stringify(token),
-                callType: callType
+                callType: callType,
+                ipAddress: meta.ipAddress || null,
+                networkInfo: meta.networkInfo || null
             });
 
             return { call: call, token: jwt, callType: callType };
@@ -214,7 +221,9 @@ class CallService {
                 date: Date.now(),
                 userName: uniqueId,
                 description: err.message,
-                callType: callType
+                callType: callType,
+                ipAddress: meta.ipAddress || null,
+                networkInfo: meta.networkInfo || null
             });
 
             throw err;
@@ -299,6 +308,8 @@ class CallService {
         call.other = data.other || null;
         call.token = data.token;
         call.callType = data.callType || 'voice';
+        call.ipAddress = data.ipAddress || null;
+        call.networkInfo = data.networkInfo || null;
 
         await call.save();
         return { status: 'Call added to history', call: call };
@@ -376,6 +387,44 @@ class CallService {
             description: JSON.stringify(call)
         });
 
+        return call;
+    }
+
+    /**
+     * Record a call attempt before a room is created (declined/cancelled/missed scenarios).
+     * Returns the saved CallHistory document so its _id can be stored in pendingRequests.
+     *
+     * @param {Object} data - { from, to, callType, ipAddress, networkInfo }
+     */
+    async recordPendingCall(data) {
+        const call = new CallHistory();
+        call.roomId = null;
+        call.date = Date.now();
+        call.type = 'initiated';
+        call.from = data.from;
+        call.to = data.to;
+        call.callType = data.callType || 'voice';
+        call.ipAddress = data.ipAddress || null;
+        call.networkInfo = data.networkInfo || null;
+
+        await call.save();
+        console.log(`Pending call recorded: ${call._id}`);
+        return call;
+    }
+
+    /**
+     * Update call type by document _id (used for pending calls before a room is created)
+     *
+     * @param {string} callId - CallHistory document _id
+     * @param {string} type - new type value
+     */
+    async updateCallStatusById(callId, type) {
+        const call = await CallHistory.findByIdAndUpdate(
+            callId,
+            { type },
+            { new: true }
+        );
+        if (call) console.log(`Pending call ${callId} updated to: ${type}`);
         return call;
     }
 
