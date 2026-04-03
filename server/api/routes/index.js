@@ -43,6 +43,7 @@ const otpLimiter = rateLimit({
 const router = express.Router();
 
 router.get('/', (req, res) => res.json({ title: 'Winky' }));
+router.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
 
 // Rate limiters
 router.post('/api/auth/phone/secured', otpLimiter);
