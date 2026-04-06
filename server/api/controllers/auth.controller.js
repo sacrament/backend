@@ -100,8 +100,8 @@ const requestPhoneOtp = async (req, res) => {
       return res.status(400).json({ status: 'error', code: 1011, message: 'Phone number is required' });
     }
 
-    if (!/^\+\d{6,15}$/.test(phoneNumber)) {
-      return res.status(400).json({ status: 'error', code: 1012, message: 'Invalid phone number format' });
+    if (!/^\+\d{8,15}$/.test(phoneNumber)) {
+      return res.status(400).json({ status: 'error', code: 1012, message: 'Invalid phone number format. Must be in E.164 format (e.g. +14165550000)' });
     }
 
     if (phoneNumber.startsWith('+233') || phoneNumber.startsWith('+4474') || phoneNumber.startsWith('+23')) {
@@ -175,6 +175,9 @@ const requestPhoneOtp = async (req, res) => {
     if (error.code === 3133) {
       return res.status(429).json({ status: 'error', code: 3133, message: error.message });
     }
+    if (error.httpStatus) {
+      return res.status(error.httpStatus).json({ status: 'error', code: error.code, message: error.message });
+    }
     console.error('Phone OTP request error:', error);
     return res.status(500).json({ status: 'error', code: 5000, message: 'Internal server error' });
   }
@@ -188,8 +191,8 @@ const phoneAuth = async (req, res) => {
   try {
     const { phoneNumber, otp } = req.body;
 
-    if (!phoneNumber || !/^\+\d{6,15}$/.test(phoneNumber)) {
-      return res.status(400).json({ status: 'error', code: 1012, message: 'Invalid phone number format' });
+    if (!phoneNumber || !/^\+\d{8,15}$/.test(phoneNumber)) {
+      return res.status(400).json({ status: 'error', code: 1012, message: 'Invalid phone number format. Must be in E.164 format (e.g. +14165550000)' });
     }
 
     if (!otp || !/^\d{4}$/.test(otp)) {
