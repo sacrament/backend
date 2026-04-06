@@ -33,23 +33,7 @@ module.exports = class Chat {
             'total unread chats': totalUnreadChats,
             'mark conversation seen': markConversationSeen,
             'exchange info': exchangeInfo,
-            'clear chat': clearChat,
-            // ── Spec-compliant dot-notation event names ────────────────────────
-            'message.new':        newMessage,
-            'message.all':        messages,
-            'message.seen':       messageSeen,
-            'message.delete':     deleteMessage,
-            'message.reaction':   reactOnMessage,
-            'chat.all':           allChats,
-            'chat.seen':          markConversationSeen,
-            'chat.startTyping':   startTyping,
-            'chat.stopTyping':    stopTyping,
-            'chat.mute':          muteChat,
-            'chat.block':         blockChat,
-            'chat.delete':        deleteChat,
-            'chat.clear':         clearChat,
-            'chat.favorite':      favoriteChat,
-            'chat.totalUnread':   totalUnreadChats,
+            'clear chat': clearChat
         };
 
         // setup the chat model and message model 
@@ -86,7 +70,7 @@ const newChat = async function(data, ack) {
                     const to = member.user ? member.user._id.toString() : member._id.toString();
                     const memberIsOnline = await chatSocketService.isUserConnected(to);
                     if (memberIsOnline) {
-                        this.to(to).emit('chat.created', { chat: result.chat });
+                        this.to(to).emit('new chat created', { chat: result.chat });
                     }
                 }
             }
@@ -128,7 +112,7 @@ const deleteChat = async function(data, ack) {
                 const isUserConnected = await chatSocketService.isUserConnected(to);
 
                 if (isUserConnected) {
-                    this.to(to).emit('chat.deleted', {
+                    this.to(to).emit('chat deleted', {
                         chat: { id: result.chat._id }
                     });
                 } else {
@@ -243,7 +227,7 @@ const blockChat = async function(data, ack) {
                 const isUserConnected = await chatSocketService.isUserConnected(to);
  
                 if (isUserConnected) {
-                    this.to(to).emit('chat.blocked', {
+                    this.to(to).emit('member blocked chat', {
                         chat: result.chat,
                         blockedBy: from,
                         blockStatus: blockStatus
@@ -392,7 +376,7 @@ const startTyping = async function(data, ack) {
 
             if (memberIsOnline) {
                 // Send the message to online users 
-                this.to(member.toString()).emit('chat.startTyping', {
+                this.to(member.toString()).emit('start typing', {
                     chatId: chatId,
                     user: typier
                 });
@@ -430,7 +414,7 @@ const stopTyping = async function(data, ack) {
 
             if (memberIsOnline) {
                 // Send the message to online users 
-                this.to(member.toString()).emit('chat.stopTyping', {
+                this.to(member.toString()).emit('stop typing', {
                     chatId: chatId,
                     user: from
                 });
@@ -541,7 +525,7 @@ const newMessage = async function(data, ack) {
                             const recipientObject = JSON.parse(JSON.stringify(baseObject));
                             
                             // Emit to online user
-                            this.to(to).emit('message.received', recipientObject);
+                            this.to(to).emit('new message received', recipientObject);
                             
                             deliveredTo.push(to);
                             console.log(`Message delivered online to: ${to}`);
@@ -581,7 +565,7 @@ const newMessage = async function(data, ack) {
                         console.log(`Delivery confirmed for ${deliveredTo.length} users`);
                         
                         // Emit delivery confirmation event
-                        this.emit('message.delivered', {
+                        this.emit('message delivered to', {
                             message: result.message,
                             deliveredTo: deliveredTo
                         });
@@ -639,7 +623,7 @@ const messages = async function(data, ack) {
                     const socket = await chatSocketService.isUserConnected(member);
 
                     if (socket) {
-                        this.to(member).emit('chat.seen', { chatId: chatId, date: Date.now(), by: userId });
+                        this.to(member).emit('conversation read', { chatId: chatId, date: Date.now(), by: userId });
                     } else {
                         offlineReceivers.push(member)
                     }
@@ -714,7 +698,7 @@ const reactOnMessage = async function(data, ack) {
                 const memberIsOnline = await chatSocketService.isUserConnected(to); 
                 if (memberIsOnline) {
                     // Send the message to online users
-                    this.to(to).emit('message.reaction', {
+                    this.to(to).emit('message reaction', {
                         reaction: {
                             message: { id: message._id },
                             kind: result.reaction
@@ -791,7 +775,7 @@ const deleteMessage = async function(data, ack) {
                     const memberIsOnline = await chatSocketService.isUserConnected(to);
                     if (memberIsOnline) {
                         // Send the message to online users
-                        this.to(to).emit('message.deleted', {
+                        this.to(to).emit('message deleted', {
                             id: message._id,
                             forEveryone: true,
                             dateDeleted: message.deleted?.date,
@@ -860,7 +844,7 @@ const messageSeen = async function(data, ack) {
 
             if (memberIsOnline) {
                 // Send the message to online users
-                this.to(creator).emit('message.seen', {
+                this.to(creator).emit('message seen by', {
                     messageId: messageId,
                     by: from,
                     date: messageDate
@@ -917,7 +901,7 @@ const messageDelivered = async function(data, ack) {
 
             if (memberIsOnline) {
                 // Send the message to online users
-                this.to(creator).emit('message.delivered', {
+                this.to(creator).emit('message received by', {
                     messageId: messageId,
                     by: from,
                     date: messageDate

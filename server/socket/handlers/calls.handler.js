@@ -18,14 +18,8 @@ module.exports = class Calls {
             'respond call request': respondCallRequest,
             'cancel call request':  cancelCallRequest,
             'call':                 initiateCall,
-            'end':                  endCall,
-            // ── Spec-compliant dot-notation event names ────────────────────────
-            'call.sendRequest':    sendCallRequest,
-            'call.respondRequest': respondCallRequest,
-            'call.cancelRequest':  cancelCallRequest,
-            'call.initiateCall':   initiateCall,
-            'call.end':            endCall,
-            'call.createRoom':     createRoom,
+            'end':                  endCall, 
+            'create room':     createRoom,
         };
     }
 };
@@ -65,7 +59,7 @@ const sendCallRequest = async function(data, ack) {
         const isCalleeOnline = await chatSocketService.isUserConnected(calleeId);
 
         if (isCalleeOnline) {
-            this.to(calleeId).emit('call.requestIncoming', { requestId, from: callerObject, chatId, mode });
+            this.to(calleeId).emit('call request', { requestId, from: callerObject, chatId, mode });
         } else {
             const calleeObject = await userService.getUserById(calleeId, true);
             if (calleeObject.device?.type === 'ANDROID') {
@@ -113,7 +107,7 @@ const respondCallRequest = async function(data, ack) {
             if (pendingCallId) {
                 await callService.updateCallStatusById(pendingCallId, 'rejected').catch(() => {});
             }
-            this.to(callerId).emit('call.requestResponse', { requestId, chatId: request.chatId, status: 'declined' });
+            this.to(callerId).emit('call request response', { requestId, chatId: request.chatId, status: 'declined' });
             return ack({ success: true });
         }
 
@@ -125,7 +119,7 @@ const respondCallRequest = async function(data, ack) {
         // Generate a separate token for the callee
         const { jwt: calleeToken } = await callService.getAccessToken(calleeId);
 
-        this.to(callerId).emit('call.requestResponse', {
+        this.to(callerId).emit('call request response', {
             requestId,
             chatId: request.chatId,
             status: 'accepted',
@@ -158,7 +152,7 @@ const cancelCallRequest = async function(data, ack) {
         const request = pendingRequests.get(requestId);
 
         if (request) {
-            this.to(request.calleeId).emit('call.requestCancelled', { requestId, chatId: request.chatId });
+            this.to(request.calleeId).emit('call request cancelled', { requestId, chatId: request.chatId });
             pendingRequests.delete(requestId);
 
             // Mark the pending DB record as missed (caller cancelled before callee responded)
@@ -191,7 +185,7 @@ const initiateCall = async function(data, ack) {
         const isCalleeOnline = await chatSocketService.isUserConnected(calleeId);
 
         if (isCalleeOnline) {
-            this.to(calleeId).emit('call.incoming', { callId, roomName, mode, from: callerObject });
+            this.to(calleeId).emit('incoming call', { callId, roomName, mode, from: callerObject });
         } else {
             const calleeObject = await userService.getUserById(calleeId, true);
             if (calleeObject.device?.type === 'ANDROID') {
@@ -242,7 +236,7 @@ const endCall = async function(data, ack) {
         ack({ success: true, call: endedCall });
 
         if (isOtherOnline) {
-            this.to(otherPartyId).emit('call.ended', { callId, roomName, from: senderObject });
+            this.to(otherPartyId).emit('end call', { callId, roomName, from: senderObject });
         } else {
             const otherObject = await userService.getUserById(otherPartyId, true);
             if (otherObject.device?.type === 'ANDROID') {

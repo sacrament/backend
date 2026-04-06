@@ -18,17 +18,11 @@ module.exports = class User {
             'send request':               sendRequest,
             'respond request':            respondRequest,
             'cancel request':             cancelRequest,
+            'cancell request':            cancelRequest, // iOS typo (double-l)
             'undo friendship connection': undoFriendshipConnection,
             'check connection request':   checkConnectionRequest,
             'all connection requests':    allRequests,
-            'connection request reminder': requestReminder,
-            // ── Spec-compliant dot-notation event names ────────────────────────
-            'user.sendConnectionRequest':    sendRequest,
-            'user.cancellConnectionRequest': cancelRequest,
-            'user.respondConnectionRequest': respondRequest,
-            'user.undoFriendshipConnection': undoFriendshipConnection,
-            'user.connectionRequestReminder': requestReminder,
-            'user.allRequests':              allRequests,
+            'connection request reminder': requestReminder
                     };
     };
 }
@@ -56,7 +50,7 @@ const sendRequest = async function (data, cb) {
 
         if (memberIsOnline) {
             const fromUser = await UserModel.findById(fromId).lean().select(utils.userColumnsToShow());
-            this.to(toId).emit('user.connectionRequest', { from: fromUser, request: res.request });
+            this.to(toId).emit('new connection request', { from: fromUser, request: res.request });
         } else {
             await getAgenda().now('push:connection-request', { request: res.request });
         }
@@ -79,7 +73,7 @@ const respondRequest = async function (data, cb) {
 
         if (memberIsOnline) {
             const fromUser = await UserModel.findById(fromId).lean().select(utils.userColumnsToShow());
-            this.to(toId).emit('user.connectionRequestResponse', { from: fromUser, request: res.request, response });
+            this.to(toId).emit('connection request response', { from: fromUser, request: res.request, response });
         } else {
             const fromUser = await UserModel.findById(fromId).lean().select(utils.userColumnsToShow());
             await getAgenda().now('push:connection-request-response', { from: fromUser, to: toId, request: res.request, response });
@@ -101,7 +95,7 @@ const cancelRequest = async function (data, cb) {
 
         if (memberIsOnline) {
             const fromUser = await UserModel.findById(fromId).lean().select(utils.userColumnsToShow());
-            this.to(toId).emit('user.connectionRequestCancelled', { from: fromUser, request: res.request });
+            this.to(toId).emit('connection request cancelled', { from: fromUser, request: res.request });
         } else {
             await getAgenda().now('push:connection-request-cancelled', { request: res.request });
         }
@@ -163,7 +157,7 @@ const requestReminder = async function (data, cb) {
 
         if (memberIsOnline) {
             const fromUser = await UserModel.findById(fromId).lean().select(utils.userColumnsToShow());
-            this.to(toId).emit('user.connectionRequestReminder', { from: fromUser, request });
+            this.to(toId).emit('connection request reminder', { from: fromUser, request });
         } else {
             const fromUser = await UserModel.findById(fromId).lean().select(utils.userColumnsToShow());
             await getAgenda().now('push:connection-request-reminder', { from: fromUser, request, to: toId });
