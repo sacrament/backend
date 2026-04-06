@@ -94,22 +94,28 @@ const requestPhoneOtp = async (req, res) => {
     const userAgent = req.headers['user-agent'];
     const clientIp = req.ip || req.connection.remoteAddress;
 
+    console.log(`[requestPhoneOtp] Incoming OTP request - phone: ${phoneNumber}, ip: ${clientIp}, userAgent: ${userAgent}`);
+
     const currentClientCode = process.env.OTP_CLIENT_KEY_CODE;
 
     if (!phoneNumber || phoneNumber.trim() === '') {
+      console.warn('[requestPhoneOtp] Rejected: missing phone number');
       return res.status(400).json({ status: 'error', code: 1011, message: 'Phone number is required' });
     }
 
     if (!/^\+\d{8,15}$/.test(phoneNumber)) {
+      console.warn(`[requestPhoneOtp] Rejected: invalid phone format - ${phoneNumber}`);
       return res.status(400).json({ status: 'error', code: 1012, message: 'Invalid phone number format. Must be in E.164 format (e.g. +14165550000)' });
     }
 
     if (phoneNumber.startsWith('+233') || phoneNumber.startsWith('+4474') || phoneNumber.startsWith('+23')) {
       const code = phoneNumber.startsWith('+233') ? 9002 : phoneNumber.startsWith('+4474') ? 9003 : 9004;
+      console.warn(`[requestPhoneOtp] Rejected: blocked region - phone: ${phoneNumber}, code: ${code}`);
       return res.status(400).json({ status: 'error', code, message: 'Phone number from this region is not allowed' });
     }
 
     if (!signature) {
+      console.warn(`[requestPhoneOtp] Rejected: missing signature header - phone: ${phoneNumber}`);
       return res.status(400).json({ status: 'error', code: 1002, message: 'Missing signature header' });
     }
 
@@ -122,63 +128,76 @@ const requestPhoneOtp = async (req, res) => {
       const expected = crypto.createHmac('sha256', sigSecret).update(`${phoneNumber}:${minute}`).digest('hex');
       const expectedPrev = crypto.createHmac('sha256', sigSecret).update(`${phoneNumber}:${minute - 1}`).digest('hex');
       signatureValid = signature === expected || signature === expectedPrev;
+      console.log(`[requestPhoneOtp] Signature check (HMAC-SHA256) - valid: ${signatureValid}, phone: ${phoneNumber}`);
     } else {
       const legacyExpected = crypto
         .createHash('sha1')
         .update(`VerifySignatureCodeWithWithClientKeyFor=${phoneNumber}`)
         .digest('hex');
       signatureValid = signature === legacyExpected;
+      console.log(`[requestPhoneOtp] Signature check (legacy SHA1) - valid: ${signatureValid}, phone: ${phoneNumber}`);
     }
 
     if (!signatureValid) {
+      console.warn(`[requestPhoneOtp] Rejected: signature verification failed - phone: ${phoneNumber}`);
       return res.status(400).json({ status: 'error', code: 1103, message: 'Signature verification failed' });
     }
 
     if (!clientKeyCode) {
+      console.warn(`[requestPhoneOtp] Rejected: missing client key code - phone: ${phoneNumber}`);
       return res.status(400).json({ status: 'error', code: 1005, message: 'Missing client key code header' });
     }
 
     if (clientKeyCode !== currentClientCode) {
+      console.warn(`[requestPhoneOtp] Rejected: invalid client key code - phone: ${phoneNumber}`);
       return res.status(400).json({ status: 'error', code: 1106, message: 'Invalid client key code' });
     }
 
     // skip for development/testing environments to allow easy OTP requests without strict client headers
-    if (process.env.NODE_ENV === 'production') { 
+    if (process.env.NODE_ENV === 'production') {
       if (userAgent && !isValidUserAgent(userAgent)) {
+        console.warn(`[requestPhoneOtp] Rejected: invalid user agent - phone: ${phoneNumber}, userAgent: ${userAgent}`);
         return res.status(400).json({ status: 'error', code: 1006, message: 'Missing device user agent' });
       }
     } else {
         // return res.status(400).json({ status: 'error', code: 1007, message: 'Invalid device user agent' });
-      
+
     }
 
     const rateLimitKey = `phone_${phoneNumber}`;
     const ipLimitKey = `ip_${clientIp}`;
 
     if (!checkGlobalOtpBudget()) {
+      console.warn(`[requestPhoneOtp] Rejected: global OTP budget exhausted - phone: ${phoneNumber}`);
       return res.status(429).json({ status: 'error', code: 3132, message: 'Service temporarily unavailable, please try again later' });
     }
 
     if (!checkRateLimit(rateLimitKey, 3, 10 * 60).allowed) {
+      console.warn(`[requestPhoneOtp] Rejected: phone rate limit exceeded - phone: ${phoneNumber}`);
       return res.status(429).json({ status: 'error', code: 3129, message: 'Rate limit exceeded for phone number' });
     }
 
     if (!checkRateLimit(ipLimitKey, 5, 24 * 60 * 60).allowed) {
+      console.warn(`[requestPhoneOtp] Rejected: IP rate limit exceeded - ip: ${clientIp}`);
       return res.status(429).json({ status: 'error', code: 9213, message: 'Rate limit exceeded for IP address' });
     }
 
+    console.log(`[requestPhoneOtp] All checks passed, sending OTP - phone: ${phoneNumber}`);
     await authService.requestOtp(phoneNumber, { userAgent, ip: clientIp });
+    console.log(`[requestPhoneOtp] OTP sent successfully - phone: ${phoneNumber}`);
 
     return res.status(202).json({ status: 'success', message: 'OTP sent to phone number', otpSent: true });
 
   } catch (error) {
     if (error.code === 3133) {
+      console.warn(`[requestPhoneOtp] Rate limit error from service: ${error.message}`);
       return res.status(429).json({ status: 'error', code: 3133, message: error.message });
     }
     if (error.httpStatus) {
+      console.warn(`[requestPhoneOtp] Service error - code: ${error.code}, message: ${error.message}`);
       return res.status(error.httpStatus).json({ status: 'error', code: error.code, message: error.message });
     }
-    console.error('Phone OTP request error:', error);
+    console.error('[requestPhoneOtp] Unexpected error:', error);
     return res.status(500).json({ status: 'error', code: 5000, message: 'Internal server error' });
   }
 };
