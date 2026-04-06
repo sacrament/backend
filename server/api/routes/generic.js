@@ -8,6 +8,7 @@ const { newClientToken } = require('../../middleware/verify');
 router.get('/newToken', async (req, res) => {
     try {
         const token = await newClientToken();
+        console.log('Generated new client token');
         res.json({ status: 'success', token });
     } catch (error) {
         console.error('Error generating client token:', error);
