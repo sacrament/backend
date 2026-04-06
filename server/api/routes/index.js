@@ -57,7 +57,7 @@ router.use('/api/generic', genericRoutes);
 // Public — with client token
 router.use('/api/auth',    verifyClientToken, authRoutes);
 router.use('/api/users',   verifyClientToken, userRoutes);
-router.use('/api/calls',   verifyClientToken, callRoutes);
+router.use('/api/call',    verifyClientToken, callRoutes); 
 router.use('/api/devices', verifyClientToken, deviceRoutes);
 // Protected — client token + user token
 router.use('/api/user',         verifyClientToken, verifyToken, userSingularRoutes);

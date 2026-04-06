@@ -29,7 +29,7 @@ module.exports = class User {
             'user.undoFriendshipConnection': undoFriendshipConnection,
             'user.connectionRequestReminder': requestReminder,
             'user.allRequests':              allRequests,
-        };
+                    };
     };
 }
 

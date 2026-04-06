@@ -1,4 +1,4 @@
- 
+const mongoose = require('mongoose');
 const { UserService, ChatService, MessageService } = require('../../services');
 const { getChatService } = require('../services');
 const PushNotificationService = require('../../notifications');
@@ -304,21 +304,41 @@ const blockChat = async function(data, ack) {
  */
 const muteChat = async function(data, ack) {
     try {
-        console.log(`Mute Chat: ${JSON.stringify(data)}`) 
+        console.log(`Mute Chat: ${JSON.stringify(data)}`)
 
-        // this= is the current socket for the logged in user
         const userId = this.user.id;
         const chatId = data.chatId;
         const isMuted = data.status;
 
-        chatService.muteChat(userId, chatId, isMuted).then((result) => { 
-            ack(result)
-        }).catch((err) => { 
-            ack({error: err.message});
+        chatService.muteChat(userId, chatId, isMuted).then(async (result) => {
+            // Since every chat is private (1-to-1), muting the chat also mutes the user.
+            // Keep MutedUser in sync so notification filtering works correctly.
+            try {
+                const members = await chatService.getChatMembers(chatId, false);
+                const opponent = members.find(m => m.user.toString() !== userId);
+                if (opponent) {
+                    const MutedUser = mongoose.model('MutedUser');
+                    const opponentId = opponent.user.toString();
+                    if (isMuted) {
+                        await MutedUser.findOneAndUpdate(
+                            { muter: userId, muted: opponentId },
+                            { muter: userId, muted: opponentId },
+                            { upsert: true }
+                        );
+                    } else {
+                        await MutedUser.findOneAndDelete({ muter: userId, muted: opponentId });
+                    }
+                }
+            } catch (syncErr) {
+                console.error(`muteChat: failed to sync MutedUser: ${syncErr.message}`);
+            }
+            ack(result);
+        }).catch((err) => {
+            ack({ error: err.message });
         });
     } catch (ex) {
         ack(ex.message);
-    } 
+    }
 }
 
 /**
