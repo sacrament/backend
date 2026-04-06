@@ -18,14 +18,18 @@ const getNearbyUsers = async (req, res) => {
         const currentUserId = req.decodedToken.userId;
         const { radius, unit = 'km', preset } = req.query;
 
+        console.log(`[getNearbyUsers] Request - userId: ${currentUserId}, preset: ${preset}, radius: ${radius}, unit: ${unit}`);
+
         const currentUser = await nearbyService.getUserById(currentUserId);
         if (!currentUser) {
+            console.warn(`[getNearbyUsers] User not found - userId: ${currentUserId}`);
             return res.status(404).json({ status: 'error', message: 'User not found', code: 4001 });
         }
 
         const coords = currentUser.location?.point?.coordinates;
 
         if (!coords || coords.length < 2) {
+            console.warn(`[getNearbyUsers] No location data for userId: ${currentUserId}`);
             return res.status(200).json({ status: 'success', data: [], message: 'User has no location data. Please update location first.' });
         }
 
@@ -41,6 +45,8 @@ const getNearbyUsers = async (req, res) => {
         } else {
             radiusInKm = DISTANCE_PRESETS['nearby'];
         }
+
+        console.log(`[getNearbyUsers] Search params - userId: ${currentUserId}, lat: ${searchLat}, lon: ${searchLon}, radiusKm: ${radiusInKm}, interestedIn: ${currentUser.interestedIn}`);
 
         const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000);
 
@@ -59,12 +65,14 @@ const getNearbyUsers = async (req, res) => {
             filters.gender = 'male';
         } else if (currentUser.interestedIn === 'both') {
             filters.gender = { $in: ['male', 'female'] };
-        } 
+        }
 
         const [rawUsers, blockedIds] = await Promise.all([
             nearbyService.findUsersNear(searchLon, searchLat, radiusInKm, filters),
             nearbyService.getBlockedUserIds(currentUserId)
         ]);
+
+        console.log(`[getNearbyUsers] Found ${rawUsers.length} raw users, ${blockedIds.size} blocked - userId: ${currentUserId}`);
 
         const currentGender = currentUser.gender; // 'male' | 'female' | 'other' | null
 
@@ -101,6 +109,8 @@ const getNearbyUsers = async (req, res) => {
             })
             .sort((a, b) => a.distance - b.distance);
 
+        console.log(`[getNearbyUsers] Returning ${response.length} users after filters - userId: ${currentUserId}`);
+
         // await nearbyService.logEncounters(currentUserId, response, searchLat, searchLon);
 
         res.status(200).json({
@@ -110,7 +120,7 @@ const getNearbyUsers = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Error getting nearby users:', error);
+        console.error(`[getNearbyUsers] Unexpected error:`, error);
         res.status(500).json({ status: 'error', message: 'Failed to get nearby users', code: 5000, error: error.message });
     }
 };
