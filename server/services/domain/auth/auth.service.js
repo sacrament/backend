@@ -258,19 +258,20 @@ class AuthService {
      * @param {string} otp
      */
     async _sendOtp(phoneNumber, otp) {
+        const client = twilio(config.TWILIO.ACCOUNTSID, config.TWILIO.AUTHTOKEN);
         try {
-            const client = twilio(config.TWILIO.ACCOUNTSID, config.TWILIO.AUTHTOKEN);
             await client.messages.create({
                 body: `Your Winky code is ${otp}. Valid for 5 minutes. Never share this code.`,
                 from: process.env.TWILIO_PHONE_NUMBER,
                 to: phoneNumber,
             });
-            
-            return true;
         } catch (error) {
-            console.error('Twilio SMS send error:', {stack: error.stack, message: error.message, code: error.code});
-            return false;
-        } 
+            console.error('Twilio SMS send error:', { message: error.message, code: error.code });
+            const err = new Error('Failed to send SMS. Please check your phone number and try again.');
+            err.code = 5001;
+            err.httpStatus = 502;
+            throw err;
+        }
     }
 }
 
