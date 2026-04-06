@@ -6,11 +6,11 @@
 
 const http = require('http');
 const config = require('./utils/config');
-const bootstrap = require('./bootstrap');
+const startup = require('./startup');
 
 // Load database models FIRST (before creating express app)
 console.log('📦 Loading database models...');
-bootstrap.database.loadModels();
+startup.db.loadModels();
 
 // NOW create Express app (which may reference models)
 const express = require('./index');
@@ -22,16 +22,16 @@ async function startServer() {
   try {
     // 2. Connect to database
     console.log('🔌 Connecting to database...');
-    const db = await bootstrap.database.connectDatabase();
+    const db = await startup.db.connectDatabase();
 
-    // 3a. Ensure geospatial index exists before serving requests
+    // 3a+3b. Ensure indexes and start job scheduler in parallel
     const mongoose = require('mongoose');
-    await mongoose.model('Location').ensureIndexes();
+    console.log('⏱ Starting job scheduler and ensuring indexes...');
+    await Promise.all([
+      mongoose.model('Location').ensureIndexes(),
+      startup.agenda.initAgenda(),
+    ]);
     console.log('✓ Location indexes ensured');
-
-    // 3b. Start job scheduler
-    console.log('⏱ Starting job scheduler...');
-    await bootstrap.agenda.initAgenda();
 
     // 3. Create HTTP server
     const server = http.createServer(express);
@@ -39,13 +39,13 @@ async function startServer() {
     // 4. Initialize Socket.IO
     console.log('⚡ Initializing Socket.IO...');
     /** @type {import("socket.io").Server} */
-    const io = await bootstrap.socket.initializeSocket(server); 
+    const io = await startup.socket.initializeSocket(server);
 
     // 5. Setup error handlers
-    bootstrap.errors.setupErrorHandlers(server);
+    startup.errors.setupErrorHandlers(server);
 
     // 6. Setup graceful shutdown
-    bootstrap.shutdown.setupGracefulShutdown(server, io, db);
+    startup.shutdown.setupGracefulShutdown(server, io, db);
 
     // 7. Start listening
     console.log(`🚀 Starting server on port ${config.PORT}...`);

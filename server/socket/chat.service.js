@@ -1,4 +1,4 @@
-const { getIO } = require('../bootstrap/io');
+const { getIO } = require('./io');
 
 module.exports = class ChatService {
     /**

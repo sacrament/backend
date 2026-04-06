@@ -1,6 +1,6 @@
 /**
  * Server Error Handlers Module
- * 
+ *
  * Centralized error handling for HTTP server events
  */
 

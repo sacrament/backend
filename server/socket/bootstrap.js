@@ -1,6 +1,6 @@
 /**
  * Socket.IO Initialization Module
- * 
+ *
  * Configures Socket.IO with CORS, Redis adapter for production
  */
 

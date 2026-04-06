@@ -13,10 +13,13 @@ const CallHistory = new Schema({
     token: { type: String, default: null },
     other: { type: String, default: null },
     duration: { type: String, default: null },
-    // Call type: voice or video
+    // Call type: audio or video
     callType: { type: String, enum: ['voice', 'video'], default: 'voice' },
     // Missed call tracking for rate limiting
-    missedCallCount: { type: Number, default: 0 }
+    missedCallCount: { type: Number, default: 0 },
+    // Network and device metadata
+    ipAddress: { type: String, default: null },
+    networkInfo: { type: String, default: null }  // e.g. "5G", "4G", "LTE", "WiFi", "unknown"
 });
 
 // Compound indexes for efficient queries

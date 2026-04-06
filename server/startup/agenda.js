@@ -5,7 +5,7 @@
  * Import getAgenda() anywhere to enqueue or schedule jobs.
  *
  * Usage:
- *   const { getAgenda } = require('../bootstrap/agenda');
+ *   const { getAgenda } = require('../startup/agenda');
  *
  *   await getAgenda().now('push:connection-request', { request });
  *   await getAgenda().schedule('in 10 minutes', 'push:request-reminder', { ... });

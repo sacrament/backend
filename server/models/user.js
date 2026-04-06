@@ -72,6 +72,12 @@ const User = new Schema({
         userId:   { type: Schema.Types.ObjectId, ref: 'User' },
         hiddenAt: { type: Date, default: Date.now }
     }],
+    // Timed presence beacon — user broadcasts location for a limited period
+    presenceBeacon: {
+        latitude:  { type: Number, default: null },
+        longitude: { type: Number, default: null },
+        expiresAt: { type: Date, default: null },
+    },
     deleted: { type: Boolean, default: false },
     deletedOn: { type: Date, default: null },
     deletedReason: { type: String, default: "No reason"}

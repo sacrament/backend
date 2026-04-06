@@ -462,6 +462,7 @@ function formatUserResponse(user) {
     status:       user.status   ?? null,
     name:         user.name     ?? null,
     email:        user.email    ?? null,
+    phone:        phoneNumber,
     phoneNumber,
     appleId:      user.appleId  ?? null,
     googleId:     user.googleId ?? null,

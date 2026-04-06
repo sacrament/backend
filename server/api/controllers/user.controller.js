@@ -127,6 +127,21 @@ const unblockUser = async (req, res) => {
 };
 
 /**
+ * Unblock a User by URL param
+ * DELETE /users/blocks/:userId
+ */
+const unblockUserById = async (req, res) => {
+    const { userId } = req.params;
+
+    try {
+        await userService.unblockUser(userId, req.decodedToken);
+        return res.status(200).json({ unblocked: true });
+    } catch (error) {
+        return res.status(500).json({ status: 'error', message: error.message });
+    }
+};
+
+/**
  * Get Content Storage
  * GET /users/content
  */
@@ -163,6 +178,40 @@ const getUnreadMessagesForUser = async (req, res) => {
         return res.status(200).json({ status: 'success', result });
     } catch (error) {
         return res.status(400).json({ status: 'error', message: error.message });
+    }
+};
+
+/**
+ * Send a Connection Request
+ * POST /users/sendConnectionRequest
+ */
+const sendConnectionRequest = async (req, res) => {
+    try {
+        const { to } = req.body;
+        if (!to) return res.status(400).json({ status: 'error', message: 'to is required' });
+
+        const result = await userService.sendConnectionRequest(req.decodedToken.userId, to);
+        return res.status(201).json({ status: 'success', request: result.request });
+    } catch (error) {
+        const status = error.message === 'Already connected' ? 409 : 500;
+        return res.status(status).json({ status: 'error', message: error.message });
+    }
+};
+
+/**
+ * Cancel a Connection Request
+ * POST /users/cancelConnectionRequest
+ */
+const cancelConnectionRequest = async (req, res) => {
+    try {
+        const { to } = req.body;
+        if (!to) return res.status(400).json({ status: 'error', message: 'to is required' });
+
+        const result = await userService.cancelConnectionRequest(req.decodedToken.userId, to);
+        return res.status(200).json({ status: 'success', request: result.request });
+    } catch (error) {
+        const status = error.message === 'No request found' ? 404 : 500;
+        return res.status(status).json({ status: 'error', message: error.message });
     }
 };
 
@@ -320,7 +369,10 @@ module.exports = {
     getBlockedUsers,
     blockUser,
     unblockUser,
+    unblockUserById,
     contentStorage,
+    sendConnectionRequest,
+    cancelConnectionRequest,
     deleteContentById,
     getUnreadMessagesForUser,
     respondConnectionRequest,

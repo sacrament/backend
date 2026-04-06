@@ -66,9 +66,19 @@ const getNearbyUsers = async (req, res) => {
             nearbyService.getBlockedUserIds(currentUserId)
         ]);
 
-        const now = new Date();
+        const currentGender = currentUser.gender; // 'male' | 'female' | 'other' | null
+
         const response = rawUsers
             .filter(u => !blockedIds.has(u._id.toString()))
+            // Respect each user's visibility preferences:
+            // womenOnly=true  → only female viewers can see this user
+            // menOnly=true    → only male viewers can see this user
+            .filter(u => {
+                const prefs = u.visibilityPreferences || {};
+                if (prefs.womenOnly && currentGender !== 'female') return false;
+                if (prefs.menOnly   && currentGender !== 'male')   return false;
+                return true;
+            })
             .map(u => {
                 const distanceKm = u.distanceKm;
 

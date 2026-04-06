@@ -15,9 +15,12 @@ const {
     getBlockedUsers,
     blockUser,
     unblockUser,
+    unblockUserById,
     contentStorage,
     deleteContentById,
     getUnreadMessagesForUser,
+    sendConnectionRequest,
+    cancelConnectionRequest,
     respondConnectionRequest,
     getConnectionRequests,
     checkConnectionRequest,
@@ -37,6 +40,9 @@ router.post('/block', verifyToken, blockUser);
 // POST /users/unblock
 router.post('/unblock', verifyToken, unblockUser);
 
+// DELETE /users/blocks/:userId
+router.delete('/blocks/:userId', verifyToken, unblockUserById);
+
 // POST /users/send/sms
 router.post('/send/sms', verifyToken, sendSMSToUsers);
 
@@ -48,6 +54,12 @@ router.get('/content', verifyToken, contentStorage);
 
 // DELETE /users/content/single
 router.delete('/content/single', verifyToken, deleteContentById);
+
+// POST /users/sendConnectionRequest
+router.post('/sendConnectionRequest', verifyToken, sendConnectionRequest);
+
+// POST /users/cancelConnectionRequest
+router.post('/cancelConnectionRequest', verifyToken, cancelConnectionRequest);
 
 // GET  /users/connectionRequests
 router.get('/connectionRequests', verifyToken, getConnectionRequests);

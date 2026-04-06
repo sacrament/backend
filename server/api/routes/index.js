@@ -4,16 +4,17 @@ const { ipKeyGenerator } = rateLimit;
 const { verifyToken, verifyClientToken } = require('../../middleware/verify');
 
 // Route modules
-const authRoutes    = require('./auth');
-const userRoutes    = require('./user');
-const meRoutes      = require('./me');
-const nearbyRoutes  = require('./nearby');
-const chatRoutes    = require('./chat');
-const callRoutes    = require('./call');
-const deviceRoutes  = require('./device');
-const supportRoutes = require('./support');
-const genericRoutes = require('./generic');
-const e2eeRoutes    = require('./e2ee');
+const authRoutes         = require('./auth');
+const userRoutes         = require('./user');
+const userSingularRoutes = require('./user.singular');
+const meRoutes           = require('./me');
+const nearbyRoutes       = require('./nearby');
+const chatRoutes         = require('./chat');
+const callRoutes         = require('./call');
+const deviceRoutes       = require('./device');
+const supportRoutes      = require('./support');
+const genericRoutes      = require('./generic');
+const e2eeRoutes         = require('./e2ee');
 
 // ─── Rate limiters ────────────────────────────────────────────────────────────
 
@@ -56,9 +57,10 @@ router.use('/api/generic', genericRoutes);
 // Public — with client token
 router.use('/api/auth',    verifyClientToken, authRoutes);
 router.use('/api/users',   verifyClientToken, userRoutes);
-router.use('/api/calls',   verifyClientToken, callRoutes);
+router.use('/api/call',    verifyClientToken, callRoutes); 
 router.use('/api/devices', verifyClientToken, deviceRoutes);
 // Protected — client token + user token
+router.use('/api/user',         verifyClientToken, verifyToken, userSingularRoutes);
 router.use('/api/me',           verifyClientToken, verifyToken, meRoutes);
 router.use('/api/nearby', verifyClientToken, verifyToken, nearbyRoutes);
 router.use('/api/chat',         verifyClientToken, verifyToken, chatRoutes);

@@ -1,4 +1,4 @@
- 
+const mongoose = require('mongoose');
 const { UserService, ChatService, MessageService } = require('../../services');
 const { getChatService } = require('../services');
 const PushNotificationService = require('../../notifications');
@@ -15,11 +15,12 @@ module.exports = class Chat {
     constructor() {
         chatSocketService = getChatService();
         this.handler = {
+            // ── Legacy event names (kept for backwards compatibility) ──────────
             'new chat': newChat,
             'new message': newMessage,
             'react on message': reactOnMessage,
             'delete message': deleteMessage,
-            'delete chat': deleteChat, 
+            'delete chat': deleteChat,
             'favorite chat': favoriteChat,
             'block chat': blockChat,
             'mute chat': muteChat,
@@ -27,7 +28,6 @@ module.exports = class Chat {
             'message received': messageDelivered,
             'chat messages': messages,
             'all chats': allChats,
-            // Set Typing
             'start typing': startTyping,
             'stop typing': stopTyping,
             'total unread chats': totalUnreadChats,
@@ -113,7 +113,7 @@ const deleteChat = async function(data, ack) {
 
                 if (isUserConnected) {
                     this.to(to).emit('chat deleted', {
-                        chat: result.chat
+                        chat: { id: result.chat._id }
                     });
                 } else {
                     // if (!member.options.muted) { 
@@ -288,21 +288,41 @@ const blockChat = async function(data, ack) {
  */
 const muteChat = async function(data, ack) {
     try {
-        console.log(`Mute Chat: ${JSON.stringify(data)}`) 
+        console.log(`Mute Chat: ${JSON.stringify(data)}`)
 
-        // this= is the current socket for the logged in user
         const userId = this.user.id;
         const chatId = data.chatId;
         const isMuted = data.status;
 
-        chatService.muteChat(userId, chatId, isMuted).then((result) => { 
-            ack(result)
-        }).catch((err) => { 
-            ack({error: err.message});
+        chatService.muteChat(userId, chatId, isMuted).then(async (result) => {
+            // Since every chat is private (1-to-1), muting the chat also mutes the user.
+            // Keep MutedUser in sync so notification filtering works correctly.
+            try {
+                const members = await chatService.getChatMembers(chatId, false);
+                const opponent = members.find(m => m.user.toString() !== userId);
+                if (opponent) {
+                    const MutedUser = mongoose.model('MutedUser');
+                    const opponentId = opponent.user.toString();
+                    if (isMuted) {
+                        await MutedUser.findOneAndUpdate(
+                            { muter: userId, muted: opponentId },
+                            { muter: userId, muted: opponentId },
+                            { upsert: true }
+                        );
+                    } else {
+                        await MutedUser.findOneAndDelete({ muter: userId, muted: opponentId });
+                    }
+                }
+            } catch (syncErr) {
+                console.error(`muteChat: failed to sync MutedUser: ${syncErr.message}`);
+            }
+            ack(result);
+        }).catch((err) => {
+            ack({ error: err.message });
         });
     } catch (ex) {
         ack(ex.message);
-    } 
+    }
 }
 
 /**
@@ -357,8 +377,8 @@ const startTyping = async function(data, ack) {
             if (memberIsOnline) {
                 // Send the message to online users 
                 this.to(member.toString()).emit('start typing', {
-                    user: typier,
-                    chatId: chatId
+                    chatId: chatId,
+                    user: typier
                 });
 
                 receivers.push(member.toString());
@@ -395,8 +415,8 @@ const stopTyping = async function(data, ack) {
             if (memberIsOnline) {
                 // Send the message to online users 
                 this.to(member.toString()).emit('stop typing', {
-                    user: from,
-                    chatId: chatId
+                    chatId: chatId,
+                    user: from
                 });
 
                 receivers.push(member.toString());
@@ -679,12 +699,11 @@ const reactOnMessage = async function(data, ack) {
                 if (memberIsOnline) {
                     // Send the message to online users
                     this.to(to).emit('message reaction', {
-                        message: { 
-                            id: message._id
-                        },
-                        reaction: result.reaction,
-                        userFrom: userFrom
-                    }); 
+                        reaction: {
+                            message: { id: message._id },
+                            kind: result.reaction
+                        }
+                    });
                 } else {
                     /// Offline people. Send a push notification
                     // if (!member.options.muted) {
@@ -728,12 +747,12 @@ const reactOnMessage = async function(data, ack) {
  * TODO: Need  to finish the push notifiation
  */
 const deleteMessage = async function(data, ack) {
-    try { 
+    try {
         console.log(`Delete message: ${data.messageId}`)
         var offlineReceivers = [];
-        // Instantiate a message service 
+        const from = this.user;
 
-        messageService.deleteMessage(data.messageId, from.id, data.forEveryone).then(async (result) => { 
+        messageService.deleteMessage(data.messageId, from.id, data.forEveryone).then(async (result) => {
             const message = result.message; 
             const res = await chatService.updateChatWithLastMessage(message.chatId);
             const chat = res.chat;
@@ -757,13 +776,10 @@ const deleteMessage = async function(data, ack) {
                     if (memberIsOnline) {
                         // Send the message to online users
                         this.to(to).emit('message deleted', {
-                            message: {
-                                id: message._id,
-                                forEveryone: true,
-                                dateDeleted: message.deleted.date,
-                                from: sender,
-                                chat: chat
-                            }
+                            id: message._id,
+                            forEveryone: true,
+                            dateDeleted: message.deleted?.date,
+                            chat: { id: chat._id }
                         });
                     } else {
                         /// Offline people. Send a push notification
@@ -1002,12 +1018,11 @@ const markConversationSeen = async function(data, ack) {
  * @param {*} data
  * @param {*} ack
  */
-const totalUnreadChats = async function(ack) {
+const totalUnreadChats = async function(data, ack) {
     try {
         console.log(`Get total unread chats for user`)
 
-        const from = this.user.id; 
-        // ~Get chat members
+        const from = this.user.id;
         const total = await chatService.countTotalUnreadChatsForUser(from);
 
         ack({ totalUnread: total });

@@ -13,32 +13,53 @@ module.exports = class Calls {
         chatSocketService = getChatService();
 
         this.handler = {
+            // ── Legacy event names ────────────────────────────────────────────
             'send call request':    sendCallRequest,
             'respond call request': respondCallRequest,
             'cancel call request':  cancelCallRequest,
             'call':                 initiateCall,
-            'end':                  endCall,
+            'end':                  endCall, 
+            'create room':     createRoom,
         };
     }
 };
 
 /**
  * Caller signals intent to call another user.
- * Params: { requestId, userId, chatId, mode: "audio"|"video" }
+ * Params: { requestId, userId, chatId, mode: "audio"|"video", networkType?: string }
+ *
+ * networkType is provided by the client (e.g. "5G", "4G", "LTE", "WiFi").
+ * ipAddress is captured server-side from the socket handshake.
  */
 const sendCallRequest = async function(data, ack) {
     try {
-        const { requestId, userId: calleeId, chatId, mode } = data;
+        const { requestId, userId: calleeId, chatId, mode, networkType } = data;
         const callerId = this.user.id;
+        const callType = mode === 'video' ? 'video' : 'voice';
 
-        pendingRequests.set(requestId, { callerId, calleeId, chatId, mode });
+        // Capture caller IP from socket handshake (falls back through proxy headers)
+        const ipAddress =
+            this.handshake.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
+            this.handshake.address ||
+            null;
+
+        const callService = new CallService();
+        const pendingCall = await callService.recordPendingCall({
+            from: callerId,
+            to: calleeId,
+            callType,
+            ipAddress,
+            networkInfo: networkType || null
+        });
+
+        pendingRequests.set(requestId, { callerId, calleeId, chatId, mode, ipAddress, networkInfo: networkType || null, pendingCallId: pendingCall._id.toString() });
 
         const userService = new UserService();
         const callerObject = await userService.getUserById(callerId, true);
         const isCalleeOnline = await chatSocketService.isUserConnected(calleeId);
 
         if (isCalleeOnline) {
-            this.to(calleeId).emit('incoming call request', { requestId, from: callerObject, chatId, mode });
+            this.to(calleeId).emit('call request', { requestId, from: callerObject, chatId, mode });
         } else {
             const calleeObject = await userService.getUserById(calleeId, true);
             if (calleeObject.device?.type === 'ANDROID') {
@@ -77,23 +98,31 @@ const respondCallRequest = async function(data, ack) {
             return ack({ error: 'Call request not found or expired' });
         }
 
-        const { callerId, mode } = request;
+        const { callerId, mode, ipAddress, networkInfo, pendingCallId } = request;
         pendingRequests.delete(requestId);
 
+        const callService = new CallService();
+
         if (status === 'declined') {
-            this.to(callerId).emit('call request declined', { requestId });
+            if (pendingCallId) {
+                await callService.updateCallStatusById(pendingCallId, 'rejected').catch(() => {});
+            }
+            this.to(callerId).emit('call request response', { requestId, chatId: request.chatId, status: 'declined' });
             return ack({ success: true });
         }
 
         // Accepted — create Twilio room; token returned is for the caller
-        const callService = new CallService();
         const callType = mode === 'video' ? 'video' : 'voice';
-        const { call, token: callerToken } = await callService.createCallRoom(callerId, calleeId, callType);
+        const meta = { ipAddress, networkInfo };
+        const { call, token: callerToken } = await callService.createCallRoom(callerId, calleeId, callType, meta);
 
         // Generate a separate token for the callee
         const { jwt: calleeToken } = await callService.getAccessToken(calleeId);
 
-        this.to(callerId).emit('call request accepted', {
+        this.to(callerId).emit('call request response', {
+            requestId,
+            chatId: request.chatId,
+            status: 'accepted',
             callId: call.sid,
             roomName: call.uniqueName,
             token: callerToken,
@@ -123,8 +152,14 @@ const cancelCallRequest = async function(data, ack) {
         const request = pendingRequests.get(requestId);
 
         if (request) {
-            this.to(request.calleeId).emit('call request cancelled', { requestId });
+            this.to(request.calleeId).emit('call request cancelled', { requestId, chatId: request.chatId });
             pendingRequests.delete(requestId);
+
+            // Mark the pending DB record as missed (caller cancelled before callee responded)
+            if (request.pendingCallId) {
+                const callService = new CallService();
+                await callService.markCallAsMissed(request.pendingCallId).catch(() => {});
+            }
         }
 
         ack({ success: true });
@@ -214,6 +249,33 @@ const endCall = async function(data, ack) {
         }
     } catch (ex) {
         console.error(`end call error: ${ex.message}`);
+        ack({ error: ex.message });
+    }
+};
+
+/**
+ * Create a Twilio room on behalf of the caller without a prior request/response handshake.
+ * Params: { userId } — the other party's userId
+ * Ack: { callId, roomName, token, mode }
+ */
+const createRoom = async function(data, ack) {
+    try {
+        const { userId: calleeId, mode = 'audio', networkType } = data;
+        const callerId = this.user.id;
+
+        const ipAddress =
+            this.handshake.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
+            this.handshake.address ||
+            null;
+
+        const callService = new CallService();
+        const callType = mode === 'video' ? 'video' : 'voice';
+        const meta = { ipAddress, networkInfo: networkType || null };
+        const { call, token } = await callService.createCallRoom(callerId, calleeId, callType, meta);
+
+        ack({ success: true, callId: call.sid, roomName: call.uniqueName, token, mode });
+    } catch (ex) {
+        console.error(`create room error: ${ex.message}`);
         ack({ error: ex.message });
     }
 };

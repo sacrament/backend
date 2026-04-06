@@ -6,7 +6,7 @@
  * and handles retries automatically.
  *
  * Enqueue from anywhere:
- *   const { getAgenda } = require('../bootstrap/agenda');
+ *   const { getAgenda } = require('../startup/agenda');
  *
  *   await getAgenda().now('push:connection-request', { request });
  *   await getAgenda().now('push:connection-request-response', { from, to, request, response });

@@ -9,7 +9,7 @@ const UserRequestModel = require('../../../models/user.request').UserRequest;
 const UserConnectStatus = require('../../../models/user.connect').UserConnectStatus;
 
 const utils = require('../../../utils/index');
-const { getIO } = require('../../../bootstrap/io');
+const { getIO } = require('../../../socket/io');
 const _ = require('lodash');
 
 class UserService {
