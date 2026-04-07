@@ -2,6 +2,7 @@
 
 const NearbyService = require('../../services/domain/nearby/nearby.service');
 const nearbyService = new NearbyService();
+const logger = require('../../utils/logger');
 
 const DISTANCE_PRESETS = {
     'here':     75   * 0.0003048,  // 75 feet → km
@@ -18,18 +19,18 @@ const getNearbyUsers = async (req, res) => {
         const currentUserId = req.decodedToken.userId;
         const { radius, unit = 'km', preset } = req.query;
 
-        console.log(`[getNearbyUsers] Request - userId: ${currentUserId}, preset: ${preset}, radius: ${radius}, unit: ${unit}`);
+        logger.info(`[getNearbyUsers] Request - userId: ${currentUserId}, preset: ${preset}, radius: ${radius}, unit: ${unit}`);
 
         const currentUser = await nearbyService.getUserById(currentUserId);
         if (!currentUser) {
-            console.warn(`[getNearbyUsers] User not found - userId: ${currentUserId}`);
+            logger.warn(`[getNearbyUsers] User not found - userId: ${currentUserId}`);
             return res.status(404).json({ status: 'error', message: 'User not found', code: 4001 });
         }
 
         const coords = currentUser.location?.point?.coordinates;
 
         if (!coords || coords.length < 2) {
-            console.warn(`[getNearbyUsers] No location data for userId: ${currentUserId}`);
+            logger.warn(`[getNearbyUsers] No location data for userId: ${currentUserId}`);
             return res.status(200).json({ status: 'success', data: [], message: 'User has no location data. Please update location first.' });
         }
 
@@ -46,7 +47,7 @@ const getNearbyUsers = async (req, res) => {
             radiusInKm = DISTANCE_PRESETS['nearby'];
         }
 
-        console.log(`[getNearbyUsers] Search params - userId: ${currentUserId}, lat: ${searchLat}, lon: ${searchLon}, radiusKm: ${radiusInKm}, interestedIn: ${currentUser.interestedIn}`);
+        logger.info(`[getNearbyUsers] Search params - userId: ${currentUserId}, lat: ${searchLat}, lon: ${searchLon}, radiusKm: ${radiusInKm}, interestedIn: ${currentUser.interestedIn}`);
 
         const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000);
 
@@ -72,7 +73,7 @@ const getNearbyUsers = async (req, res) => {
             nearbyService.getBlockedUserIds(currentUserId)
         ]);
 
-        console.log(`[getNearbyUsers] Found ${rawUsers.length} raw users, ${blockedIds.size} blocked - userId: ${currentUserId}`);
+        logger.info(`[getNearbyUsers] Found ${rawUsers.length} raw users, ${blockedIds.size} blocked - userId: ${currentUserId}`);
 
         const currentGender = currentUser.gender; // 'male' | 'female' | 'other' | null
 
@@ -109,7 +110,7 @@ const getNearbyUsers = async (req, res) => {
             })
             .sort((a, b) => a.distance - b.distance);
 
-        console.log(`[getNearbyUsers] Returning ${response.length} users after filters - userId: ${currentUserId}`);
+        logger.info(`[getNearbyUsers] Returning ${response.length} users after filters - userId: ${currentUserId}`);
 
         // await nearbyService.logEncounters(currentUserId, response, searchLat, searchLon);
 
@@ -120,7 +121,7 @@ const getNearbyUsers = async (req, res) => {
         });
 
     } catch (error) {
-        console.error(`[getNearbyUsers] Unexpected error:`, error);
+        logger.error(`[getNearbyUsers] Unexpected error:`, error);
         res.status(500).json({ status: 'error', message: 'Failed to get nearby users', code: 5000, error: error.message });
     }
 };
@@ -130,7 +131,7 @@ const getNearbyUsers = async (req, res) => {
  */
 const getNearbyUsersHistory = async (req, res) => {
     try {
-        const currentUserId = req.decodedToken.userId; 
+        const currentUserId = req.decodedToken.userId;
 
         const currentUser = await nearbyService.getUserById(currentUserId);
         if (!currentUser) {
@@ -145,7 +146,7 @@ const getNearbyUsersHistory = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Error getting nearby users history:', error);
+        logger.error('Error getting nearby users history:', error);
         res.status(500).json({ status: 'error', message: 'Failed to get nearby users history', code: 5000 });
     }
 };
@@ -157,7 +158,7 @@ const getNearbyUserSpecificHistory = async (req, res) => {
     try {
         const currentUserId = req.decodedToken.userId;
         const { userId } = req.params;
- 
+
         const targetUser = await nearbyService.getUserById(userId);
         if (!targetUser) {
             return res.status(404).json({ status: 'error', message: 'User not found', code: 4001 });
@@ -185,7 +186,7 @@ const getNearbyUserSpecificHistory = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Error getting specific nearby user history:', error);
+        logger.error('Error getting specific nearby user history:', error);
         res.status(500).json({ status: 'error', message: 'Failed to get nearby user history', code: 5000 });
     }
 };
@@ -197,7 +198,7 @@ const deleteNearbyUserHistory = async (req, res) => {
     try {
         const currentUserId = req.decodedToken.userId;
         const { userId } = req.params;
- 
+
         const targetUser = await nearbyService.getUserById(userId);
         if (!targetUser) {
             return res.status(404).json({ status: 'error', message: 'User not found', code: 4001 });
@@ -208,7 +209,7 @@ const deleteNearbyUserHistory = async (req, res) => {
         res.status(204).send();
 
     } catch (error) {
-        console.error('Error deleting nearby user history:', error);
+        logger.error('Error deleting nearby user history:', error);
         res.status(500).json({ status: 'error', message: 'Failed to delete nearby user history', code: 5000 });
     }
 };
@@ -228,6 +229,7 @@ const getDistancePresets = async (req, res) => {
             }
         });
     } catch (error) {
+        logger.error('Error getting distance presets:', error);
         res.status(500).json({ status: 'error', message: 'Failed to get distance presets', code: 5000 });
     }
 };

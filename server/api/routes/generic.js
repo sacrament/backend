@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
+const logger = require('../../utils/logger');
 
 const { newClientToken } = require('../../middleware/verify');
 
@@ -8,10 +9,10 @@ const { newClientToken } = require('../../middleware/verify');
 router.get('/newToken', async (req, res) => {
     try {
         const token = await newClientToken();
-        console.log('Generated new client token');
+        logger.info('Generated new client token');
         res.json({ status: 'success', token });
     } catch (error) {
-        console.error('Error generating client token:', error);
+        logger.error('Error generating client token:', error);
         res.status(500).json({ status: 'error', message: 'Failed to generate client token' });
     }
 });
@@ -28,7 +29,7 @@ router.get('/rules', async (req, res) => {
             cards: doc.cards
         });
     } catch (error) {
-        console.error('Error fetching Winky rules:', error);
+        logger.error('Error fetching Winky rules:', error);
         res.status(500).json({ status: 'error', message: 'Failed to fetch rules' });
     }
 });
@@ -58,7 +59,7 @@ router.get('/content', async (req, res) => {
                 : { lastUpdated: null, sections: [] }
         });
     } catch (error) {
-        console.error('Error fetching legal content:', error);
+        logger.error('Error fetching legal content:', error);
         res.status(500).json({ status: 'error', message: 'Failed to fetch content' });
     }
 });

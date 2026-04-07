@@ -7,6 +7,7 @@
 const mongoose = require('mongoose');
 const UserService = require('../../services/domain/user/user.service');
 const ReportService = require('../../services/domain/report/report.service');
+const logger = require('../../utils/logger');
 
 const userService = new UserService();
 const reportService = new ReportService();
@@ -30,7 +31,7 @@ const muteUser = async (req, res) => {
         );
         return res.status(200).json({ success: true, mutedAt: new Date().toISOString() });
     } catch (error) {
-        console.error('Mute user error:', error);
+        logger.error('Mute user error:', error);
         return res.status(500).json({ status: 'error', message: 'Failed to mute user' });
     }
 };
@@ -46,7 +47,7 @@ const unmuteUser = async (req, res) => {
         await MutedUser.findOneAndDelete({ muter: req.decodedToken.userId, muted: userId });
         return res.status(200).json({ success: true });
     } catch (error) {
-        console.error('Unmute user error:', error);
+        logger.error('Unmute user error:', error);
         return res.status(500).json({ status: 'error', message: 'Failed to unmute user' });
     }
 };
@@ -67,7 +68,7 @@ const getMutedUsers = async (req, res) => {
         }));
         return res.status(200).json(data);
     } catch (error) {
-        console.error('Get muted users error:', error);
+        logger.error('Get muted users error:', error);
         return res.status(500).json({ status: 'error', message: 'Failed to get muted users' });
     }
 };
@@ -92,7 +93,7 @@ const disappearFromUser = async (req, res) => {
         );
         return res.status(200).json({ success: true, disappearedAt: new Date().toISOString() });
     } catch (error) {
-        console.error('Disappear from user error:', error);
+        logger.error('Disappear from user error:', error);
         return res.status(500).json({ status: 'error', message: 'Failed to disappear from user' });
     }
 };
@@ -108,7 +109,7 @@ const undisappearFromUser = async (req, res) => {
         await DisappearedUser.findOneAndDelete({ user: req.decodedToken.userId, target: userId });
         return res.status(200).json({ success: true });
     } catch (error) {
-        console.error('Undisappear from user error:', error);
+        logger.error('Undisappear from user error:', error);
         return res.status(500).json({ status: 'error', message: 'Failed to un-disappear from user' });
     }
 };
@@ -129,7 +130,7 @@ const getDisappearedUsers = async (req, res) => {
         }));
         return res.status(200).json(data);
     } catch (error) {
-        console.error('Get disappeared users error:', error);
+        logger.error('Get disappeared users error:', error);
         return res.status(500).json({ status: 'error', message: 'Failed to get disappeared users' });
     }
 };
@@ -165,7 +166,7 @@ const setPresence = async (req, res) => {
         });
         return res.status(200).json({ success: true, expiresAt: expiresAt.toISOString() });
     } catch (error) {
-        console.error('Set presence error:', error);
+        logger.error('Set presence error:', error);
         return res.status(500).json({ status: 'error', message: 'Failed to set presence' });
     }
 };
@@ -189,7 +190,7 @@ const getPresenceStatus = async (req, res) => {
             expiresAt: beacon?.expiresAt?.toISOString() ?? null,
         });
     } catch (error) {
-        console.error('Get presence status error:', error);
+        logger.error('Get presence status error:', error);
         return res.status(500).json({ status: 'error', message: 'Failed to get presence status' });
     }
 };
@@ -205,7 +206,7 @@ const clearPresence = async (req, res) => {
         });
         return res.status(200).json({ success: true });
     } catch (error) {
-        console.error('Clear presence error:', error);
+        logger.error('Clear presence error:', error);
         return res.status(500).json({ status: 'error', message: 'Failed to clear presence' });
     }
 };
@@ -228,7 +229,7 @@ const getMyReports = async (req, res) => {
         }));
         return res.status(200).json(data);
     } catch (error) {
-        console.error('Get my reports error:', error);
+        logger.error('Get my reports error:', error);
         return res.status(500).json({ status: 'error', message: 'Failed to get reports' });
     }
 };
@@ -270,7 +271,7 @@ const getUserFlags = async (req, res) => {
             restrictions,
         });
     } catch (error) {
-        console.error('Get user flags error:', error);
+        logger.error('Get user flags error:', error);
         return res.status(500).json({ status: 'error', message: 'Failed to get user flags' });
     }
 };
@@ -287,7 +288,7 @@ const deleteAccount = async (req, res) => {
         return res.status(200).json({ status: 'success', message: 'Account deleted successfully' });
     } catch (error) {
         if (error.message === 'User not found') return res.status(404).json({ status: 'error', message: 'User not found' });
-        console.error('Delete account error:', error);
+        logger.error('Delete account error:', error);
         return res.status(500).json({ status: 'error', message: 'Failed to delete account' });
     }
 };

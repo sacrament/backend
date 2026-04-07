@@ -1,5 +1,6 @@
 const DeviceService = require('../../services/domain/device/device.service');
 const deviceService = new DeviceService();
+const logger = require('../../utils/logger');
 
 /**
  * POST /api/devices
@@ -17,6 +18,7 @@ const newDevice = async (req, res) => {
 
         return res.status(201).json({ status: 'success', device });
     } catch (ex) {
+        logger.error('New device error:', ex);
         return res.status(500).json({ status: 'error', message: ex.message });
     }
 };
@@ -49,6 +51,7 @@ const updateDevice = async (req, res) => {
         if (ex.message === 'Device not found') {
             return res.status(404).json({ status: 'error', message: ex.message });
         }
+        logger.error('Update device error:', ex);
         return res.status(500).json({ status: 'error', message: ex.message });
     }
 };
@@ -64,6 +67,7 @@ const getDevices = async (req, res) => {
 
         return res.status(200).json({ status: 'success', devices });
     } catch (ex) {
+        logger.error('Get devices error:', ex);
         return res.status(500).json({ status: 'error', message: ex.message });
     }
 };
@@ -85,6 +89,7 @@ const enableDevice = async (req, res) => {
         if (ex.message === 'Device not found') {
             return res.status(404).json({ status: 'error', message: ex.message });
         }
+        logger.error('Enable device error:', ex);
         return res.status(500).json({ status: 'error', message: ex.message });
     }
 };
@@ -105,6 +110,7 @@ const disableDevice = async (req, res) => {
         if (ex.message === 'Device not found') {
             return res.status(404).json({ status: 'error', message: ex.message });
         }
+        logger.error('Disable device error:', ex);
         return res.status(500).json({ status: 'error', message: ex.message });
     }
 };
@@ -130,6 +136,7 @@ const updateToken = async (req, res) => {
         if (ex.message === 'Device not found') {
             return res.status(404).json({ status: 'error', message: ex.message });
         }
+        logger.error('Update token error:', ex);
         return res.status(500).json({ status: 'error', message: ex.message });
     }
 };
@@ -155,6 +162,7 @@ const updateState = async (req, res) => {
         if (ex.message === 'Device not found') {
             return res.status(404).json({ status: 'error', message: ex.message });
         }
+        logger.error('Update device state error:', ex);
         return res.status(500).json({ status: 'error', message: ex.message });
     }
 };
