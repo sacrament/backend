@@ -4,6 +4,7 @@ const ReportService = require('../../services/domain/report/report.service');
 const userService = new UserService();
 const chatService = new ChatService();
 const reportService = new ReportService();
+const logger = require('../../utils/logger');
 
 /**
  * Search Users by Name
@@ -24,7 +25,7 @@ const searchUsers = async (req, res) => {
             totalPages
         });
     } catch (error) {
-        console.error('Search users error:', error);
+        logger.error('Search users error:', error);
         return res.status(500).json({ status: 'error', message: 'Failed to search users' });
     }
 };
@@ -39,7 +40,7 @@ const getUserById = async (req, res) => {
         if (!user) return res.status(404).json({ status: 'error', message: 'User not found' });
         return res.status(200).json({ status: 'success', user: formatPublicUserResponse(user) });
     } catch (error) {
-        console.error('Get user error:', error);
+        logger.error('Get user error:', error);
         return res.status(500).json({ status: 'error', message: 'Failed to get user' });
     }
 };
@@ -59,7 +60,7 @@ const verifyPhones = async (req, res) => {
         const result = await userService.findUsersByPhones(phones);
         return res.status(200).json({ status: 'success', result });
     } catch (error) {
-        console.error('Verify phones error:', error);
+        logger.error('Verify phones error:', error);
         return res.status(500).json({ status: 'error', message: 'Failed to verify phones' });
     }
 };
@@ -75,6 +76,7 @@ const sendSMSToUsers = async (req, res) => {
         const result = await userService.sendSMS(userId, phones);
         return res.status(200).json({ status: 'success', result });
     } catch (error) {
+        logger.error('Send SMS error:', error);
         return res.status(500).json({ status: 'error', message: error.message });
     }
 };
@@ -88,6 +90,7 @@ const getBlockedUsers = async (req, res) => {
         const result = await userService.getAllBlockedUsers(req.decodedToken.userId);
         return res.status(200).json({ status: 'success', result });
     } catch (error) {
+        logger.error('Get blocked users error:', error);
         return res.status(500).json({ status: 'error', message: error.message });
     }
 };
@@ -105,6 +108,7 @@ const blockUser = async (req, res) => {
         const result = await userService.blockUser(userId, req.decodedToken, reason, description);
         return res.status(200).json({ status: 'success', result: { blocked: true, ...result } });
     } catch (error) {
+        logger.error('Block user error:', error);
         return res.status(500).json({ status: 'error', message: error.message });
     }
 };
@@ -122,6 +126,7 @@ const unblockUser = async (req, res) => {
         const result = await userService.unblockUser(userId, req.decodedToken);
         return res.status(200).json({ status: 'success', result: { unblocked: true, ...result } });
     } catch (error) {
+        logger.error('Unblock user error:', error);
         return res.status(500).json({ status: 'error', message: error.message });
     }
 };
@@ -137,6 +142,7 @@ const unblockUserById = async (req, res) => {
         await userService.unblockUser(userId, req.decodedToken);
         return res.status(200).json({ unblocked: true });
     } catch (error) {
+        logger.error('Unblock user by id error:', error);
         return res.status(500).json({ status: 'error', message: error.message });
     }
 };
@@ -150,6 +156,7 @@ const contentStorage = async (req, res) => {
         const result = await userService.getContentStorageFor(req.decodedToken.userId);
         return res.status(200).json({ status: 'success', result });
     } catch (error) {
+        logger.error('Content storage error:', error);
         return res.status(400).json({ status: 'error', message: error.message });
     }
 };
@@ -164,6 +171,7 @@ const deleteContentById = async (req, res) => {
         const result = await userService.deleteMessageObjectBy(id);
         return res.status(200).json({ status: 'success', result });
     } catch (error) {
+        logger.error('Delete content error:', error);
         return res.status(400).json({ status: 'error', message: error.message });
     }
 };
@@ -177,6 +185,7 @@ const getUnreadMessagesForUser = async (req, res) => {
         const result = await chatService.countUnreadMessagesForUser(req.decodedToken.userId);
         return res.status(200).json({ status: 'success', result });
     } catch (error) {
+        logger.error('Get unread messages error:', error);
         return res.status(400).json({ status: 'error', message: error.message });
     }
 };
@@ -193,6 +202,7 @@ const sendConnectionRequest = async (req, res) => {
         const result = await userService.sendConnectionRequest(req.decodedToken.userId, to);
         return res.status(201).json({ status: 'success', request: result.request });
     } catch (error) {
+        logger.error('Send connection request error:', error);
         const status = error.message === 'Already connected' ? 409 : 500;
         return res.status(status).json({ status: 'error', message: error.message });
     }
@@ -210,6 +220,7 @@ const cancelConnectionRequest = async (req, res) => {
         const result = await userService.cancelConnectionRequest(req.decodedToken.userId, to);
         return res.status(200).json({ status: 'success', request: result.request });
     } catch (error) {
+        logger.error('Cancel connection request error:', error);
         const status = error.message === 'No request found' ? 404 : 500;
         return res.status(status).json({ status: 'error', message: error.message });
     }
@@ -234,6 +245,7 @@ const respondConnectionRequest = async (req, res) => {
         const result = await userService.respondConnectionRequest(req.decodedToken.userId, to, response);
         return res.status(200).json({ status: 'success', result });
     } catch (error) {
+        logger.error('Respond connection request error:', error);
         return res.status(500).json({ status: 'error', message: error.message });
     }
 };
@@ -270,7 +282,7 @@ const getConnectionRequests = async (req, res) => {
         const { requests, connections } = await userService.allRequests(req.decodedToken.userId);
         return res.status(200).json({ status: 'success', data: { requests, connections } });
     } catch (error) {
-        console.error('Get connection requests error:', error);
+        logger.error('Get connection requests error:', error);
         return res.status(500).json({ status: 'error', message: 'Failed to get connection requests' });
     }
 };
@@ -286,7 +298,7 @@ const checkConnectionRequest = async (req, res) => {
         const request = await userService.getConnectionRequest(req.decodedToken.userId, to);
         return res.status(200).json(request);
     } catch (error) {
-        console.error('Check connection request error:', error);
+        logger.error('Check connection request error:', error);
         return res.status(500).json({ status: 'error', message: 'Failed to check connection request' });
     }
 };
@@ -313,7 +325,7 @@ const getMyReports = async (req, res) => {
         }));
         return res.status(200).json({ status: 'success', data });
     } catch (error) {
-        console.error('Get my reports error:', error);
+        logger.error('Get my reports error:', error);
         return res.status(500).json({ status: 'error', message: 'Failed to get reports' });
     }
 };
@@ -350,13 +362,13 @@ const fileReport = async (req, res) => {
             messageId: messageId ?? null,
         });
 
-        return res.status(201).json({ 
+        return res.status(201).json({
             status: 'success',
-            _id: report._id?.toString(), 
-            reportStatus: report.status 
+            _id: report._id?.toString(),
+            reportStatus: report.status
         });
     } catch (error) {
-        console.error('File report error:', error);
+        logger.error('File report error:', error);
         return res.status(500).json({ status: 'error', message: error.message || 'Failed to file report' });
     }
 };

@@ -9,6 +9,7 @@ const UserService   = require('../../services/domain/user/user.service');
 const DeviceService = require('../../services/domain/device/device.service');
 const userService   = new UserService();
 const deviceService = new DeviceService();
+const logger        = require('../../utils/logger');
 
 /**
  * GET /me
@@ -31,7 +32,7 @@ const getCurrentUserProfile = async (req, res) => {
 
     return res.status(200).json({ status: 'success', user: formatUserResponse(user) });
   } catch (error) {
-    console.error('Get current user error:', error);
+    logger.error('Get current user error:', error);
     return res.status(500).json({ status: 'error', message: 'Failed to get user profile' });
   }
 };
@@ -90,7 +91,7 @@ const setupProfile = async (req, res) => {
     if (error.message === 'User not found') {
       return res.status(404).json({ status: 'error', message: 'User not found' });
     }
-    console.error('Profile setup error:', error);
+    logger.error('Profile setup error:', error);
     return res.status(500).json({ status: 'error', message: 'Failed to setup profile' });
   }
 };
@@ -141,7 +142,7 @@ const updateCurrentUserProfile = async (req, res) => {
     return res.status(200).json({ status: 'success', user: formatUserResponse(user) });
   } catch (error) {
     if (error.message === 'User not found') return res.status(404).json({ status: 'error', message: 'User not found' });
-    console.error('Update current user error:', error);
+    logger.error('Update current user error:', error);
     return res.status(500).json({ status: 'error', message: 'Failed to update profile' });
   }
 };
@@ -164,7 +165,7 @@ const updateCurrentUserPicture = async (req, res) => {
 
   } catch (error) {
     if (error.message === 'User not found') return res.status(404).json({ status: 'error', message: 'User not found' });
-    console.error('Update picture error:', error);
+    logger.error('Update picture error:', error);
     return res.status(500).json({ status: 'error', message: 'Failed to upload picture' });
   }
 };
@@ -190,7 +191,7 @@ const updateCurrentUserLocation = async (req, res) => {
 
   } catch (error) {
     if (error.message === 'User not found') return res.status(404).json({ status: 'error', message: 'User not found' });
-    console.error('Update location error:', error);
+    logger.error('Update location error:', error);
     return res.status(500).json({ status: 'error', message: 'Failed to update location' });
   }
 };
@@ -204,7 +205,7 @@ const updatePresence = async (req, res) => {
     if (!user) return res.status(404).json({ status: 'error', message: 'User not found' });
     return res.status(200).json({ status: 'success', lastSeen: user.lastSeen });
   } catch (error) {
-    console.error('Update presence error:', error);
+    logger.error('Update presence error:', error);
     return res.status(500).json({ status: 'error', message: 'Failed to update presence' });
   }
 };
@@ -222,7 +223,7 @@ const updateRadarStatus = async (req, res) => {
     if (!user) return res.status(404).json({ status: 'error', message: 'User not found' });
     return res.status(200).json({ status: 'success', user: formatUserResponse(user) });
   } catch (error) {
-    console.error('Update radar error:', error);
+    logger.error('Update radar error:', error);
     return res.status(500).json({ status: 'error', message: 'Failed to update radar' });
   }
 };
@@ -240,7 +241,7 @@ const updateRadarInvisible = async (req, res) => {
     if (!user) return res.status(404).json({ status: 'error', message: 'User not found' });
     return res.status(200).json({ status: 'success', user: formatUserResponse(user) });
   } catch (error) {
-    console.error('Update radar invisible error:', error);
+    logger.error('Update radar invisible error:', error);
     return res.status(500).json({ status: 'error', message: 'Failed to update radar' });
   }
 };
@@ -253,6 +254,7 @@ const updateNotificationPreferences = async (req, res) => {
     const notificationPreferences = await userService.updateNotificationPreferences(req.decodedToken.userId, req.body);
     return res.status(200).json({ status: 'success', notificationPreferences });
   } catch (error) {
+    logger.error('Update notification preferences error:', error);
     const status = error.message === 'User not found' ? 404 : 500;
     return res.status(status).json({ status: 'error', message: error.message });
   }
@@ -266,6 +268,7 @@ const updateVisibilityPreferences = async (req, res) => {
     const visibilityPreferences = await userService.updateVisibilityPreferences(req.decodedToken.userId, req.body);
     return res.status(200).json({ status: 'success', visibilityPreferences });
   } catch (error) {
+    logger.error('Update visibility preferences error:', error);
     const status = error.message === 'User not found' ? 404 : 500;
     return res.status(status).json({ status: 'error', message: error.message });
   }
@@ -279,6 +282,7 @@ const updateProfilePrivacy = async (req, res) => {
     const privacySettings = await userService.updateProfilePrivacy(req.decodedToken.userId, req.body);
     return res.status(200).json({ status: 'success', privacySettings });
   } catch (error) {
+    logger.error('Update profile privacy error:', error);
     const status = error.message === 'User not found' ? 404 : 500;
     return res.status(status).json({ status: 'error', message: error.message });
   }
@@ -293,7 +297,7 @@ const deleteCurrentUserAccount = async (req, res) => {
     return res.status(202).json({ status: 'success', message: 'Account deleted successfully' });
   } catch (error) {
     if (error.message === 'User not found') return res.status(404).json({ status: 'error', message: 'User not found' });
-    console.error('Delete account error:', error);
+    logger.error('Delete account error:', error);
     return res.status(500).json({ status: 'error', message: 'Failed to delete account' });
   }
 };
@@ -319,7 +323,7 @@ const getHiddenUsers = async (req, res) => {
     }));
     return res.status(200).json({ data });
   } catch (error) {
-    console.error('Get hidden users error:', error);
+    logger.error('Get hidden users error:', error);
     return res.status(500).json({ status: 'error', message: 'Failed to get hidden users' });
   }
 };
@@ -338,7 +342,7 @@ const hideUser = async (req, res) => {
     );
     return res.status(200).json({ success: true });
   } catch (error) {
-    console.error('Hide user error:', error);
+    logger.error('Hide user error:', error);
     return res.status(500).json({ status: 'error', message: 'Failed to hide user' });
   }
 };
@@ -355,7 +359,7 @@ const unhideUser = async (req, res) => {
     );
     return res.status(200).json({ success: true });
   } catch (error) {
-    console.error('Unhide user error:', error);
+    logger.error('Unhide user error:', error);
     return res.status(500).json({ status: 'error', message: 'Failed to unhide user' });
   }
 };
@@ -380,7 +384,7 @@ const getHiddenConnections = async (req, res) => {
     }));
     return res.status(200).json({ data });
   } catch (error) {
-    console.error('Get hidden connections error:', error);
+    logger.error('Get hidden connections error:', error);
     return res.status(500).json({ status: 'error', message: 'Failed to get hidden connections' });
   }
 };
@@ -404,7 +408,7 @@ const hideConnection = async (req, res) => {
     }
     return res.status(200).json({ success: true });
   } catch (error) {
-    console.error('Hide connection error:', error);
+    logger.error('Hide connection error:', error);
     return res.status(500).json({ status: 'error', message: 'Failed to hide connection' });
   }
 };
@@ -421,7 +425,7 @@ const unhideConnection = async (req, res) => {
     );
     return res.status(200).json({ success: true });
   } catch (error) {
-    console.error('Unhide connection error:', error);
+    logger.error('Unhide connection error:', error);
     return res.status(500).json({ status: 'error', message: 'Failed to unhide connection' });
   }
 };

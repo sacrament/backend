@@ -10,6 +10,7 @@ const userService   = new UserService();
 const deviceService = new DeviceService();
 const { newToken } = require('../../middleware/verify');
 const authService = require('../../services/domain/auth/auth.service');
+const logger = require('../../utils/logger');
 
 // Store for rate limiting (in production, use Redis)
 const rateLimitStore = new Map();
@@ -45,7 +46,7 @@ const appleAuth = async (req, res) => {
     if (error.httpStatus) {
       return res.status(error.httpStatus).json({ status: 'error', code: error.code, message: error.message });
     }
-    console.error('Apple auth error:', error);
+    logger.error('Apple auth error:', error);
     return res.status(500).json({ status: 'error', code: 5000, message: 'Internal server error' });
   }
 };
@@ -77,7 +78,7 @@ const googleAuth = async (req, res) => {
     if (error.httpStatus) {
       return res.status(error.httpStatus).json({ status: 'error', code: error.code, message: error.message });
     }
-    console.error('Google auth error:', error);
+    logger.error('Google auth error:', error);
     return res.status(500).json({ status: 'error', code: 5000, message: 'Internal server error' });
   }
 };
@@ -94,28 +95,28 @@ const requestPhoneOtp = async (req, res) => {
     const userAgent = req.headers['user-agent'];
     const clientIp = req.ip || req.connection.remoteAddress;
 
-    console.log(`[requestPhoneOtp] Incoming OTP request - phone: ${phoneNumber}, ip: ${clientIp}, userAgent: ${userAgent}`);
+    logger.info(`[requestPhoneOtp] Incoming OTP request - phone: ${phoneNumber}, ip: ${clientIp}, userAgent: ${userAgent}`);
 
     const currentClientCode = process.env.OTP_CLIENT_KEY_CODE;
 
     if (!phoneNumber || phoneNumber.trim() === '') {
-      console.warn('[requestPhoneOtp] Rejected: missing phone number');
+      logger.warn('[requestPhoneOtp] Rejected: missing phone number');
       return res.status(400).json({ status: 'error', code: 1011, message: 'Phone number is required' });
     }
 
     if (!/^\+\d{8,15}$/.test(phoneNumber)) {
-      console.warn(`[requestPhoneOtp] Rejected: invalid phone format - ${phoneNumber}`);
+      logger.warn(`[requestPhoneOtp] Rejected: invalid phone format - ${phoneNumber}`);
       return res.status(400).json({ status: 'error', code: 1012, message: 'Invalid phone number format. Must be in E.164 format (e.g. +14165550000)' });
     }
 
     if (phoneNumber.startsWith('+233') || phoneNumber.startsWith('+4474') || phoneNumber.startsWith('+23')) {
       const code = phoneNumber.startsWith('+233') ? 9002 : phoneNumber.startsWith('+4474') ? 9003 : 9004;
-      console.warn(`[requestPhoneOtp] Rejected: blocked region - phone: ${phoneNumber}, code: ${code}`);
+      logger.warn(`[requestPhoneOtp] Rejected: blocked region - phone: ${phoneNumber}, code: ${code}`);
       return res.status(400).json({ status: 'error', code, message: 'Phone number from this region is not allowed' });
     }
 
     if (!signature) {
-      console.warn(`[requestPhoneOtp] Rejected: missing signature header - phone: ${phoneNumber}`);
+      logger.warn(`[requestPhoneOtp] Rejected: missing signature header - phone: ${phoneNumber}`);
       return res.status(400).json({ status: 'error', code: 1002, message: 'Missing signature header' });
     }
 
@@ -128,35 +129,35 @@ const requestPhoneOtp = async (req, res) => {
       const expected = crypto.createHmac('sha256', sigSecret).update(`${phoneNumber}:${minute}`).digest('hex');
       const expectedPrev = crypto.createHmac('sha256', sigSecret).update(`${phoneNumber}:${minute - 1}`).digest('hex');
       signatureValid = signature === expected || signature === expectedPrev;
-      console.log(`[requestPhoneOtp] Signature check (HMAC-SHA256) - valid: ${signatureValid}, phone: ${phoneNumber}`);
+      logger.info(`[requestPhoneOtp] Signature check (HMAC-SHA256) - valid: ${signatureValid}, phone: ${phoneNumber}`);
     } else {
       const legacyExpected = crypto
         .createHash('sha1')
         .update(`VerifySignatureCodeWithWithClientKeyFor=${phoneNumber}`)
         .digest('hex');
       signatureValid = signature === legacyExpected;
-      console.log(`[requestPhoneOtp] Signature check (legacy SHA1) - valid: ${signatureValid}, phone: ${phoneNumber}`);
+      logger.info(`[requestPhoneOtp] Signature check (legacy SHA1) - valid: ${signatureValid}, phone: ${phoneNumber}`);
     }
 
     if (!signatureValid) {
-      console.warn(`[requestPhoneOtp] Rejected: signature verification failed - phone: ${phoneNumber}`);
+      logger.warn(`[requestPhoneOtp] Rejected: signature verification failed - phone: ${phoneNumber}`);
       return res.status(400).json({ status: 'error', code: 1103, message: 'Signature verification failed' });
     }
 
     if (!clientKeyCode) {
-      console.warn(`[requestPhoneOtp] Rejected: missing client key code - phone: ${phoneNumber}`);
+      logger.warn(`[requestPhoneOtp] Rejected: missing client key code - phone: ${phoneNumber}`);
       return res.status(400).json({ status: 'error', code: 1005, message: 'Missing client key code header' });
     }
 
     if (clientKeyCode !== currentClientCode) {
-      console.warn(`[requestPhoneOtp] Rejected: invalid client key code - phone: ${phoneNumber}`);
+      logger.warn(`[requestPhoneOtp] Rejected: invalid client key code - phone: ${phoneNumber}`);
       return res.status(400).json({ status: 'error', code: 1106, message: 'Invalid client key code' });
     }
 
     // skip for development/testing environments to allow easy OTP requests without strict client headers
     if (process.env.NODE_ENV === 'production') {
       if (userAgent && !isValidUserAgent(userAgent)) {
-        console.warn(`[requestPhoneOtp] Rejected: invalid user agent - phone: ${phoneNumber}, userAgent: ${userAgent}`);
+        logger.warn(`[requestPhoneOtp] Rejected: invalid user agent - phone: ${phoneNumber}, userAgent: ${userAgent}`);
         return res.status(400).json({ status: 'error', code: 1006, message: 'Missing device user agent' });
       }
     } else {
@@ -168,36 +169,36 @@ const requestPhoneOtp = async (req, res) => {
     const ipLimitKey = `ip_${clientIp}`;
 
     if (!checkGlobalOtpBudget()) {
-      console.warn(`[requestPhoneOtp] Rejected: global OTP budget exhausted - phone: ${phoneNumber}`);
+      logger.warn(`[requestPhoneOtp] Rejected: global OTP budget exhausted - phone: ${phoneNumber}`);
       return res.status(429).json({ status: 'error', code: 3132, message: 'Service temporarily unavailable, please try again later' });
     }
 
     if (!checkRateLimit(rateLimitKey, 3, 10 * 60).allowed) {
-      console.warn(`[requestPhoneOtp] Rejected: phone rate limit exceeded - phone: ${phoneNumber}`);
+      logger.warn(`[requestPhoneOtp] Rejected: phone rate limit exceeded - phone: ${phoneNumber}`);
       return res.status(429).json({ status: 'error', code: 3129, message: 'Rate limit exceeded for phone number' });
     }
 
     if (!checkRateLimit(ipLimitKey, 5, 24 * 60 * 60).allowed) {
-      console.warn(`[requestPhoneOtp] Rejected: IP rate limit exceeded - ip: ${clientIp}`);
+      logger.warn(`[requestPhoneOtp] Rejected: IP rate limit exceeded - ip: ${clientIp}`);
       return res.status(429).json({ status: 'error', code: 9213, message: 'Rate limit exceeded for IP address' });
     }
 
-    console.log(`[requestPhoneOtp] All checks passed, sending OTP - phone: ${phoneNumber}`);
+    logger.info(`[requestPhoneOtp] All checks passed, sending OTP - phone: ${phoneNumber}`);
     await authService.requestOtp(phoneNumber, { userAgent, ip: clientIp });
-    console.log(`[requestPhoneOtp] OTP sent successfully - phone: ${phoneNumber}`);
+    logger.info(`[requestPhoneOtp] OTP sent successfully - phone: ${phoneNumber}`);
 
     return res.status(202).json({ status: 'success', message: 'OTP sent to phone number', otpSent: true });
 
   } catch (error) {
     if (error.code === 3133) {
-      console.warn(`[requestPhoneOtp] Rate limit error from service: ${error.message}`);
+      logger.warn(`[requestPhoneOtp] Rate limit error from service: ${error.message}`);
       return res.status(429).json({ status: 'error', code: 3133, message: error.message });
     }
     if (error.httpStatus) {
-      console.warn(`[requestPhoneOtp] Service error - code: ${error.code}, message: ${error.message}`);
+      logger.warn(`[requestPhoneOtp] Service error - code: ${error.code}, message: ${error.message}`);
       return res.status(error.httpStatus).json({ status: 'error', code: error.code, message: error.message });
     }
-    console.error('[requestPhoneOtp] Unexpected error:', error);
+    logger.error('[requestPhoneOtp] Unexpected error:', error);
     return res.status(500).json({ status: 'error', code: 5000, message: 'Internal server error' });
   }
 };
@@ -233,7 +234,7 @@ const phoneAuth = async (req, res) => {
     if (error.httpStatus) {
       return res.status(error.httpStatus).json({ status: 'error', code: error.code, message: error.message });
     }
-    console.error('Phone auth error:', error);
+    logger.error('Phone auth error:', error);
     return res.status(500).json({ status: 'error', code: 5000, message: 'Internal server error' });
   }
 };
@@ -249,7 +250,7 @@ const refreshToken = async (req, res) => {
     if (decodedToken.scope !== 'REFRESH_TOKEN_SCOPE') {
       return res.status(401).json({ status: 'error', code: 1015, message: 'Invalid token scope for refresh' });
     }
- 
+
     const user = await userService.getActiveUserById(decodedToken.userId);
     if (!user || user.status !== 'active') {
       return res.status(401).json({ status: 'error', code: 1016, message: 'User not found or inactive' });
@@ -260,7 +261,7 @@ const refreshToken = async (req, res) => {
     return res.status(200).json({ status: 'success', accessToken: newAccessToken });
 
   } catch (error) {
-    console.error('Token refresh error:', error);
+    logger.error('Token refresh error:', error);
     return res.status(401).json({ status: 'error', code: 1017, message: 'Token refresh failed' });
   }
 };
@@ -287,7 +288,7 @@ const logout = async (req, res) => {
     return res.status(200).json({ status: 'success', message: 'Logged out successfully' });
 
   } catch (error) {
-    console.error('Logout error:', error);
+    logger.error('Logout error:', error);
     return res.status(500).json({ status: 'error', code: 5000, message: 'Internal server error' });
   }
 };

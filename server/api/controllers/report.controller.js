@@ -1,5 +1,5 @@
-const mongoose = require('mongoose');
 const ReportService = require('../../services/domain/report/report.service');
+const logger = require('../../utils/logger');
 
 const reportService = new ReportService();
 
@@ -55,7 +55,7 @@ const createReport = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Create report error:', error);
+    logger.error('Create report error:', error);
     return res.status(500).json({
       status: 'error',
       message: error.message || 'Failed to create report'
@@ -98,7 +98,7 @@ const getReportById = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Get report error:', error);
+    logger.error('Get report error:', error);
     return res.status(500).json({
       status: 'error',
       message: error.message || 'Failed to get report'
@@ -129,7 +129,7 @@ const getMyReports = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Get my reports error:', error);
+    logger.error('Get my reports error:', error);
     return res.status(500).json({
       status: 'error',
       message: 'Failed to get reports'
@@ -163,7 +163,7 @@ const getReportsAgainstMe = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Get reports against me error:', error);
+    logger.error('Get reports against me error:', error);
     return res.status(500).json({
       status: 'error',
       message: 'Failed to get reports'
@@ -190,7 +190,7 @@ const getPendingReports = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Get pending reports error:', error);
+    logger.error('Get pending reports error:', error);
     return res.status(500).json({
       status: 'error',
       message: 'Failed to get reports'
@@ -230,7 +230,7 @@ const updateReportStatus = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Update report status error:', error);
+    logger.error('Update report status error:', error);
     return res.status(500).json({
       status: 'error',
       message: error.message || 'Failed to update report'

@@ -4,7 +4,8 @@
  */
 
 const UserService = require('../../services/domain/user/user.service');
-  const userService = new UserService();
+const userService = new UserService();
+const logger = require('../../utils/logger');
 
 /**
  * Get favorite users list
@@ -21,7 +22,7 @@ const getFavorites = async (req, res) => {
     if (error.message === 'User not found') {
       return res.status(404).json({ status: 'error', message: 'User not found' });
     }
-    console.error('Get favorites error:', error);
+    logger.error('Get favorites error:', error);
     return res.status(500).json({ status: 'error', message: 'Failed to get favorites' });
   }
 };
@@ -43,7 +44,7 @@ const addFavorite = async (req, res) => {
     if (userId === favoriteUserId) {
       return res.status(400).json({ status: 'error', message: 'Cannot favorite yourself' });
     }
- 
+
     await userService.addFavorite(userId, favoriteUserId);
 
     return res.status(200).json({ status: 'success', message: 'Added to favorites' });
@@ -52,7 +53,7 @@ const addFavorite = async (req, res) => {
     if (error.message === 'User not found') {
       return res.status(404).json({ status: 'error', message: 'User not found' });
     }
-    console.error('Add favorite error:', error);
+    logger.error('Add favorite error:', error);
     return res.status(500).json({ status: 'error', message: 'Failed to add favorite' });
   }
 };
@@ -65,13 +66,13 @@ const removeFavorite = async (req, res) => {
   try {
     const userId = req.decodedToken?.userId;
     const { userId: targetUserId } = req.params;
- 
+
     await userService.removeFavorite(userId, targetUserId);
 
     return res.status(200).json({ status: 'success', message: 'Removed from favorites' });
 
   } catch (error) {
-    console.error('Remove favorite error:', error);
+    logger.error('Remove favorite error:', error);
     return res.status(500).json({ status: 'error', message: 'Failed to remove favorite' });
   }
 };

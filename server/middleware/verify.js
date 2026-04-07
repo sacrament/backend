@@ -1,6 +1,7 @@
 const jwt      = require('jsonwebtoken');
 const mongoose = require('mongoose');
 const config   = require('../utils/config');
+const logger   = require('../utils/logger');
 
 // 6-month epoch in milliseconds (182 days)
 const EPOCH_MS = 182 * 24 * 60 * 60 * 1000;
@@ -63,7 +64,7 @@ module.exports = {
                 return response.status(403).json({ status: 'error', code: 'ACCOUNT_INACTIVE', message: 'Your account is no longer active.' });
             }
         } catch (err) {
-            console.error('verifyToken user lookup error:', err.message);
+            logger.error('verifyToken user lookup error:', err.message);
             return response.status(500).json({ status: 'error', code: 'SERVER_ERROR', message: 'Authentication check failed.' });
         }
 

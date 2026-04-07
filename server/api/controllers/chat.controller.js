@@ -5,8 +5,9 @@ const AWSS3Service = require('../../services/external/aws/s3.service');
 const CS = require('../../socket/chat.service');
 const PushNotificationService = require('../../notifications/index');
 const { getIO } = require('../../socket/io');
+const logger = require('../../utils/logger');
 
-const chatService = new ChatService(); 
+const chatService = new ChatService();
 const userService = new UserService();
 const messageService = new MessageService();
 const awsUploadService = new AWSS3Service();
@@ -16,9 +17,9 @@ const awsUploadService = new AWSS3Service();
  * @param {*} req
  * @param {*} res
  */
-const newChat = async (req, res) => { 
-    const { chat } = req.body; 
- 
+const newChat = async (req, res) => {
+    const { chat } = req.body;
+
     const userId = req.decodedToken.userId;
     chat.userId = userId;
     const data = { chat: chat};
@@ -30,27 +31,29 @@ const newChat = async (req, res) => {
     // Save the chat
     chatService.create(data).then((result) => {
         res.status(200).json({status: 'success', message: result.message, chat: result.chat })
-    }).catch((err) => { 
+    }).catch((err) => {
+        logger.error('New chat error:', err);
         res.status(500).json({status: 'error', message: err.message})
-    })   
+    })
 }
 
 /**
  * Edit an existing chat
- * 
+ *
  * @param {*} req
  * @param {*} res
  */
-const edit = async (req, res) => { 
+const edit = async (req, res) => {
     const { id } = req.params;
-    const { name, imageUrl } = req.body;  
+    const { name, imageUrl } = req.body;
 
-    // TODO: Set the response status codes accordingly to the response 
+    // TODO: Set the response status codes accordingly to the response
     chatService.edit(id, name, imageUrl).then((result) => {
         res.status(200).json({status: 'success', message: result.message, chat: result.chat })
-    }).catch((err) => { 
+    }).catch((err) => {
+        logger.error('Edit chat error:', err);
         res.status(500).json({status: 'error', message: err.message})
-    })   
+    })
 }
 
 /**
@@ -61,16 +64,17 @@ const edit = async (req, res) => {
  */
 const addNewMembers = async (req, res) => {
     // const { id } = req.params;
-    const { chatId, members } = req.body;  
+    const { chatId, members } = req.body;
 
     const ids = await userService.getUserIds(members);
 
-    // TODO: Set the response status codes accordingly to the response 
+    // TODO: Set the response status codes accordingly to the response
     chatService.newMembers(chatId, [ids]).then((result) => {
         res.status(200).json({status: 'success', chat: result })
-    }).catch((err) => { 
+    }).catch((err) => {
+        logger.error('Add new members error:', err);
         res.status(500).json({status: 'error', message: err.message})
-    }) 
+    })
 }
 
 /**
@@ -81,7 +85,7 @@ const addNewMembers = async (req, res) => {
  */
 const all = async (req, res) => {
     // const userId = req.body.userId;
-    const userId = req.decodedToken.userId; 
+    const userId = req.decodedToken.userId;
 
     const { skip } = req.query
 
@@ -89,10 +93,11 @@ const all = async (req, res) => {
         // try {
         //     const unread = await chatService.countTotalUnreadChatsForUser(userId);
         //     res.status(200).json({status: 'success', result: { total: chats.length, chats: chats, totalUnread: unread }})
-        // } catch (ex) { 
+        // } catch (ex) {
             res.status(200).json({status: 'success', result: { total: chats.length, chats: chats }})
-        // }  
+        // }
     }).catch((err) => {
+        logger.error('Get all chats error:', err);
         res.status(500).json({status: 'error', message: err.message})
     })
 }
@@ -105,11 +110,12 @@ const all = async (req, res) => {
  */
 const allFavorites = (req, res) => {
     // const userId = req.body.userId;
-    const userId = req.decodedToken.userId; 
+    const userId = req.decodedToken.userId;
 
     chatService.getAllFavoriteChats(userId).then((chats) => {
         res.status(200).json({status: 'success', result: { total: chats.length, chats: chats }})
     }).catch((err) => {
+        logger.error('Get all favorite chats error:', err);
         res.status(500).json({status: 'error', message: err.message})
     })
 }
@@ -122,14 +128,15 @@ const allFavorites = (req, res) => {
  */
 const chatById = (req, res) => {
     const { id } = req.params;
-    const userId = req.decodedToken.userId; 
+    const userId = req.decodedToken.userId;
 
     chatService.getById(id, userId).then((chat) => {
         res.status(200).json({ status: 'success', chat: chat })
     }).catch((err) => {
+        logger.error('Get chat by id error:', err);
         res.status(500).json({ status: 'error', message: err.message })
     })
-}  
+}
 
 /**
  * Delete a chat
@@ -139,11 +146,12 @@ const chatById = (req, res) => {
  */
 const deleteChat = (req, res) => {
     const {id} = req.params;
-    const userId = req.decodedToken.userId; 
+    const userId = req.decodedToken.userId;
 
     chatService.deleteChat(id).then((result) => {
         res.status(200).json({status: 'success', result: result})
     }).catch((err) => {
+        logger.error('Delete chat error:', err);
         res.status(500).json({status: 'error', message: err.message})
     });
 }
@@ -156,11 +164,12 @@ const deleteChat = (req, res) => {
  */
 const favoriteChat = (req, res) => {
     const {id} = req.params;
-    const userId = req.decodedToken.userId; 
+    const userId = req.decodedToken.userId;
 
     chatService.favoriteChat(userId, id).then((result) => {
         res.status(200).json({status: 'success', result: result})
     }).catch((err) => {
+        logger.error('Favorite chat error:', err);
         res.status(500).json({status: 'error', message: err.message})
     });
 }
@@ -174,12 +183,13 @@ const favoriteChat = (req, res) => {
 const blockChat = (req, res) => {
     const { id } = req.params;
     const { reason, description, status } = req.body;
-    const userId = req.decodedToken.userId; 
+    const userId = req.decodedToken.userId;
 
     const shouldBlock = (status == 'true');
     chatService.blockChat(userId, id, shouldBlock, reason, description).then((result) => {
         res.status(200).json({status: 'success', result: result})
     }).catch((err) => {
+        logger.error('Block chat error:', err);
         res.status(500).json({status: 'error', message: err.message})
     });
 }
@@ -192,11 +202,12 @@ const blockChat = (req, res) => {
  */
 const muteChat = (req, res) => {
     const {id} = req.params;
-    const userId = req.decodedToken.userId; 
+    const userId = req.decodedToken.userId;
 
     chatService.muteChat(userId, id).then((result) => {
         res.status(200).json({status: 'success', result: result})
     }).catch((err) => {
+        logger.error('Mute chat error:', err);
         res.status(500).json({status: 'error', message: err.message})
     });
 }
@@ -210,10 +221,11 @@ const muteChat = (req, res) => {
 const leaveChat = (req, res) => {
     // MARK: The user id in future will be taken from the Auth Token
     const {id} = req.params;
-    const userId = req.decodedToken.userId; 
+    const userId = req.decodedToken.userId;
     chatService.leaveChat(userId, id).then((result) => {
         res.status(200).json({status: 'success', result: result})
     }).catch((err) => {
+        logger.error('Leave chat error:', err);
         res.status(500).json({status: 'error', message: err.message})
     })
 }
@@ -227,6 +239,7 @@ const getMessagesForChat = (req, res) => {
         //res.status(200).json({ status: 'success', total: result.totalMessages, totalPages: result.totalPages, messages: result.messages, currentPage: result.currentPage, messagesPerPage: result.messagesPerPage });
         res.status(200).json({status: 'success', total: result.length, messages: result})
     }).catch((err) => {
+        logger.error('Get messages for chat error:', err);
         res.status(500).json({ status: 'error', message: err.message })
     })
 }
@@ -237,18 +250,19 @@ const getMessagesForChat = (req, res) => {
  * @param {*} _
  * @param {*} res
  */
-const allChats = async (req, res) => { 
-    const userId = req.decodedToken.userId; 
+const allChats = async (req, res) => {
+    const userId = req.decodedToken.userId;
     const skip = req.params
 
     chatService.getChatsForUser(userId, false, -1).then(async (chats) => {
         try {
             const unread = await chatService.countTotalUnreadChatsForUser(userId);
             res.status(200).json({status: 'success', result: { total: chats.length, chats: chats, totalUnread: unread }})
-        } catch (ex) { 
+        } catch (ex) {
             res.status(200).json({status: 'success', result: { total: chats.length, chats: chats }})
-        } 
+        }
     }).catch((err) => {
+        logger.error('Get all chats error:', err);
         res.status(500).json({status: 'error', message: err.message})
     })
 }
@@ -260,27 +274,29 @@ const allChats = async (req, res) => {
  * @param {*} res
  */
 const totalUnreadChatsForUser = (req, res) => {
-    const userId = req.decodedToken.userId; 
+    const userId = req.decodedToken.userId;
 
     chatService.countTotalUnreadChatsForUser(userId).then((result) => {
         res.status(200).json({status: 'success', result: result})
     }).catch((err) => {
+        logger.error('Total unread chats error:', err);
         res.status(500).json({status: 'error', message: err.message})
     })
 }
 
 /**
- * 
+ *
  *
  * @param {*} req
  * @param {*} res
  */
 const getUserIds = async (req, res) => {
-    const {users} = req.body; 
+    const {users} = req.body;
 
     userService.getUserIds(users).then((userIds) => {
         res.status(200).json({status: 'success', users: userIds})
     }).catch((err) => {
+        logger.error('Get user ids error:', err);
         res.status(500).json({status: 'error', message: err.message});
     })
 }
@@ -293,11 +309,12 @@ const getUserIds = async (req, res) => {
  */
 const uploadMedia = async (req, res) => {
     const file = req.file;
-    const fileName = req.body.fileName 
+    const fileName = req.body.fileName
 
     awsUploadService.uploadMedia(file, fileName).then((result) => {
         res.status(200).json({ status: 'success', result: result });
     }).catch((err) => {
+        logger.error('Upload media error:', err);
         res.status(500).json({ status: 'error', message: err.message });
     })
 }
@@ -314,6 +331,7 @@ const deleteMedia = async (req, res) => {
     awsUploadService.deleteMedia(id).then(uploadedUrl => {
         res.status(200).json({ status: 'success', result: uploadedUrl });
     }).catch(err => {
+        logger.error('Delete media error:', err);
         res.status(500).json({ status: 'error', result: err });
     })
 }
@@ -325,11 +343,12 @@ const deleteMedia = async (req, res) => {
  * @param {*} res
  */
 const messageById = (req, res) => {
-    const { id } = req.params;   
+    const { id } = req.params;
 
     messageService.getById(id).then((message) => {
         res.status(200).json({ status: 'success', message: message })
     }).catch((err) => {
+        logger.error('Get message by id error:', err);
         res.status(500).json({ status: 'error', error: err.message })
     })
 }
@@ -348,17 +367,18 @@ const messageReceivedAck = async (req, res) => {
         return res.status(500).json({ status: 'error', error: new Error('message id is missing') });
     }
 
-    if (typeof from === 'number') { 
+    if (typeof from === 'number') {
         from = await userService.getUserIds([from]);
     }
 
-    if (typeof date === 'string') { 
+    if (typeof date === 'string') {
         date = parseInt(date);
     }
 
     updateMessageReceived(id, from, date).then(result => {
         res.status(200).json({status: "success", result: result})
     }).catch(err => {
+        logger.error('Message received ack error:', err);
         res.status(500).json({ status: 'error', error: err.message });
     });
 }
@@ -381,7 +401,7 @@ const updateMessageReceived = async (messageById, from, date) => {
             } else {
                 /// Offline people. Send a push notification
                 // offlineReceivers.push(creator);
-                //MARK: TODO: FInish the message ack  
+                //MARK: TODO: FInish the message ack
                 new PushNotificationService().markMessageReceived({
                     messageId: messageById,
                     by: from,
@@ -391,11 +411,10 @@ const updateMessageReceived = async (messageById, from, date) => {
                 });
             }
             resolve(true);
-            console.info('API: Message ACK for delivered sent');
+            logger.info('API: Message ACK for delivered sent');
         }).catch((err) => {
-            console.error(`Error while emitting message received to sender: ` + err.message)
+            logger.error(`Error while emitting message received to sender: ` + err.message);
             reject(err);
-            // 
         });
     });
 }
@@ -410,17 +429,18 @@ const messageSeenAck = async (req, res) => {
     let { id, date } = req.body;
     let from = req.decodedToken.userId;
 
-    if (typeof from === 'number') { 
+    if (typeof from === 'number') {
         from = await userService.getUserIds([from]);
     }
 
-    if (typeof date === 'string') { 
+    if (typeof date === 'string') {
         date = parseInt(date);
     }
 
     updateMessageSeen(id, from, date).then(result => {
         res.status(200).json({status: "success", result: result})
     }).catch(err => {
+        logger.error('Message seen ack error:', err);
         res.status(500).json({ status: 'error', error: err.message });
     });
 }
@@ -443,7 +463,7 @@ const updateMessageSeen = async (messageById, from, date) => {
             } else {
                 /// Offline people. Send a push notification
                 // offlineReceivers.push(creator);
-                //MARK: TODO: FInish the message ack 
+                //MARK: TODO: FInish the message ack
                 new PushNotificationService().markMessageSeen({
                     messageId: messageById,
                     by: from,
@@ -453,11 +473,10 @@ const updateMessageSeen = async (messageById, from, date) => {
                 });
             }
             resolve(true);
-            console.info('API: Message ACK for seen/read sent');
+            logger.info('API: Message ACK for seen/read sent');
         }).catch((err) => {
-            console.error(`Error while emitting message seen to sender: ` + err.message)
+            logger.error(`Error while emitting message seen to sender: ` + err.message);
             reject(err);
-            // 
         });
     });
 }
@@ -468,25 +487,25 @@ const updateMessageSeen = async (messageById, from, date) => {
  * @param {*} req
  * @param {*} res
  */
-const sendMessage = async (req, res) => {  
+const sendMessage = async (req, res) => {
     try {
-        console.log(`API: Send message: ${Date()}`)
+        logger.info(`API: Send message: ${Date()}`)
         const { content, chatId, type, messageId, date } = req.body;
 
         var from = req.decodedToken.userId;
- 
+
         if (typeof from === 'number') {
             from = await userService.getUserIds([from]);
         }
 
         const data = {
             content: content,
-            chatId: chatId, 
+            chatId: chatId,
             type: type
-        } 
- 
-        // Get the chat 
-        const chat = await chatService.getById(chatId, from); 
+        }
+
+        // Get the chat
+        const chat = await chatService.getById(chatId, from);
         // // Remove the sender from the members
         const members = chat.members
 
@@ -495,7 +514,7 @@ const sendMessage = async (req, res) => {
         json.members = members;
         json.from = from;
 
-        // Create a temporary message 
+        // Create a temporary message
         const tempMessage = await messageService.create(json);
         // Save the message
         messageService.save(tempMessage)
@@ -503,9 +522,9 @@ const sendMessage = async (req, res) => {
             var deliveredTo = [];
             var offlineReceivers = [];
             // Set to chat this message
-            //MARK: If not necessary, move these two lines at the end 
+            //MARK: If not necessary, move these two lines at the end
             const update = await chatService.setLatestMessage(data.chatId, tempMessage._id, from);
-            const chat = update.chat;  
+            const chat = update.chat;
 
             const object = {
                 message: tempMessage,
@@ -532,25 +551,25 @@ const sendMessage = async (req, res) => {
 
                     IO.to(to).emit('new message received', object);
 
-                    deliveredTo.push(to); 
+                    deliveredTo.push(to);
                 } else {
                     /// Offline people. Send a push notification
-                    // console.log(`Offline member: ${member.user.device}`);
+                    // logger.info(`Offline member: ${member.user.device}`);
                     if (!member.options.muted) {
                         offlineReceivers.push(member.user);
                     }
                 }
-            } 
-
-            if (deliveredTo.length) { 
-                //Update the status of the message to delivered for users
-                await messageService.messageDelivered(deliveredTo, result.message._id, Date.now()); 
             }
- 
+
+            if (deliveredTo.length) {
+                //Update the status of the message to delivered for users
+                await messageService.messageDelivered(deliveredTo, result.message._id, Date.now());
+            }
+
             // Send the response back
             res.status(200).json({ status: 'success', title: 'Message Sent', message: result.message, chat: chat, deliveredTo: deliveredTo });
 
-            const obj = { message: result.message, chat: chat, offlineReceivers: offlineReceivers }; 
+            const obj = { message: result.message, chat: chat, offlineReceivers: offlineReceivers };
 
             return new Promise((resolve) => {
                 resolve(obj)
@@ -558,26 +577,23 @@ const sendMessage = async (req, res) => {
         }).then(async result => {
             if (result.offlineReceivers.length) {
                 const pushNotification = new PushNotificationService();
-                // Send the push notifications 
+                // Send the push notifications
                 let fromUser = await userService.getUserById(from, true);
-                // result.from = {
-                //     id: fromUser._id.toString(),
-                //     originalId: fromUser.id
-                // }
                 result.from = fromUser;
                 pushNotification.newMessage(result);
             } else {
-                console.log(`No offline users`)
+                logger.info(`No offline users`)
             }
 
             await updateMessageSeen(messageId, from, date);
-        }).catch((err) => { 
-            console.error(`Error: ${err.message}`)
+        }).catch((err) => {
+            logger.error(`Send message error: ${err.message}`)
             res.status(400).json({ status: 'error', message: err.message });
-        }); 
+        });
     } catch (ex) {
+        logger.error('Send message unexpected error:', ex);
         res.status(400).json({ status: 'error', message: ex.message });
-    } 
+    }
 }
 
 /**
@@ -590,15 +606,16 @@ const conversationSeen = async (req, res) => {
     const { id, date, senders } = req.body;
     let from = req.decodedToken.userId;
 
-    if (typeof from === 'number') { 
+    if (typeof from === 'number') {
         from = await userService.getUserIds([from]);
     }
 
-    console.log('API: Mark conversation seen');
+    logger.info('API: Mark conversation seen');
 
     updateConversationSeen(id, from, date, senders).then(result => {
         res.status(200).json({status: "success", result: result})
     }).catch(err => {
+        logger.error('Conversation seen error:', err);
         res.status(500).json({ status: 'error', error: err.message });
     });
 }
@@ -619,16 +636,15 @@ const updateConversationSeen = async (chatId, from, date, senders) => {
                         date: date
                     });
                 }
-            } 
+            }
 
             resolve({
                 chatId: chatId,
                 result: result
-            }); 
+            });
         }).catch((err) => {
-            console.error(`Error while emitting chat seen to sender: ` + err.message)
+            logger.error(`Error while emitting chat seen to sender: ` + err.message);
             reject(err);
-            // 
         });
     });
 }
@@ -636,9 +652,9 @@ const updateConversationSeen = async (chatId, from, date, senders) => {
 module.exports = {
     all,
     allFavorites,
-    newChat, 
+    newChat,
     deleteChat,
-    chatById,  
+    chatById,
     leaveChat,
     favoriteChat,
     muteChat,
