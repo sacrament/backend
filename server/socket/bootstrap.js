@@ -11,9 +11,13 @@ const socketIO = require('socket.io');
 module.exports = {
   async initializeSocket(server) {
 
-    // transports order matters: polling first establishes the session,
-    // then upgrades to websocket. ALB sticky sessions (AWSALB cookie) must
-    // be enabled on the target group to ensure both requests hit the same task.
+    // Transport order: polling first so clients behind VPNs or HTTP proxies that
+    // block WebSocket can still connect, then upgrade to WebSocket when available.
+    //
+    // Sticky sessions: mobile clients don't persist cookies, so use source IP
+    // affinity on the load balancer (ALB target group → stickiness → "source IP")
+    // rather than cookie-based stickiness. All polling + upgrade requests from a
+    // device share the same source IP and will be routed to the same instance.
     const io = socketIO(server, {
       transports: ['polling', 'websocket'],
       allowUpgrades: true,
