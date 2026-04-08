@@ -84,13 +84,11 @@ class PushNotificationService {
     async chatDeleted(content) {
         try {
             const { offlineReceivers, chat, from } = content;
-            const message = content.message;
-            _stripMessageFields(message);
 
             await this._send({
                 title: from.name,
                 body: 'Deleted',
-                custom: { chat: _chatRef(chat), message, fromUser: from, deleted: true },
+                custom: { chat: _chatRef(chat), fromUser: from, deleted: true },
             }, offlineReceivers);
         } catch (ex) {
             console.error(`push:chatDeleted — ${ex.message}`);

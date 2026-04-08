@@ -210,19 +210,13 @@ class UserService {
             throw new Error('Users array is required');
         }
 
-        const foundUsers = await this.model.find({ id: { $in: users } }).select('_id');
+        const foundUsers = await this.model.find({ _id: { $in: users } }).select('_id');
 
         if (!foundUsers || foundUsers.length === 0) {
             return [];
         }
 
-        const userIds = foundUsers.map(user => user._id.toString());
-
-        if (userIds.length === 1) {
-            return userIds[0];
-        }
-
-        return userIds;
+        return foundUsers.map(user => user._id.toString());
     }
 
     /**

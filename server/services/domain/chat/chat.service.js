@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const mongoose = require('mongoose');
 const ObjectId = mongoose.Types.ObjectId;
 
@@ -24,7 +25,7 @@ const { validateRequired, validateObjectId, validateString, validateBoolean } = 
  */
 class ChatService {
     constructor() {
-        this.model = ChatModel;
+        this.chatModel = ChatModel;
         this.userService = new UserService();
     }
 
@@ -51,14 +52,28 @@ class ChatService {
         return {
             path: 'lastMessage',
             select: utils.lastMessageColumnsToShow(),
-            populate: {
-                path: 'from reactions media',
-                select: utils.userColumnsToShow() + utils.reactionColumnsToShow() + utils.mediaColumnsToShow(),
-                populate: {
+            populate: [
+                {
                     path: 'from',
                     select: utils.userColumnsToShow()
+                },
+                {
+                    path: 'reactions',
+                    select: utils.reactionColumnsToShow(),
+                    populate: {
+                        path: 'from',
+                        select: utils.userColumnsToShow()
+                    }
+                },
+                {
+                    path: 'media',
+                    select: utils.mediaColumnsToShow(),
+                    populate: {
+                        path: 'from',
+                        select: utils.userColumnsToShow()
+                    }
                 }
-            }
+            ]
         };
     }
 
@@ -118,7 +133,7 @@ class ChatService {
         const query = this.#getMembershipQuery(chatId, userId);
 
         if (populate) {
-            let chat = await this.model
+            let chat = await this.chatModel
                 .findOne(query)
                 .select(utils.chatColumnsToShow())
                 .populate(this.#getMemberPopulateOpts())
@@ -144,7 +159,7 @@ class ChatService {
 
             return chat;
         } else {
-            const chat = await this.model.findOne(query).exec();
+            const chat = await this.chatModel.findOne(query).exec();
             this.#verifyMembership(chat, userId);
             return chat;
         }
@@ -157,7 +172,7 @@ class ChatService {
 
         console.log(`Get All chats for: ${userId} at ${Date.now()}`);
 
-        const aggregate = this.model.aggregate([
+        const aggregate = this.chatModel.aggregate([
             {
                 $match: {
                     members: {
@@ -419,7 +434,7 @@ class ChatService {
 
         userId = await normalizeUserId(userId);
 
-        const chats = await this.model.aggregate([
+        const chats = await this.chatModel.aggregate([
             {
                 $match: {
                     active: true,
@@ -593,7 +608,7 @@ class ChatService {
             _id: chatId
         };
 
-        const chat = await this.model.findOne(query).lean().exec();
+        const chat = await this.chatModel.findOne(query).lean().exec();
 
         if (!chat) {
             throw new Error('Chat not found');
@@ -632,7 +647,7 @@ class ChatService {
             }
         };
 
-        const chat = await this.model.findOne(query).lean().exec();
+        const chat = await this.chatModel.findOne(query).lean().exec();
 
         if (!chat) {
             throw new Error(`User ${userId} is not an active member of this chat`);
@@ -676,7 +691,7 @@ class ChatService {
 
         userId = await normalizeUserId(userId);
 
-        const aggregate = this.model.aggregate([
+        const aggregate = this.chatModel.aggregate([
             {
                 $match: {
                     active: true,
@@ -779,7 +794,7 @@ class ChatService {
         userId = await normalizeUserId(userId);
 
         try {
-            const result = await this.model.aggregate([
+            const result = await this.chatModel.aggregate([
                 {
                     '$match': {
                         'active': true,
@@ -876,7 +891,7 @@ class ChatService {
             id: importedChatId
         };
 
-        const chat = await this.model.findOne(query).lean().exec();
+        const chat = await this.chatModel.findOne(query).lean().exec();
 
         if (!chat) {
             throw new Error('Chat not found');
@@ -895,7 +910,7 @@ class ChatService {
         };
 
         try {
-            const chat = await this.model.findOne(query).lean().exec();
+            const chat = await this.chatModel.findOne(query).lean().exec();
 
             if (!chat) {
                 throw new Error(`Chat not found: ${uniqueId}`);
@@ -916,7 +931,7 @@ class ChatService {
             _id: chatId
         };
 
-        const chat = await this.model
+        const chat = await this.chatModel
             .findOne(query)
             .select(utils.chatColumnsToShow())
             .populate({
@@ -957,7 +972,7 @@ class ChatService {
             _id: id
         };
 
-        const chat = await this.model
+        const chat = await this.chatModel
             .findOne(query)
             .select(utils.chatColumnsToShow())
             .populate({
@@ -989,7 +1004,7 @@ class ChatService {
         const filter = { _id: chatId, 'members.canChat': { $eq: false } };
         const update = { $set: { 'members.$.canChat': true, 'members.$.joinedOn': date, 'members.$.updatedOn': date } };
 
-        const chat = await this.model.findOneAndUpdate(filter, update, { new: true })
+        const chat = await this.chatModel.findOneAndUpdate(filter, update, { new: true })
             .populate({
                 path: "members.user",
                 select: utils.userColumnsToShow()
@@ -1022,7 +1037,7 @@ class ChatService {
         const query = { _id: data.chatId };
         const update = { $set: { 'publicKey': data.publicKey } };
 
-        const chat = await this.model.findOneAndUpdate(query, update).lean().exec();
+        const chat = await this.chatModel.findOneAndUpdate(query, update).lean().exec();
 
         if (!chat) {
             throw new Error('Nothing to update for chat');
@@ -1051,15 +1066,18 @@ class ChatService {
             // Get member IDs (contains all users)
             const memberIds = await this.userService.getUserIds(data.chat.users);
 
-            // Check for existing chat with same members
-            const existingChat = await this.#findExistingChat(memberIds);
+            // Derive a deterministic uniqueId from sorted member IDs
+            const uniqueId = this.#computeChatUniqueId(memberIds);
+
+            // Check for existing chat by uniqueId (fast indexed lookup)
+            const existingChat = await this.#findChatByUniqueId(uniqueId);
 
             if (existingChat) {
                 return this.#reactivateExistingChat(existingChat);
             }
 
             // Create new chat
-            return await this.#createNewChat(memberIds);
+            return await this.#createNewChat(memberIds, uniqueId);
         } catch (error) {
             console.error(`[ChatService] Error creating chat: ${error.message}`);
             throw error;
@@ -1067,16 +1085,25 @@ class ChatService {
     }
 
     /**
-     * Find existing chat between members
+     * Compute a deterministic uniqueId from member IDs
      * @private
-     * @param {string|Array} memberIds - Member IDs to match
+     * @param {Array<string>} memberIds - Member MongoDB ObjectId strings
+     * @returns {string} SHA-256 hex digest of sorted IDs
+     */
+    #computeChatUniqueId(memberIds) {
+        const sorted = [...memberIds].map(id => id.toString()).sort();
+        return crypto.createHash('sha256').update(sorted.join(':')).digest('hex');
+    }
+
+    /**
+     * Find existing chat by uniqueId
+     * @private
+     * @param {string} uniqueId - Precomputed chat uniqueId
      * @returns {Promise<Object|null>} Existing chat or null
      */
-    async #findExistingChat(memberIds) {
-        const memberArray = Array.isArray(memberIds) ? memberIds : [memberIds];
-
-        return await this.model
-            .findOne({ 'members.user': { $all: memberArray } })
+    async #findChatByUniqueId(uniqueId) {
+        return await this.chatModel
+            .findOne({ uniqueId })
             .populate(this.#getMemberPopulateOpts())
             .populate({
                 path: 'lastMessage',
@@ -1123,22 +1150,17 @@ class ChatService {
      * @param {string|Array} memberIds - Member IDs to add
      * @returns {Promise<Object>} Response with newly created chat
      */
-    async #createNewChat(memberIds) {
-        const chat = new this.model();
-        chat.uniqueId = chat._id.toString();
+    async #createNewChat(memberIds, uniqueId) {
+        const chat = new this.chatModel();
+        chat.uniqueId = uniqueId;
 
-        // Add all members (memberIds contains all users including creator)
-        if (Array.isArray(memberIds)) {
-            for (const memberId of memberIds) {
-                chat.members.push({ user: memberId });
-            }
-        } else {
-            chat.members.push({ user: memberIds });
+        for (const memberId of memberIds) {
+            chat.members.push({ user: memberId });
         }
 
         await chat.save();
 
-        const newChat = await this.getOnlyChat(chat._id);
+        const newChat = await this.getOnlyChat(chat._id.toString());
 
         return {
             message: 'Chat created successfully',
@@ -1196,7 +1218,7 @@ class ChatService {
             'members.user': { $in: userObjectIds }
         };
 
-        const foundChat = await this.model.findOne(q)
+        const foundChat = await this.chatModel.findOne(q)
             .populate(this.#getMemberPopulateOpts())
             .populate({
                 path: 'lastMessage',
@@ -1219,7 +1241,7 @@ class ChatService {
         const query = { _id: chatId };
         const update = { $addToSet: { members: { $each: mapUsers } } };
 
-        const chat = await this.model.findOneAndUpdate(query, update, { new: true })
+        const chat = await this.chatModel.findOneAndUpdate(query, update, { new: true })
             .populate(this.#getMemberPopulateOpts())
             .populate({
                 path: 'lastMessage',
@@ -1246,7 +1268,7 @@ class ChatService {
         const query = { _id: chatId };
         const update = { $pull: { members: { user: { $in: users.map(user => new ObjectId(user)) } } } };
 
-        const chat = await this.model.findOneAndUpdate(query, update, { new: true })
+        const chat = await this.chatModel.findOneAndUpdate(query, update, { new: true })
             .populate(this.#getMemberPopulateOpts())
             .populate({
                 path: 'lastMessage',
@@ -1275,7 +1297,7 @@ class ChatService {
         const filter = { 'members.user': userId, _id: chatId };
         const update = { $pull: { members: { user: { $eq: new ObjectId(userId) } } } };
 
-        const chat = await this.model.findOneAndUpdate(filter, update, { new: true })
+        const chat = await this.chatModel.findOneAndUpdate(filter, update, { new: true })
             .populate(this.#getMemberPopulateOpts())
             .populate({
                 path: 'lastMessage',
@@ -1307,7 +1329,7 @@ class ChatService {
             ? { $set: { 'members.$.canChat': false, 'members.$.leftOn': date, 'members.$.updatedOn': date, 'lastMessage': null } }
             : { $set: { 'members.$.canChat': false, 'members.$.leftOn': date, 'members.$.updatedOn': date } };
 
-        const updatedChat = await this.model.findOneAndUpdate(filter, update, { new: true })
+        const updatedChat = await this.chatModel.findOneAndUpdate(filter, update, { new: true })
             .populate({
                 path: "members.user",
                 select: utils.userColumnsToShow()
@@ -1337,7 +1359,7 @@ class ChatService {
         const filter = { 'members.user': userId, _id: chatId };
         const update = { $set: { 'members.$.options.favorite': status, 'members.$.updatedOn': Date.now() } };
 
-        const chat = await this.model.findOneAndUpdate(filter, update, { new: true, runValidators: true })
+        const chat = await this.chatModel.findOneAndUpdate(filter, update, { new: true, runValidators: true })
             .populate({
                 path: "members.user",
                 select: utils.userColumnsToShow()
@@ -1368,7 +1390,7 @@ class ChatService {
         const filter = { 'members.user': userId, _id: chatId };
         const update = { $set: { 'members.$.options.muted': status, 'members.$.updatedOn': Date.now() } };
 
-        const chat = await this.model.findOneAndUpdate(filter, update, { new: true, runValidators: true })
+        const chat = await this.chatModel.findOneAndUpdate(filter, update, { new: true, runValidators: true })
             .populate({
                 path: "members.user",
                 select: utils.userColumnsToShow()
@@ -1400,7 +1422,7 @@ class ChatService {
         const filter = { 'members.user': userId, _id: chatId };
         const update = { $set: { 'members.$.options.blocked': status, 'members.$.updatedOn': Date.now() } };
 
-        const chat = await this.model.findOneAndUpdate(filter, update)
+        const chat = await this.chatModel.findOneAndUpdate(filter, update)
             .populate({
                 path: "members.user",
                 select: utils.userColumnsToShow()
@@ -1443,19 +1465,12 @@ class ChatService {
     async setLatestMessage(chatId, messageId, userId = null) {
         const filter = { _id: chatId };
 
-        const chat = await this.model.findOneAndUpdate(filter, { lastMessage: messageId }, { new: true, runValidators: true })
+        const chat = await this.chatModel.findOneAndUpdate(filter, { lastMessage: messageId }, { new: true, runValidators: true })
             .populate({
                 path: "members.user",
                 select: utils.userColumnsToShow()
             })
-            .populate({
-                path: 'lastMessage',
-                select: utils.lastMessageColumnsToShow(),
-                populate: {
-                    path: 'from media',
-                    select: utils.userColumnsToShow() + utils.mediaColumnsToShow()
-                }
-            })
+            .populate(this.#getLastMessagePopulateOpts())
             .lean()
             .exec();
 
@@ -1477,13 +1492,13 @@ class ChatService {
     }
 
     async getAllImportedChats() {
-        return await this.model.find({ isImported: true }).exec();
+        return await this.chatModel.find({ isImported: true }).exec();
     }
 
     async setCreatedDate(chatId, date) {
         const filter = { _id: chatId };
 
-        const chat = await this.model.findOneAndUpdate(filter, { createdOn: date }, { new: true, runValidators: true })
+        const chat = await this.chatModel.findOneAndUpdate(filter, { createdOn: date }, { new: true, runValidators: true })
             .exec();
 
         if (!chat) throw new Error('No chat found');
@@ -1491,7 +1506,7 @@ class ChatService {
         const update = { $set: { 'members.$[elem].joinedOn': date } };
         const filter1 = { arrayFilters: [{ "elem.joinedOn": { $gt: date } }] };
 
-        await this.model.updateMany(filter, update, filter1);
+        await this.chatModel.updateMany(filter, update, filter1);
 
         return {
             message: "This chat is been set a last message",
@@ -1521,7 +1536,7 @@ class ChatService {
         const filter = { 'members.user': forUser, _id: chatId };
         const update = { $set: { 'members.$.canChat': true, 'members.$.joinedOn': date, 'members.$.updatedOn': date } };
 
-        const chat = await this.model.findOneAndUpdate(filter, update, { new: true })
+        const chat = await this.chatModel.findOneAndUpdate(filter, update, { new: true })
             .populate({
                 path: "members.user",
                 select: utils.userColumnsToShow()
@@ -1546,7 +1561,7 @@ class ChatService {
     }
 
     async deleteAllChatsForUser(userId) {
-        const aggregate = this.model.aggregate([
+        const aggregate = this.chatModel.aggregate([
             {
                 $match: {
                     members: {

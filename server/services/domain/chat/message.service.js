@@ -58,7 +58,8 @@ class MessageService {
             chatId: data.chatId,
             from: data.from,
             kind: data.type,
-            sentOn: data.sentOn
+            sentOn: data.sentOn,
+            encrypted: data.encrypted || false
         });
 
         if (data.replyTo) {

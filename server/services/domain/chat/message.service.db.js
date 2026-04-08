@@ -31,7 +31,7 @@ class MessageService {
         });
 
         const message = new this.model({
-            tempId: data.tempId,
+            _id: data.tempId,
             chatId: data.chatId,
             from: data.from,
             kind: data.type,
@@ -39,7 +39,7 @@ class MessageService {
         });
 
         if (data.replyTo) {
-            validateObjectId(data.replyTo, 'Reply To Message ID');
+            validateRequired(data.replyTo, 'Reply To Message ID');
             message.replyTo = data.replyTo;
         }
 
@@ -166,7 +166,6 @@ class MessageService {
      */
     async messageDelivered(users, messageId, date) {
         validateRequired(messageId, 'Message ID');
-        validateObjectId(messageId, 'Message ID');
         validateRequired(date, 'Date');
 
         if (typeof users === 'number') {
@@ -229,7 +228,6 @@ class MessageService {
     async messageSeen(byUser, messageId, date) {
         validateRequired(byUser, 'User ID');
         validateRequired(messageId, 'Message ID');
-        validateObjectId(messageId, 'Message ID');
         validateRequired(date, 'Date');
 
         const filter = { _id: messageId, 'status.user': { $eq: byUser } };
@@ -250,7 +248,7 @@ class MessageService {
      * Delete a message (for myself or for everyone)
      */
     async deleteMessage(messageId, from, forEveryone) {
-        validateObjectId(messageId, 'Message ID');
+        validateRequired(messageId, 'Message ID');
         validateRequired(from, 'From user ID');
 
         const message = await this.model.findById(messageId);
@@ -296,7 +294,7 @@ class MessageService {
      * React to a message with emoji
      */
     async reactOnMessage(messageId, kind, from, date) {
-        validateObjectId(messageId, 'Message ID');
+        validateRequired(messageId, 'Message ID');
         validateString(kind, 'Reaction kind');
         validateRequired(from, 'From user ID');
         validateRequired(date, 'Date');
@@ -561,7 +559,7 @@ class MessageService {
      * Get message by ID with full population
      */
     async getById(id) {
-        validateObjectId(id, 'Message ID');
+        validateRequired(id, 'Message ID');
 
         const message = await this.model.findById(id)
             .select('-isImported -importedOn -summary -__v -uniqueId')
@@ -688,7 +686,7 @@ class MessageService {
     }
 
     async setMessageNotVisible(messageId) {
-        validateObjectId(messageId, 'Message ID');
+        validateRequired(messageId, 'Message ID');
 
         const filter = { _id: messageId };
         const update = { $set: { visible: false } };
