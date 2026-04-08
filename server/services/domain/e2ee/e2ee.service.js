@@ -1,10 +1,12 @@
 const mongoose = require('mongoose');
+const { normalizeUserId } = require('../../../utils/user.utils');
 
 class E2EEService {
 
     // ─── Device ───────────────────────────────────────────────────────────────
 
     async registerDevice(userId, { registrationId, identityKey, signedPreKey, oneTimePreKeys }) {
+        userId = await normalizeUserId(userId);
         const E2EEDevice = mongoose.model('E2EEDevice');
 
         // One device per user — upsert to allow re-registration
@@ -22,6 +24,7 @@ class E2EEService {
     }
 
     async getDevicesForUser(userId) {
+        userId = await normalizeUserId(userId);
         const E2EEDevice = mongoose.model('E2EEDevice');
 
         const devices = await E2EEDevice.find({ user: userId }).lean();
@@ -38,8 +41,9 @@ class E2EEService {
     }
 
     async removeDevice(deviceId, userId) {
+        userId = await normalizeUserId(userId);
         const E2EEDevice = mongoose.model('E2EEDevice');
-        const result = await E2EEDevice.findOneAndDelete({ _id: deviceId, user: userId });
+        const result = await E2EEDevice.findOneAndDelete({ user: userId });
         if (!result) {
             const error = new Error('Device not found');
             error.status = 404;
@@ -50,9 +54,10 @@ class E2EEService {
     // ─── Pre-key bundle ───────────────────────────────────────────────────────
 
     async getPreKeyBundle(userId, deviceId) {
+        userId = await normalizeUserId(userId);
         const E2EEDevice = mongoose.model('E2EEDevice');
 
-        const device = await E2EEDevice.findOne({ user: userId, _id: deviceId });
+        const device = await E2EEDevice.findOne({ user: userId });
         if (!device) {
             const error = new Error('Device not found');
             error.status = 404;
@@ -86,6 +91,7 @@ class E2EEService {
     // ─── One-time pre keys ────────────────────────────────────────────────────
 
     async addOneTimePreKeys(userId, preKeys) {
+        userId = await normalizeUserId(userId);
         const E2EEDevice = mongoose.model('E2EEDevice');
 
         const device = await E2EEDevice.findOne({ user: userId });
@@ -101,6 +107,7 @@ class E2EEService {
     }
 
     async getPreKeyCount(userId) {
+        userId = await normalizeUserId(userId);
         const E2EEDevice = mongoose.model('E2EEDevice');
 
         const device = await E2EEDevice.findOne({ user: userId }).select('oneTimePreKeys').lean();
@@ -116,6 +123,7 @@ class E2EEService {
     // ─── Signed pre key ───────────────────────────────────────────────────────
 
     async updateSignedPreKey(userId, { id, publicKey, signature }) {
+        userId = await normalizeUserId(userId);
         const E2EEDevice = mongoose.model('E2EEDevice');
 
         const device = await E2EEDevice.findOne({ user: userId });
@@ -133,6 +141,7 @@ class E2EEService {
     // ─── Identity key ─────────────────────────────────────────────────────────
 
     async getIdentityKey(userId) {
+        userId = await normalizeUserId(userId);
         const E2EEDevice = mongoose.model('E2EEDevice');
 
         const device = await E2EEDevice.findOne({ user: userId }).select('identityKey').lean();
@@ -148,6 +157,7 @@ class E2EEService {
     // ─── Key backup ───────────────────────────────────────────────────────────
 
     async storeKeyBackup(userId, { salt, nonce, ciphertext, tag, version }) {
+        userId = await normalizeUserId(userId);
         const E2EEKeyBackup = mongoose.model('E2EEKeyBackup');
 
         await E2EEKeyBackup.findOneAndUpdate(
@@ -158,6 +168,7 @@ class E2EEService {
     }
 
     async getKeyBackup(userId) {
+        userId = await normalizeUserId(userId);
         const E2EEKeyBackup = mongoose.model('E2EEKeyBackup');
 
         const backup = await E2EEKeyBackup.findOne({ user: userId }).lean();
@@ -178,6 +189,7 @@ class E2EEService {
     }
 
     async deleteKeyBackup(userId) {
+        userId = await normalizeUserId(userId);
         const E2EEKeyBackup = mongoose.model('E2EEKeyBackup');
         await E2EEKeyBackup.findOneAndDelete({ user: userId });
     }

@@ -1,7 +1,9 @@
 const mongoose = require('mongoose');
+const logger = require('../../utils/logger');
 const { UserService, ChatService, MessageService } = require('../../services');
 const { getChatService } = require('../services');
 const PushNotificationService = require('../../notifications');
+const e2eeService = require('../../services/domain/e2ee/e2ee.service');
 const chatService = new ChatService();
 // Instantiate a message service
 const messageService = new MessageService();
@@ -52,10 +54,13 @@ const newChat = async function(data, ack) {
 
         const from = this.user.id;
         data.userId = from;
-        // const tempChat = await chatService.create(data);
-        // Do something with the newly chat object
-        // the temp chat is in memory object, not stored to db
-    
+
+        // Register E2EE device if client sent key material with chat creation
+        // if (data.device) {
+        //     const { registrationId, identityKey, signedPreKey, oneTimePreKeys } = data.device;
+        //     await e2eeService.registerDevice(from, { registrationId, identityKey, signedPreKey, oneTimePreKeys });
+        // }
+
         chatService.create(data).then(async (result) => {
             ack(result);
 
@@ -94,48 +99,9 @@ const deleteChat = async function(data, ack) {
         const from = this.user;
  
         chatService.deleteChat(data.chatId, from.id).then(async (result) => {
-            //MARK: Get the socket for the user 
-            var offlineUsers = [];
-
-            const members = result.chat.members;
-            console.log(`Total members: ${members.length}`)
-            
-            for (const member of members) {
-                // CHeck if the member can chat, maybe they left the chat
-                if (!member.canChat) continue;
-
-                // Skip me
-                if (member == from.id) continue;
-
-                const to = member.user._id.toString();
-
-                const isUserConnected = await chatSocketService.isUserConnected(to);
-
-                if (isUserConnected) {
-                    this.to(to).emit('chat deleted', {
-                        chat: { id: result.chat._id }
-                    });
-                } else {
-                    // if (!member.options.muted) { 
-                        offlineUsers.push(member);
-                    // }
-                }
-            }
-
-            const obj = { chat: result.chat, offlineReceivers: offlineUsers};
-            ack(obj);
-
-            return new Promise((resolve) => {
-                resolve(obj)
-            });
-        }).then(result => {
-            // send the push notification to offline users
-            if (result.offlineReceivers && result.offlineReceivers.length) {
-                const pushNotification = new PushNotificationService();
-                result.from = from;
-                pushNotification.chatDeleted(result)
-            }
-        }).catch((err) => { 
+            // Delete is per-user only — only ack the deleting user, do not notify others
+            ack({ chat: result.chat });
+        }).catch((err) => {
             ack({error: err.message});
         });
     } catch (ex) {
@@ -361,7 +327,7 @@ const startTyping = async function(data, ack) {
     try {
         console.log(`Start typing at: ${Date()}`)
         const from = this.user.id;
-        const chatId = data.chatId; 
+        const chatId = data.chatId?.toString();
 
         const chatMembers = await chatService.getChatMembers(chatId); 
         
@@ -401,7 +367,7 @@ const startTyping = async function(data, ack) {
 const stopTyping = async function(data, ack) {
     try {
         const from = this.user.id;
-        const chatId = data.chatId; 
+        const chatId = data.chatId?.toString();
 
         const chatMembers = await chatService.getChatMembers(chatId);  
 
@@ -463,6 +429,7 @@ const newMessage = async function(data, ack) {
         json.sentOn = Date.now();
         json.members = members;
         json.from = from.id;
+        json.tempId = json.tempId || new mongoose.Types.ObjectId().toString();
 
         // Create a temporary message
         const tempMessage = await messageService.create(json);
@@ -561,7 +528,7 @@ const newMessage = async function(data, ack) {
                 // Update message delivery status for online users
                 if (deliveredTo.length > 0) {
                     try {
-                        await messageService.messageDelivered(deliveredTo, result.message._id, Date.now());
+                        await messageService.messageDelivered(deliveredTo, result.message._id.toString(), Date.now());
                         console.log(`Delivery confirmed for ${deliveredTo.length} users`);
                         
                         // Emit delivery confirmation event
@@ -1039,9 +1006,9 @@ const totalUnreadChats = async function(data, ack) {
  * @param {*} ack
  */
 const exchangeInfo = async function(data, ack) {
-    try { 
+    try {
         const from = this.user.id;
-        const chatId = data.chatId; 
+        const chatId = data.chatId?.toString();
 
         const chatMembers = await chatService.getChatMembers(chatId);
         let receivers = [];
@@ -1065,14 +1032,14 @@ const exchangeInfo = async function(data, ack) {
         // ACK back to the sender
         ack({receivers: receivers});
         // Store the public key to chat
-        try { 
+        try {
             await chatService.updateChatWithPublicKey(data);
             console.info('Chat was updated with public key');
         } catch (ex) {
             console.err('Chat was not updated with public key: ' + ex.message);
         }
     } catch (ex) {
-        console.error(`General error start typing: ${ex.message}`)
+        console.error(`General error exchange info: ${ex.message}`)
         ack(ex.message);
     }
 }

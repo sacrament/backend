@@ -4,8 +4,7 @@ const mongoosePaginate = require('mongoose-paginate');
 
 const Message = new Schema({
     // This id is for current messages from the other DB 
-    tempId: { type: String, default: null },
-    uniqueId: { type: String, default: null },
+    tempId: { type: String, default: null }, 
     content: { type: String, required: false, default: null },
     from: { type: Schema.Types.ObjectId, ref: 'User' }, 
     chatId: { type: Schema.Types.ObjectId, ref: 'Chat' },
@@ -34,7 +33,8 @@ const Message = new Schema({
     summary: { type: String, default: null },
     replyTo: { type: Schema.Types.ObjectId, ref: 'Message' },
     sharedContact: { type: Object, default: null },
-    visible: { type: Boolean, default: true }
+    visible: { type: Boolean, default: true },
+    encrypted: { type: Boolean, default: false }
 });
 
 Message.plugin(mongoosePaginate);
