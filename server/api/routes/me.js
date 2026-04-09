@@ -43,6 +43,12 @@ router.put('/privacy', meController.updateProfilePrivacy);
 // DELETE /me
 router.delete('/', meController.deleteCurrentUserAccount);
 
+// ── Key Escrow ────────────────────────────────────────────────────────────────
+// GET    /me/key-escrow
+router.get('/key-escrow', meController.getKeyEscrow);
+// PUT    /me/key-escrow
+router.put('/key-escrow', meController.uploadKeyEscrow);
+
 // ── Hidden Users (Radar) ──────────────────────────────────────────────────────
 // GET    /me/hidden/users
 router.get('/hidden/users', meController.getHiddenUsers);

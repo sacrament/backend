@@ -4,9 +4,11 @@
  * verifyToken is applied at the router level — not repeated here.
  */
 
+const crypto        = require('crypto');
 const mongoose      = require('mongoose');
 const UserService   = require('../../services/domain/user/user.service');
 const DeviceService = require('../../services/domain/device/device.service');
+const KeyEscrow     = require('../../models/key.escrow');
 const userService   = new UserService();
 const deviceService = new DeviceService();
 const logger        = require('../../utils/logger');
@@ -430,6 +432,73 @@ const unhideConnection = async (req, res) => {
   }
 };
 
+// ─── Key Escrow ──────────────────────────────────────────────────────────────
+
+/**
+ * GET /me/key-escrow
+ * Retrieves the user's key escrow. If not exists, creates it with a new escrow key.
+ */
+const getKeyEscrow = async (req, res) => {
+  try {
+    const userId = req.decodedToken.userId;
+    
+    let escrow = await KeyEscrow.findOne({ userId });
+
+    if (!escrow) {
+      // First time — generate a random 32-byte escrow key
+      const escrowKey = crypto.randomBytes(32).toString('base64');
+      escrow = await KeyEscrow.create({
+        userId,
+        escrowKey,
+        bundle: null,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
+    }
+
+    return res.status(200).json({
+      status: 'success',
+      escrowKey: escrow.escrowKey,
+      bundle: escrow.bundle
+    });
+  } catch (error) {
+    logger.error('Get key escrow error:', error);
+    return res.status(500).json({ status: 'error', message: 'Failed to retrieve key escrow' });
+  }
+};
+
+/**
+ * PUT /me/key-escrow
+ * Uploads/updates the user's key escrow bundle (nonce, ciphertext, version).
+ */
+const uploadKeyEscrow = async (req, res) => {
+  try {
+    const userId = req.decodedToken.userId;
+    const { nonce, ciphertext, version } = req.body;
+
+    if (!nonce || !ciphertext || version === undefined) {
+      return res.status(400).json({ 
+        status: 'error', 
+        message: 'Missing required fields: nonce, ciphertext, version' 
+      });
+    }
+
+    await KeyEscrow.findOneAndUpdate(
+      { userId },
+      {
+        bundle: { nonce, ciphertext, version },
+        updatedAt: new Date()
+      },
+      { upsert: true }
+    );
+
+    return res.status(200).json({ status: 'success', success: true });
+  } catch (error) {
+    logger.error('Upload key escrow error:', error);
+    return res.status(500).json({ status: 'error', message: 'Failed to upload key escrow' });
+  }
+};
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function formatUserResponse(user) {
@@ -516,4 +585,6 @@ module.exports = {
   getHiddenConnections,
   hideConnection,
   unhideConnection,
+  getKeyEscrow,
+  uploadKeyEscrow,
 };

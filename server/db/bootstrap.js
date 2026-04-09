@@ -22,6 +22,7 @@ module.exports = {
     require('../models/e2ee.key.backup');
     require('../models/user.muted');
     require('../models/user.disappeared');
+    require('../models/key.escrow');
   },
 
   async connectDatabase() {
