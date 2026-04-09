@@ -23,6 +23,7 @@ module.exports = {
     require('../models/user.muted');
     require('../models/user.disappeared');
     require('../models/key.escrow');
+    require('../models/key.backup');
   },
 
   async connectDatabase() {

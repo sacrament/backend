@@ -9,6 +9,7 @@ const mongoose      = require('mongoose');
 const UserService   = require('../../services/domain/user/user.service');
 const DeviceService = require('../../services/domain/device/device.service');
 const KeyEscrow     = require('../../models/key.escrow');
+const KeyBackup     = require('../../models/key.backup');
 const userService   = new UserService();
 const deviceService = new DeviceService();
 const logger        = require('../../utils/logger');
@@ -499,6 +500,95 @@ const uploadKeyEscrow = async (req, res) => {
   }
 };
 
+// ─── Key Backup ──────────────────────────────────────────────────────────────
+
+/**
+ * PUT /me/key-backup
+ * Stores or overwrites the encrypted passphrase backup.
+ */
+const storeKeyBackup = async (req, res) => {
+  try {
+    const userId = req.decodedToken.userId;
+    const { salt, nonce, ciphertext, tag, version, createdAt } = req.body;
+
+    if (!salt || !nonce || !ciphertext || !tag) {
+      return res.status(400).json({ 
+        status: 'error', 
+        message: 'Missing required fields: salt, nonce, ciphertext, tag' 
+      });
+    }
+
+    if (!createdAt) {
+      return res.status(400).json({ 
+        status: 'error', 
+        message: 'Missing required field: createdAt' 
+      });
+    }
+
+    await KeyBackup.findOneAndUpdate(
+      { userId },
+      { 
+        salt, 
+        nonce, 
+        ciphertext, 
+        tag, 
+        version: version || 2, 
+        createdAt: new Date(createdAt),
+        updatedAt: new Date() 
+      },
+      { upsert: true, new: true }
+    );
+
+    return res.status(200).json({ status: 'success', success: true });
+  } catch (error) {
+    logger.error('Store key backup error:', error);
+    return res.status(500).json({ status: 'error', message: 'Failed to store key backup' });
+  }
+};
+
+/**
+ * GET /me/key-backup
+ * Fetches the encrypted passphrase backup. Returns 404 if none exists.
+ */
+const fetchKeyBackup = async (req, res) => {
+  try {
+    const userId = req.decodedToken.userId;
+    const backup = await KeyBackup.findOne({ userId });
+
+    if (!backup) {
+      return res.status(404).json({ status: 'error', message: 'No backup found' });
+    }
+
+    return res.status(200).json({
+      status: 'success',
+      salt: backup.salt,
+      nonce: backup.nonce,
+      ciphertext: backup.ciphertext,
+      tag: backup.tag,
+      version: backup.version,
+      createdAt: backup.createdAt
+    });
+  } catch (error) {
+    logger.error('Fetch key backup error:', error);
+    return res.status(500).json({ status: 'error', message: 'Failed to fetch key backup' });
+  }
+};
+
+/**
+ * DELETE /me/key-backup
+ * Deletes the encrypted passphrase backup.
+ */
+const deleteKeyBackup = async (req, res) => {
+  try {
+    const userId = req.decodedToken.userId;
+    await KeyBackup.findOneAndDelete({ userId });
+    return res.status(200).json({ status: 'success', success: true });
+  } catch (error) {
+    logger.error('Delete key backup error:', error);
+    return res.status(500).json({ status: 'error', message: 'Failed to delete key backup' });
+  }
+};
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function formatUserResponse(user) {
@@ -587,4 +677,7 @@ module.exports = {
   unhideConnection,
   getKeyEscrow,
   uploadKeyEscrow,
+  storeKeyBackup,
+  fetchKeyBackup,
+  deleteKeyBackup,
 };
