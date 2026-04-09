@@ -170,33 +170,36 @@ class ChatService {
 
         userId = await normalizeUserId(userId);
 
+        // ─── Validate and sanitize skip parameter ─────────────────────────────────────
+        skip = parseInt(skip, 10);
+        if (isNaN(skip) || skip < 0) {
+            skip = -1;
+        }
+
         console.log(`Get All chats for: ${userId} at ${Date.now()}`);
 
+        const userObjectId = new ObjectId(userId);
+
         const aggregate = this.chatModel.aggregate([
+            // ─── Filter chats where user is a member with chat access ───────────────────
             {
                 $match: {
                     members: {
                         $elemMatch: {
-                            $and: [{ user: { $eq: new ObjectId(userId) } }, { user: { $exists: true } }],
+                            user: userObjectId,
                             canChat: true,
                         }
                     }
                 }
             },
+
+            // ─── Lookup message sender details ────────────────────────────────────────────
             {
                 $lookup: {
                     from: 'messages',
-                    let: {
-                        lm: '$lastMessage'
-                    },
+                    let: { msgId: '$lastMessage' },
                     pipeline: [
-                        {
-                            $match: {
-                                $expr: {
-                                    $eq: ['$_id', '$$lm']
-                                }
-                            }
-                        },
+                        { $match: { $expr: { $eq: ['$_id', '$$msgId'] } } },
                         {
                             $lookup: {
                                 from: 'users',
@@ -205,206 +208,100 @@ class ChatService {
                                 as: 'from'
                             }
                         },
-                        {
-                            $unwind: {
-                                path: '$from',
-                                preserveNullAndEmptyArrays: true
-                            }
-                        },
-                        {
-                            $lookup: {
-                                from: 'messages',
-                                localField: 'replyTo',
-                                foreignField: '_id',
-                                as: 'replyTo'
-                            }
-                        },
-                        {
-                            $unwind: {
-                                path: '$replyTo',
-                                preserveNullAndEmptyArrays: true
-                            }
-                        },
-                        {
-                            $lookup: {
-                                from: 'users',
-                                localField: 'replyTo.from',
-                                foreignField: '_id',
-                                as: 'replyTo.from'
-                            }
-                        },
-                        {
-                            $unwind: {
-                                path: '$replyTo.from',
-                                preserveNullAndEmptyArrays: true
-                            }
-                        },
+                        { $unwind: { path: '$from', preserveNullAndEmptyArrays: true } },
                         {
                             $project: {
-                                _id: 1, content: 1, kind: 1, from: 1, sentOn: 1, reactions: 1, status: 1, sharedContact: 1, media: 1, deleted: 1, chatId: 1,
-                                replyTo: {
-                                    _id: 1, kind: 1, sentOn: 1, reactions: 1, content: 1, media: 1, deleted: 1, chatId: 1,
-                                    from: { _id: 1, id: 1, name: 1, email: 1, phone: 1, imageUrl: 1 },
-                                    status: {
-                                        user: { _id: 1, id: 1, name: 1, email: 1, phone: 1, imageUrl: 1 }
-                                    },
-                                    reactions: {
-                                        from: { _id: 1, id: 1, name: 1, email: 1, phone: 1, imageUrl: 1 }
-                                    }
-                                }
+                                _id: 1,
+                                content: 1,
+                                kind: 1,
+                                sentOn: 1,
+                                deleted: 1,
+                                chatId: 1,
+                                from: {
+                                    _id: 1,
+                                    id: 1,
+                                    name: 1,
+                                    email: 1,
+                                    phone: 1,
+                                    imageUrl: 1
+                                },
+                                reactions: 1,
+                                media: 1,
+                                replyTo: 1,
+                                status: 1
                             }
                         }
                     ],
                     as: 'lastMessage'
                 }
             },
+
             {
                 $unwind: {
                     path: '$lastMessage',
                     preserveNullAndEmptyArrays: true
                 }
             },
-            {
-                $lookup: {
-                    from: 'media',
-                    localField: 'lastMessage.media',
-                    foreignField: '_id',
-                    as: 'media'
-                }
-            },
-            {
-                $lookup: {
-                    from: 'users',
-                    localField: 'media.from',
-                    foreignField: '_id',
-                    as: 'fromMediaUsers'
-                }
-            },
-            {
-                $addFields: {
-                    'media.from': {
-                        $arrayElemAt: ['$fromMediaUsers', 0]
-                    }
-                }
-            },
-            {
-                $lookup: {
-                    from: 'reactions',
-                    localField: 'lastMessage.reactions',
-                    foreignField: '_id',
-                    as: 'reactions'
-                }
-            },
-            {
-                $lookup: {
-                    from: 'users',
-                    localField: 'reactions.from',
-                    foreignField: '_id',
-                    as: 'fromUsers'
-                }
-            },
-            {
-                $addFields: {
-                    'reactions.from': {
-                        $arrayElemAt: ['$fromUsers', 0]
-                    },
-                }
-            },
-            {
-                $lookup: {
-                    from: 'users',
-                    localField: 'lastMessage.status.user',
-                    foreignField: '_id',
-                    as: 'fromUsers'
-                }
-            },
-            {
-                $addFields: {
-                    'lastMessage.status.user': {
-                        $arrayElemAt: ['$fromUsers', 0]
-                    }
-                }
-            },
-            {
-                $unwind: '$members'
-            },
+
+            // ─── Lookup all member details ────────────────────────────────────────────────
             {
                 $lookup: {
                     from: 'users',
                     localField: 'members.user',
                     foreignField: '_id',
-                    as: 'users'
+                    as: 'memberDetails'
                 }
             },
+
+            // ─── Reconstruct members with user details ─────────────────────────────────────
             {
                 $addFields: {
-                    'lastMessage.reactions': '$reactions',
-                    'lastMessage.media': '$media',
-                    'members.user': {
-                        $arrayElemAt: ['$users', 0]
-                    }
-                }
-            },
-            {
-                $group: {
-                    "_id": "$_id",
-                    members: { "$push": "$members" },
-                    lastMessage: {
-                        $first: {
-                            $cond: [
-                                { $gte: ['$lastMessage.sentOn', '$me'] }, '$lastMessage', null
-                            ]
+                    members: {
+                        $map: {
+                            input: '$members',
+                            as: 'member',
+                            in: {
+                                _id: '$$member._id',
+                                user: {
+                                    $arrayElemAt: [
+                                        {
+                                            $filter: {
+                                                input: '$memberDetails',
+                                                as: 'detail',
+                                                cond: { $eq: ['$$detail._id', '$$member.user'] }
+                                            }
+                                        },
+                                        0
+                                    ]
+                                },
+                                joinedOn: '$$member.joinedOn',
+                                canChat: '$$member.canChat',
+                                options: '$$member.options'
+                            }
                         }
-                    },
-                    active: { $first: "$active" },
-                    createdOn: { $first: "$createdOn" }
-                }
-            },
-            {
-                $addFields: {
-                    'me': { $arrayElemAt: ['$members.joinedOn', { "$indexOfArray": ["$members.user", new ObjectId(userId)] }] },
-                }
-            },
-            {
-                $sort: { "lastMessage.sentOn": -1 }
-            },
-            {
-                $addFields: {
-                    lastMessage: {
-                        $cond: [
-                            { $gte: ['$lastMessage.sentOn', '$me'] },
-                            '$lastMessage',
-                            null
-                        ]
                     }
                 }
             },
-            {
-                $replaceRoot: { newRoot: { $mergeObjects: [{ lastMessage: null }, "$$ROOT"] } }
-            },
+
+            // ─── Project final shape ──────────────────────────────────────────────────────
             {
                 $project: {
-                    name: 0,
-                    imageUrl: 0,
-                    type: 0,
-                    id: 0,
-                    members: {
-                        user: { requests: 0, device: 0, updatedOn: 0, registeredOn: 0, facebookId: 0, __v: 0, contacts: 0, lastLogin: 0, isPublic: 0, chatToken: 0 }
-                    },
-                    lastMessage: {
-                        from: { requests: 0, device: 0, updatedOn: 0, registeredOn: 0, facebookId: 0, lastLogin: 0, __v: 0, contacts: 0, isPublic: 0 },
-                        status: {
-                            user: { requests: 0, device: 0, updatedOn: 0, registeredOn: 0, facebookId: 0, lastLogin: 0, __v: 0, chatToken: 0, contacts: 0, isPublic: 0 }
-                        },
-                        reactions: {
-                            from: { requests: 0, device: 0, updatedOn: 0, registeredOn: 0, facebookId: 0, lastLogin: 0, __v: 0, contacts: 0, isPublic: 0 }
-                        },
-                        media: {
-                            from: { requests: 0, device: 0, updatedOn: 0, registeredOn: 0, facebookId: 0, lastLogin: 0, __v: 0, contacts: 0, isPublic: 0 }
-                        }
-                    }
+                    _id: 1,
+                    active: 1,
+                    createdOn: 1,
+                    lastMessage: 1,
+                    members: 1,
+                    uniqueId: 1
                 }
             },
+
+            // ─── Sort by last message timestamp ────────────────────────────────────────────
+            {
+                $sort: {
+                    'lastMessage.sentOn': -1,
+                    '_id': -1
+                }
+            }
         ]);
 
         try {
@@ -416,175 +313,18 @@ class ChatService {
                 chats = await aggregate.exec();
             }
 
+            // ─── Fetch unread message counts efficiently ────────────────────────────────
             await Promise.all(chats.map(async (chat) => {
-                const unread = await this.countUnreadMessagesForChat(chat._id, userId);
+                const unread = await this.countUnreadMessagesForChat(chat._id.toString(), userId);
                 chat.unreadMessages = unread;
             }));
 
             console.log(`Total chats fetched: ${chats.length} at ${Date.now()}`);
             return chats;
         } catch (ex) {
-            console.error('Error: ' + ex.message);
+            console.error(`[ChatService.getAll] Error fetching chats for user ${userId}: ${ex.message}`);
             throw ex;
         }
-    }
-
-    async getAllFavoriteChats(userId) {
-        validateRequired(userId, 'User ID');
-
-        userId = await normalizeUserId(userId);
-
-        const chats = await this.chatModel.aggregate([
-            {
-                $match: {
-                    active: true,
-                    members: {
-                        $elemMatch: {
-                            user: new ObjectId(userId),
-                            canChat: true,
-                            'options.favorite': true
-                        }
-                    }
-                }
-            },
-            {
-                $lookup: {
-                    from: 'messages',
-                    let: {
-                        chatId: '$_id'
-                    },
-                    pipeline: [{
-                        $match: {
-                            $expr: {
-                                $and: [{
-                                    $ne: [
-                                        '$from', new ObjectId(userId)
-                                    ]
-                                }, {
-                                    $eq: [
-                                        '$chatId', '$$chatId'
-                                    ]
-                                }, {
-                                    $eq: [
-                                        '$deleted.date', null
-                                    ]
-                                }]
-                            }
-                        }
-                    }, {
-                        $unwind: {
-                            path: '$status',
-                            preserveNullAndEmptyArrays: true
-                        }
-                    }, {
-                        $match: {
-                            'status.read': {
-                                $eq: null
-                            }
-                        }
-                    },
-                    {
-                        $group: {
-                            _id: "$_id"
-                        }
-                    }
-                    ],
-                    as: 'unreadMessages'
-                }
-            },
-            {
-                $project: {
-                    chat: '$$ROOT'
-                }
-            },
-            {
-                $replaceRoot: {
-                    newRoot: '$chat'
-                }
-            },
-            {
-                $addFields: {
-                    unreadMessages: {
-                        $size: '$unreadMessages'
-                    }
-                }
-            },
-            {
-                $lookup: {
-                    from: 'messages',
-                    let: {
-                        lm: '$lastMessage'
-                    },
-                    pipeline: [
-                        {
-                            $match: {
-                                $expr: { $eq: ['$_id', '$$lm'] }
-                            }
-                        },
-                        {
-                            $lookup: {
-                                from: 'users',
-                                localField: 'from',
-                                foreignField: '_id',
-                                as: 'from'
-                            }
-                        },
-                        {
-                            $unwind: {
-                                path: '$from',
-                                preserveNullAndEmptyArrays: true
-                            }
-                        },
-                        {
-                            $project: { _id: 1, content: 1, kind: 1, from: 1, sentOn: 1, reactions: 1 }
-                        }
-                    ],
-                    as: 'lastMessage'
-                }
-            },
-            {
-                $unwind: '$lastMessage'
-            },
-            {
-                $unwind: '$members'
-            },
-            {
-                $lookup: {
-                    from: 'users',
-                    localField: 'members.user',
-                    foreignField: '_id',
-                    as: 'users'
-                }
-            },
-            {
-                $addFields: {
-                    'members.user': {
-                        $arrayElemAt: ['$users', 0]
-                    }
-                }
-            },
-            {
-                $group: {
-                    "_id": "$_id",
-                    members: { "$push": "$members" },
-                    lastMessage: { $first: "$lastMessage" },
-                    unreadMessages: { $first: "$unreadMessages" },
-                    createdOn: { $first: "$createdOn" }
-                }
-            },
-            {
-                $project: {
-                    members: {
-                        user: { device: 0, updatedOn: 0, registeredOn: 0, facebookId: 0, __v: 0 }
-                    },
-                    lastMessage: {
-                        from: { device: 0, updatedOn: 0, registeredOn: 0, facebookId: 0, lastLogin: 0, __v: 0 }
-                    }
-                }
-            }
-        ]).exec();
-
-        return chats;
     }
 
     async getChatsForUser(user, showOnlyFavorites = false, skip = 0) {
@@ -881,23 +621,6 @@ class ChatService {
             console.error(`Error counting chats for user: ${userId}. Error: ${err.message}`);
             return 0;
         }
-    }
-
-    async getByImportedId(importedChatId) {
-        validateRequired(importedChatId, 'Imported chat ID');
-
-        const query = {
-            isImported: true,
-            id: importedChatId
-        };
-
-        const chat = await this.chatModel.findOne(query).lean().exec();
-
-        if (!chat) {
-            throw new Error('Chat not found');
-        }
-
-        return chat;
     }
 
     async getByUniqueId(uniqueId) {
