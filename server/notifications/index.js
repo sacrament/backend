@@ -285,12 +285,15 @@ class PushNotificationService {
 
     async respondConnectionRequest(from, to, request, response) {
         try {
+            // Ensure 'to' is in the expected format for _send
+            const recipients = Array.isArray(to) ? to : [to];
+            
             await this._send({
                 title: from.name,
                 body: response === 'accepted' ? 'Accepted your request' : 'Declined your request',
                 category: 'RespondConnectionRequest',
                 custom: { request, fromUser: from, save: 1, respondConnetionRequest: true, response },
-            }, [to]);
+            }, recipients);
         } catch (ex) {
             console.error(`push:respondConnectionRequest — ${ex.message}`);
         }

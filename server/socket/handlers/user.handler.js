@@ -67,20 +67,55 @@ const respondRequest = async function (data, cb) {
         const toId = data.to;
         const response = data.response;
 
+        // Validate input
+        if (!toId || !response || !['accepted', 'declined'].includes(response)) {
+            throw new Error('Invalid request: to and response (accepted/declined) are required');
+        }
+
         const res = await userService.respondConnectionRequest(fromId, toId, response);
+
+        if (!res || !res.request) {
+            throw new Error('Failed to process connection request response');
+        }
+
+        const fromUser = await UserModel.findById(fromId).lean().select(utils.userColumnsToShow());
+        const toUser = await UserModel.findById(toId).lean();
 
         const memberIsOnline = await chatSocketService.isUserConnected(toId);
 
         if (memberIsOnline) {
-            const fromUser = await UserModel.findById(fromId).lean().select(utils.userColumnsToShow());
-            this.to(toId).emit('connection request response', { from: fromUser, request: res.request, response });
+            this.to(toId).emit('connection request response', { 
+                from: fromUser, 
+                request: res.request, 
+                response,
+                status: 'accepted'
+            });
         } else {
-            const fromUser = await UserModel.findById(fromId).lean().select(utils.userColumnsToShow());
-            await getAgenda().now('push:connection-request-response', { from: fromUser, to: toId, request: res.request, response });
+            if (toUser) {
+                await getAgenda().now('push:connection-request-response', { 
+                    from: fromUser, 
+                    to: toUser, 
+                    request: res.request, 
+                    response
+                });
+            }
         }
-        cb({ request: res.request });
+
+        // Return full response object with status
+        cb({ 
+            status: 'success',
+            message: res.title,
+            request: res.request,
+            response: response,
+            processedAt: Date.now()
+        });
     } catch (ex) {
-        cb(ex);
+        logger.error('Error responding to connection request:', ex);
+        cb({ 
+            status: 'error',
+            error: ex.message,
+            code: 'RESPOND_REQUEST_ERROR'
+        });
     }
 }
 

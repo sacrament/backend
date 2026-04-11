@@ -83,22 +83,11 @@ class MessageService {
             message.media.push(media);
         }
 
-        // Initialize status for ALL members (including sender for comprehensive tracking)
-        for (const member of data.members) {
-            const userId = member.user._id.toString();
-            
-            const statusEntry = {
-                user: member.user._id,
-                sent: data.sentOn
-            };
-
-            // Sender's message is considered delivered immediately
-            if (userId === data.from) {
-                statusEntry.delivered = data.sentOn;
-            }
-
-            message.status.push(statusEntry);
-        }
+        // Initialize status - for private chats, sender's message is delivered immediately
+        message.status = {
+            delivered: data.sentOn,
+            read: null
+        };
 
         return message;
     }
@@ -218,31 +207,21 @@ class MessageService {
             // Save message
             await this.save(message, true, session);
 
-            // Mark as delivered for specified users
+            // Mark as delivered
             if (deliverToUsers && deliverToUsers.length > 0) {
                 const filter = {
                     _id: message._id,
-                    'status.user': { $in: deliverToUsers }
+                    'status.delivered': null
                 };
 
                 const update = {
                     $set: {
-                        'status.$[elem].delivered': Date.now()
+                        'status.delivered': Date.now()
                     }
                 };
 
-                const options = {
-                    arrayFilters: [
-                        {
-                            'elem.user': { $in: deliverToUsers },
-                            'elem.delivered': null
-                        }
-                    ],
-                    session: session
-                };
-
-                await this.model.updateMany(filter, update, options);
-                console.log(`Message saved with delivery confirmation for ${deliverToUsers.length} users`);
+                await this.model.updateMany(filter, update, { session: session });
+                console.log(`Message saved with delivery confirmation`);
             }
 
             await session.commitTransaction();
@@ -268,27 +247,16 @@ class MessageService {
         validateObjectId(messageId, 'Message ID');
         validateRequired(date, 'Date');
 
-        if (typeof users === 'number') {
-            users = await normalizeUserId(users);
-        }
-
-        if (typeof users === 'string') {
-            users = [users];
-        }
-
-        if (!Array.isArray(users)) {
-            throw new Error('Users must be an array, string, or number');
-        }
-
-        const filter = { _id: messageId, 'status.user': { $in: users } };
-        const update = { $set: { 'status.$.delivered': new Date(date) } };
+        // For private chats, we simply mark as delivered without per-user tracking
+        const filter = { _id: messageId };
+        const update = { $set: { 'status.delivered': new Date(date) } };
 
         const editedMessage = await this.model
             .findOneAndUpdate(filter, update, { new: true, runValidators: true })
             .lean();
 
         if (!editedMessage) {
-            throw new Error('User is not part of the chat');
+            throw new Error('Message not found');
         }
 
         return editedMessage;
@@ -305,13 +273,9 @@ class MessageService {
             throw new Error('Message object is required');
         }
 
-        for (const to of users) {
-            const sent = {
-                user: to,
-                sent: message.sentOn
-            };
-            message.status.push(sent);
-        }
+        // For private chats, status is already initialized in create()
+        // No additional action needed
+        return;
 
         try {
             await message.save();
@@ -332,7 +296,7 @@ class MessageService {
         validateRequired(date, 'Date');
 
         const filter = { _id: messageId, 'status.user': { $eq: byUser } };
-        const update = { $set: { 'status.$.read': new Date(date * 1000) } };
+        const update = { $set: { 'status.read': new Date(date * 1000) } };
 
         const editedMessage = await this.model
             .findOneAndUpdate(filter, update, { new: true, runValidators: true })
@@ -479,7 +443,7 @@ class MessageService {
                 page: 0,
                 populate: [
                     {
-                        path: 'from status.user',
+                        path: 'from',
                         select: utils.userColumnsToShow()
                     },
                     {
@@ -496,7 +460,7 @@ class MessageService {
                 limit: 50,
                 populate: [
                     {
-                        path: 'from status.user',
+                        path: 'from',
                         select: utils.userColumnsToShow()
                     },
                     {
@@ -520,16 +484,11 @@ class MessageService {
             const updateQuery = {
                 chatId: chatId,
                 from: { $ne: new ObjectId(userId) },
-                status: {
-                    $elemMatch: {
-                        user: { $eq: new ObjectId(userId) }
-                    }
-                }
+                'status.read': { $eq: null }
             };
-            const update = { $set: { 'status.$[elem].read': Date.now() } };
-            const filter = { arrayFilters: [{ 'elem.read': { $eq: null } }] };
+            const update = { $set: { 'status.read': Date.now() } };
 
-            const result = await this.model.updateMany(updateQuery, update, filter);
+            const result = await this.model.updateMany(updateQuery, update);
 
             if (result.nModified > 0) {
                 console.log(`Messages marked as read, Total: ${result.nModified}`);
@@ -633,16 +592,11 @@ class MessageService {
             const updateQuery = {
                 chatId: chatId,
                 from: { $ne: new ObjectId(userId) },
-                status: {
-                    $elemMatch: {
-                        user: { $eq: new ObjectId(userId) }
-                    }
-                }
+                'status.read': { $eq: null }
             };
-            const update = { $set: { 'status.$[elem].read': Date.now() } };
-            const filter = { arrayFilters: [{ 'elem.read': { $eq: null } }] };
+            const update = { $set: { 'status.read': Date.now() } };
 
-            const result = await this.model.updateMany(updateQuery, update, filter);
+            const result = await this.model.updateMany(updateQuery, update);
 
             if (result.nModified > 0) {
                 console.log(`Messages marked as read, Total: ${result.nModified}`);
@@ -671,10 +625,6 @@ class MessageService {
             .populate([
                 {
                     path: 'from',
-                    select: utils.userColumnsToShow()
-                },
-                {
-                    path: 'status.user',
                     select: utils.userColumnsToShow()
                 },
                 {
@@ -769,18 +719,13 @@ class MessageService {
         const query = {
             chatId: chatId,
             from: { $ne: new ObjectId(userId) },
-            status: {
-                $elemMatch: {
-                    user: { $eq: new ObjectId(userId) }
-                }
-            }
+            'status.read': { $eq: null }
         };
 
         const markDate = date || Date.now();
-        const update = { $set: { 'status.$[elem].read': markDate } };
-        const filter = { arrayFilters: [{ 'elem.read': { $eq: null } }] };
+        const update = { $set: { 'status.read': markDate } };
 
-        const result = await this.model.updateMany(query, update, filter);
+        const result = await this.model.updateMany(query, update);
 
         console.log(`Conversation marked as seen, Total: ${result.nModified}`);
 
@@ -820,27 +765,19 @@ class MessageService {
             userId = await normalizeUserId(userId);
         }
 
+        // For private chats, mark all messages not from this user as delivered if not already delivered
         const filter = {
-            'status.user': new ObjectId(userId),
+            from: { $ne: new ObjectId(userId) },
             'status.delivered': null
         };
 
         const update = {
             $set: {
-                'status.$[elem].delivered': timestamp
+                'status.delivered': timestamp
             }
         };
 
-        const options = {
-            arrayFilters: [
-                {
-                    'elem.user': new ObjectId(userId),
-                    'elem.delivered': null
-                }
-            ]
-        };
-
-        const result = await this.model.updateMany(filter, update, options);
+        const result = await this.model.updateMany(filter, update);
 
         if (result.nModified > 0) {
             console.log(`Marked ${result.nModified} pending messages as delivered for user: ${userId}`);

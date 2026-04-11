@@ -424,13 +424,13 @@ class ChatService {
         userId = await normalizeUserId(userId);
 
         try {
+            // For private chats, count messages not from this user that haven't been read
             const count = await MessageModel.countDocuments({
                 chatId: { $eq: new ObjectId(chatId) },
                 from: { $ne: new ObjectId(userId) },
                 kind: { $ne: 'generic' },
                 'deleted.date': { $eq: null },
-                'status.user': { $eq: new ObjectId(userId) },
-                $and: [{ 'status.read': { $eq: null } }, { 'status.read': { $exists: true } }],
+                'status.read': { $eq: null }
             }).exec();
 
             return count;
@@ -478,20 +478,11 @@ class ChatService {
                                     $eq: [
                                         '$deleted.date', null
                                     ]
+                                }, {
+                                    $eq: [
+                                        '$status.read', null
+                                    ]
                                 }]
-                            }
-                        }
-                    },
-                    {
-                        $unwind: {
-                            path: '$status',
-                            preserveNullAndEmptyArrays: false
-                        }
-                    },
-                    {
-                        $match: {
-                            'status.read': {
-                                $eq: null
                             }
                         }
                     },

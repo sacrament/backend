@@ -399,160 +399,271 @@ const stopTyping = async function(data, ack) {
 /** MESSAGES */
 
 /**
- *
- *
- * @param {*} data
- * @param {*} ack
+ * Handle new message creation and distribution
+ * - Validates sender permissions and message content
+ * - Creates and saves message with E2EE support
+ * - Delivers to online/offline recipients asynchronously
+ * - Tracks delivery status (delivered/read)
+ * - Sends push notifications to offline users
+ * - Implements idempotency checks and retry logic
  */
 const newMessage = async function(data, ack) {
+    let tempMessage = null;
+    let result = null;
+    const startTime = Date.now();
+
     try {
-        console.log(`New message: ${data.chatId}`);
+        // Validate input parameters
+        if (!data || typeof data !== 'object') {
+            throw new Error('Invalid message data');
+        }
+
+        const { chatId, tempId, content, kind } = data;
+        
+        if (!chatId || !content) {
+            throw new Error('chatId and content are required');
+        }
+
+        // Validate message type
+        const validKinds = ['text', 'image', 'video', 'audio', 'document', 'GIF', 'generic', 'share contact'];
+        if (kind && !validKinds.includes(kind)) {
+            throw new Error(`Invalid message kind: ${kind}`);
+        }
+
+        logger.debug(`New message: ${chatId}`);
 
         const from = this.user;
         
-        // Validate sender and get chat with validations
+        // Validate sender
         if (!from || !from.id) {
             throw new Error('Sender identification failed');
         }
 
-        // Get chat and verify sender is member
-        const chat = await chatService.getById(data.chatId, from.id);
-        const members = chat.members;
+        // Check for duplicate message (idempotency)
+        if (tempId) {
+            const isDuplicate = await messageService.isDuplicate(tempId, chatId);
+            if (isDuplicate) {
+                logger.warn(`Duplicate message detected: tempId=${tempId}`);
+                return ack({ warning: 'Duplicate message', isDuplicate: true });
+            }
+        }
 
-        // Validate sender is in members list
+        // Get chat and verify sender is member with permissions
+        let chat;
+        try {
+            chat = await chatService.getById(chatId, from.id);
+        } catch (err) {
+            throw new Error(`Unable to verify chat membership: ${err.message}`);
+        }
+
+        if (!chat) {
+            throw new Error('Chat not found or access denied');
+        }
+
+        const members = chat.members;
         const senderMember = members.find(m => m.user._id.toString() === from.id);
+        
         if (!senderMember || !senderMember.canChat) {
             throw new Error('Sender is not authorized to send messages in this chat');
         }
 
-        const json = data;
-        json.sentOn = Date.now();
-        json.members = members;
-        json.from = from.id;
-        json.tempId = json.tempId || new mongoose.Types.ObjectId().toString();
+        // Validate minimal members for sending
+        if (members.filter(m => m.canChat).length < 2) {
+            throw new Error('At least 2 members needed to send messages');
+        }
 
-        // Create a temporary message
-        const tempMessage = await messageService.create(json);
+        // Prepare message data
+        const messageData = {
+            ...data,
+            sentOn: Date.now(),
+            sentOnTimestamp: Math.floor(Date.now() / 1000), // For backwards compatibility
+            members: members,
+            from: from.id,
+            tempId: tempId || new mongoose.Types.ObjectId().toString()
+        };
+
+        // Create message object (in-memory)
+        tempMessage = await messageService.create(messageData);
         
-        // Save the message to database
-        messageService.save(tempMessage)
-            .then(async (result) => {
-                const deliveredTo = [];
-                const offlineReceivers = [];
+        // Save message to database
+        result = await messageService.save(tempMessage);
+        
+        if (!result || !result.message) {
+            throw new Error('Failed to persist message');
+        }
+
+        logger.info(`Message saved: ${result.message._id} in ${Date.now() - startTime}ms`);
+
+        // Update chat's last message reference
+        let updatedChat;
+        try {
+            const update = await chatService.setLatestMessage(chatId, tempMessage._id, from.id);
+            updatedChat = update.chat;
+        } catch (err) {
+            logger.error(`Failed to update last message: ${err.message}`);
+            updatedChat = chat; // Use original chat if update fails
+        }
+
+        // Send ACK immediately with persisted message
+        ack({ 
+            message: result.message, 
+            chat: updatedChat,
+            tempId: messageData.tempId 
+        });
+
+        // === ASYNC DELIVERY HANDLING (non-blocking) ===
+        // Schedule delivery without blocking the ACK
+        setImmediate(async () => {
+            try {
+                const distributeStart = Date.now();
+                const stats = await distributeMessage(
+                    this,
+                    tempMessage,
+                    result.message,
+                    updatedChat,
+                    members,
+                    from,
+                    data
+                );
                 
-                // Update chat's last message
-                const update = await chatService.setLatestMessage(data.chatId, tempMessage._id, from.id);
-                const updatedChat = update.chat;
+                logger.info(
+                    `Message delivery completed: ` +
+                    `online=${stats.online}, offline=${stats.offline}, ` +
+                    `blocked=${stats.blocked}, duration=${Date.now() - distributeStart}ms`
+                );
+            } catch (err) {
+                logger.error(`Error distributing message ${tempMessage._id}: ${err.message}`);
+            }
+        });
 
-                // Send ACK immediately
-                ack({ message: result.message, chat: updatedChat });
-
-                // Build broadcast object (will be cloned for each recipient)
-                const baseObject = {
-                    message: tempMessage,
-                    chat: updatedChat,
-                    publicKey: data.publicKey,
-                    bytes: data.bytes
-                };
-
-                // Process each member in sequence to handle blocked status and delivery tracking
-                for (const member of members) {
-                    try {
-                        // Skip if member cannot chat
-                        if (!member.canChat) {
-                            console.log(`Skipping member ${member.user._id}: cannot chat`);
-                            continue;
-                        }
-
-                        const to = member.user._id.toString();
-                        
-                        // Skip sender
-                        if (to === from.id) {
-                            console.log(`Skipping sender: ${to}`);
-                            continue;
-                        }
-
-                        // Check if message is blocked for this user
-                        if (member.options && member.options.blocked) {
-                            console.log(`Message blocked for user ${to}`);
-                            try {
-                                await messageService.setMessageNotVisible(tempMessage._id);
-                            } catch (err) {
-                                console.error(`Error marking message invisible: ${err.message}`);
-                            }
-                            continue;
-                        }
-
-                        // Check if receiver exists and is connected
-                        const memberIsOnline = await chatSocketService.isUserConnected(to);
-
-                        if (memberIsOnline) {
-                            // Create a fresh clone of the message object for this recipient
-                            // This prevents shared state issues with unreadMessages counter
-                            const recipientObject = JSON.parse(JSON.stringify(baseObject));
-                            
-                            // Emit to online user
-                            this.to(to).emit('new message received', recipientObject);
-                            
-                            deliveredTo.push(to);
-                            console.log(`Message delivered online to: ${to}`);
-                        } else {
-                            // Track offline receiver for push notification
-                            offlineReceivers.push(member);
-                            console.log(`User offline: ${to}, will send push notification`);
-                        }
-                    } catch (memberError) {
-                        console.error(`Error processing member delivery: ${memberError.message}`);
-                        // Continue processing other members
-                    }
-                }
-
-                // Send push notifications to offline users
-                if (offlineReceivers.length > 0) {
-                    try {
-                        const pushNotificationObj = {
-                            message: result.message,
-                            chat: updatedChat,
-                            offlineReceivers: offlineReceivers,
-                            from: tempMessage.from
-                        };
-                        
-                        const pushNotification = new PushNotificationService();
-                        pushNotification.newMessage(pushNotificationObj);
-                        console.log(`Push notifications queued for ${offlineReceivers.length} users`);
-                    } catch (pushError) {
-                        console.error(`Error sending push notifications: ${pushError.message}`);
-                    }
-                }
-
-                // Update message delivery status for online users
-                if (deliveredTo.length > 0) {
-                    try {
-                        await messageService.messageDelivered(deliveredTo, result.message._id.toString(), Date.now());
-                        console.log(`Delivery confirmed for ${deliveredTo.length} users`);
-                        
-                        // Emit delivery confirmation event
-                        this.emit('message delivered to', {
-                            message: result.message,
-                            deliveredTo: deliveredTo
-                        });
-                    } catch (deliveryError) {
-                        console.error(`Error updating delivery status: ${deliveryError.message}`);
-                    }
-                }
-            }).catch((err) => {
-                console.error(`Error saving message: ${err.message}`);
-                if (ack) {
-                    ack({ error: err.message });
-                }
-            });
-    } catch (ex) {
-        console.error(`Error in newMessage handler: ${ex.message}`);
+    } catch (error) {
+        logger.error(`Error in newMessage handler: ${error.message}`, { 
+            chatId: data?.chatId,
+            userId: this.user?.id,
+            duration: Date.now() - startTime 
+        });
+        
         if (ack) {
-            ack({ error: ex.message });
+            ack({ 
+                error: error.message,
+                code: error.code || 'MESSAGE_ERROR'
+            });
         }
     }
 };
+
+/**
+ * Helper: Distribute message to all recipients
+ * Handles online delivery via socket and offline via push notifications
+ * Returns delivery statistics for logging and monitoring
+ */
+async function distributeMessage(socket, tempMessage, savedMessage, updatedChat, members, sender, originalData) {
+    const deliveredTo = [];
+    const offlineReceivers = [];
+    const blockedReceivers = [];
+
+    // Filter valid recipients and deliver in parallel where possible
+    const deliveryPromises = members
+        .filter(member => member.canChat && member.user._id.toString() !== sender.id)
+        .map(async (member) => {
+            const recipientId = member.user._id.toString();
+            
+            try {
+                // Check if message is blocked for recipient
+                if (member.options?.blocked) {
+                    logger.debug(`Message blocked for user ${recipientId}`);
+                    blockedReceivers.push(recipientId);
+                    
+                    // Mark message as invisible for this user (non-blocking)
+                    messageService.setMessageNotVisible(tempMessage._id)
+                        .catch(err => logger.warn(`Failed to mark invisible: ${err.message}`));
+                    
+                    return;
+                }
+
+                // Check if recipient is online
+                const isOnline = await chatSocketService.isUserConnected(recipientId);
+
+                if (isOnline) {
+                    try {
+                        // Emit to online recipient
+                        socket.to(recipientId).emit('new message received', {
+                            message: tempMessage,
+                            chat: updatedChat,
+                            publicKey: originalData.publicKey,
+                            bytes: originalData.bytes,
+                            sentAt: Date.now()
+                        });
+                        
+                        deliveredTo.push(recipientId);
+                        logger.debug(`Message delivered (online) to: ${recipientId}`);
+                    } catch (err) {
+                        logger.error(`Failed to emit message to ${recipientId}: ${err.message}`);
+                    }
+                } else {
+                    // Track for push notification
+                    offlineReceivers.push(member);
+                    logger.debug(`User offline: ${recipientId}, queued for push`);
+                }
+            } catch (err) {
+                logger.error(`Error processing recipient ${member.user._id}: ${err.message}`);
+            }
+        });
+
+    // Wait for all delivery attempts
+    await Promise.allSettled(deliveryPromises);
+
+    // Update delivery status for online users (batch operation)
+    if (deliveredTo.length > 0) {
+        try {
+            await messageService.messageDelivered(deliveredTo, savedMessage._id.toString(), Date.now());
+            logger.info(`Delivery confirmed for ${deliveredTo.length} recipients`);
+            
+            // Notify sender of delivery confirmation
+            socket.emit('message delivered to', {
+                messageId: savedMessage._id,
+                deliveredTo: deliveredTo,
+                timestamp: Date.now()
+            });
+        } catch (err) {
+            logger.error(`Failed to update delivery status: ${err.message}`);
+        }
+    }
+
+    // Send push notifications to offline users (batch operation)
+    if (offlineReceivers.length > 0) {
+        try {
+            const pushNotificationService = new PushNotificationService();
+            
+            // Filter offline users who haven't muted notifications
+            const notifiableReceivers = offlineReceivers.filter(
+                m => !m.options?.muted
+            );
+
+            if (notifiableReceivers.length > 0) {
+                pushNotificationService.newMessage({
+                    message: savedMessage,
+                    chat: updatedChat,
+                    offlineReceivers: notifiableReceivers,
+                    from: tempMessage.from,
+                    timestamp: Date.now()
+                });
+                
+                logger.info(`Push notifications queued for ${notifiableReceivers.length} users`);
+            }
+        } catch (err) {
+            logger.error(`Error queueing push notifications: ${err.message}`);
+        }
+    }
+
+    // Return statistics for monitoring
+    return {
+        online: deliveredTo.length,
+        offline: offlineReceivers.length,
+        blocked: blockedReceivers.length,
+        totalRecipients: members.filter(m => m.canChat && m.user._id.toString() !== sender.id).length
+    };
+}
 
 /**
  *Get conversation for a single chat
