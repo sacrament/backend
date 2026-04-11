@@ -101,24 +101,7 @@ const all = async (req, res) => {
         res.status(500).json({status: 'error', message: err.message})
     })
 }
-
-/**
- * G~et all favorite chats
- *
- * @param {*} _
- * @param {*} res
- */
-const allFavorites = (req, res) => {
-    // const userId = req.body.userId;
-    const userId = req.decodedToken.userId;
-
-    chatService.getAllFavoriteChats(userId).then((chats) => {
-        res.status(200).json({status: 'success', result: { total: chats.length, chats: chats }})
-    }).catch((err) => {
-        logger.error('Get all favorite chats error:', err);
-        res.status(500).json({status: 'error', message: err.message})
-    })
-}
+ 
 
 /**
  * Get a chat by an id
@@ -650,8 +633,7 @@ const updateConversationSeen = async (chatId, from, date, senders) => {
 }
 
 module.exports = {
-    all,
-    allFavorites,
+    all, 
     newChat,
     deleteChat,
     chatById,

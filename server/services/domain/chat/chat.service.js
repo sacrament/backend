@@ -263,16 +263,30 @@ class ChatService {
                             in: {
                                 _id: '$$member._id',
                                 user: {
-                                    $arrayElemAt: [
-                                        {
-                                            $filter: {
-                                                input: '$memberDetails',
-                                                as: 'detail',
-                                                cond: { $eq: ['$$detail._id', '$$member.user'] }
+                                    $let: {
+                                        vars: {
+                                            userObj: {
+                                                $arrayElemAt: [
+                                                    {
+                                                        $filter: {
+                                                            input: '$memberDetails',
+                                                            as: 'detail',
+                                                            cond: { $eq: ['$$detail._id', '$$member.user'] }
+                                                        }
+                                                    },
+                                                    0
+                                                ]
                                             }
                                         },
-                                        0
-                                    ]
+                                        in: {
+                                            _id: '$$userObj._id',
+                                            name: '$$userObj.name',
+                                            email: '$$userObj.email',
+                                            phone: '$$userObj.phone',
+                                            imageUrl: '$$userObj.imageUrl',
+                                            device: '$$userObj.device'
+                                        }
+                                    }
                                 },
                                 joinedOn: '$$member.joinedOn',
                                 canChat: '$$member.canChat',

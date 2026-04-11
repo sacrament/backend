@@ -10,9 +10,44 @@ const UserService   = require('../../services/domain/user/user.service');
 const DeviceService = require('../../services/domain/device/device.service');
 const KeyEscrow     = require('../../models/key.escrow');
 const KeyBackup     = require('../../models/key.backup');
+const { UserConnectStatus } = require('../../models/user.connect');
+const { getIO }     = require('../../socket/io');
 const userService   = new UserService();
 const deviceService = new DeviceService();
 const logger        = require('../../utils/logger');
+
+/**
+ * Emit a profile-image-updated event to every connected (friend) user.
+ * Each user joins a Socket.IO room named after their own userId on connect,
+ * so we emit to those rooms directly.
+ */
+async function emitProfileImageUpdatedToConnections(userId, imageUrl) {
+  try {
+    const records = await UserConnectStatus.find({
+      users: userId,
+      status: 'connected',
+    }).select('users').lean();
+
+    const userIdStr = userId.toString();
+    const connectionIds = new Set();
+    for (const r of records) {
+      for (const u of r.users || []) {
+        const id = u.toString();
+        if (id !== userIdStr) connectionIds.add(id);
+      }
+    }
+
+    if (connectionIds.size === 0) return;
+
+    const io = getIO();
+    const payload = { userId: userIdStr, imageUrl, pictureUrl: imageUrl };
+    for (const id of connectionIds) {
+      io.to(id).emit('profile image updated', payload);
+    }
+  } catch (err) {
+    logger.error('Failed to emit profile image updated:', err);
+  }
+}
 
 /**
  * GET /me
@@ -142,6 +177,9 @@ const updateCurrentUserProfile = async (req, res) => {
     }
 
     const user = await userService.updateProfile(req.decodedToken.userId, fields);
+    if (fields.imageUrl !== undefined) {
+      emitProfileImageUpdatedToConnections(req.decodedToken.userId, fields.imageUrl);
+    }
     return res.status(200).json({ status: 'success', user: formatUserResponse(user) });
   } catch (error) {
     if (error.message === 'User not found') return res.status(404).json({ status: 'error', message: 'User not found' });
@@ -160,10 +198,10 @@ const updateCurrentUserPicture = async (req, res) => {
 
     if (!file) return res.status(400).json({ status: 'error', message: 'No file provided' });
 
-    const pictureUrl = file.location
-      || `https://s3.amazonaws.com/winky/users/pictures/${userId}_${Date.now()}_${file.originalname}`;
+    const pictureUrl = file.location;
 
     await userService.updatePicture(userId, pictureUrl);
+    emitProfileImageUpdatedToConnections(userId, pictureUrl);
     return res.status(200).json({ status: 'success', url: pictureUrl });
 
   } catch (error) {

@@ -1,4 +1,5 @@
 const express       = require('express');
+const crypto        = require('crypto');
 const rateLimit     = require('express-rate-limit');
 const { ipKeyGenerator } = rateLimit;
 const { verifyToken, verifyClientToken } = require('../../middleware/verify');
@@ -32,9 +33,22 @@ const otpLimiter = rateLimit({
     max: 3,
     keyGenerator: (req) => {
         const phone = req.body?.phoneNumber || '';
-        return `${ipKeyGenerator(req)}_${phone}`;
+        if (!phone) return 'no-phone';
+        // Hash the phone number to use as rate limit key
+        return crypto.createHash('sha256').update(phone).digest('hex');
     },
     message: { status: 'error', code: 429, message: 'Too many OTP requests, please try again later' },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
+const ipRateLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    max: 5,
+    keyGenerator: (req) => {
+        return ipKeyGenerator(req);
+    },
+    message: { status: 'error', code: 429, message: 'Too many requests from this IP, please try again later' },
     standardHeaders: true,
     legacyHeaders: false,
 });
@@ -47,7 +61,7 @@ router.get('/', (req, res) => res.json({ title: 'Winky' }));
 router.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
 
 // Rate limiters
-router.post('/api/auth/phone/secured', otpLimiter);
+router.post('/api/auth/phone/secured', ipRateLimiter, otpLimiter);
 router.use('/api/users/login',        authLimiter);
 router.use('/api/users/register',     authLimiter);
 

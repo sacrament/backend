@@ -5,8 +5,7 @@ const multer = require('multer');
 const upload = multer();
 
 const {
-    all,
-    allFavorites,
+    all, 
     newChat,
     deleteChat,
     chatById,
@@ -47,10 +46,7 @@ router.patch('/mute/:id', muteChat)
 router.patch('/block/:id', blockChat)
  
 /// ALl chats
-router.get('/all', all);
-
-/// ALl chats
-router.get('/all/favorites', allFavorites);
+router.get('/all', all); 
 
 /// Single chat 
 router.get('/:id', chatById); 

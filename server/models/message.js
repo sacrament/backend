@@ -9,6 +9,7 @@ const Message = new Schema({
     from: { type: Schema.Types.ObjectId, ref: 'User' }, 
     chatId: { type: Schema.Types.ObjectId, ref: 'Chat' },
     sentOn: { type: Date, default: Date.now },
+    sentOnTimestamp: { type: Number, default: Date.now },
     kind: { type: String, enum: ['text', 'image', 'video', 'audio', 'document', 'GIF', 'generic', 'share contact'], default: 'text' },
     deleted: {
         forEveryone: { type: Boolean, default: null },
@@ -18,21 +19,16 @@ const Message = new Schema({
     },
     editedOn: { type: Date, default: null, required: false },
     editedBy: { type: Schema.Types.ObjectId, ref: 'User', default: null },
-    status: [
-        {
-            user: { type: Schema.Types.ObjectId, ref: "User" },
-            sent: { type: Date, default: Date.now },
-            delivered: { type: Date, default: null },
-            read: { type: Date, default: null }
-        }
-    ],
+    status: {
+        delivered: { type: Date, default: null },
+        read: { type: Date, default: null }
+    },
     reactions: [{ type: Schema.Types.ObjectId, ref: 'Reaction', default: null }],
     media: [{ type: Schema.Types.ObjectId, ref: 'Media', default: null }],
     isImported: { type: Boolean, default: false },
     importedOn: { type: Date, default: null },
     summary: { type: String, default: null },
-    replyTo: { type: Schema.Types.ObjectId, ref: 'Message' },
-    sharedContact: { type: Object, default: null },
+    replyTo: { type: Schema.Types.ObjectId, ref: 'Message' }, 
     visible: { type: Boolean, default: true },
     encrypted: { type: Boolean, default: false }
 });

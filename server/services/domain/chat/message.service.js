@@ -59,6 +59,7 @@ class MessageService {
             from: data.from,
             kind: data.type,
             sentOn: data.sentOn,
+            sentOnTimestamp: new Date(data.sentOn).getTime(),
             encrypted: data.encrypted || false
         });
 
@@ -70,10 +71,6 @@ class MessageService {
         if (data.type === 'text') {
             validateString(data.content, 'Message content');
             message.content = data.content;
-        } else if (data.type === 'share contact') {
-            validateString(data.content, 'Message content');
-            message.content = data.content;
-            message.sharedContact = data.sharedContact;
         } else {
             const media = new MediaModel({
                 from: data.from,
@@ -649,10 +646,14 @@ class MessageService {
 
             if (result.nModified > 0) {
                 console.log(`Messages marked as read, Total: ${result.nModified}`);
-                callback(true, uniqueSenders, chatId, userId);
+                if (callback && typeof callback === 'function') {
+                    callback(true, uniqueSenders, chatId, userId);
+                }
             } else {
                 console.log('No messages marked as read for conversation');
-                callback(false, uniqueSenders, chatId, userId);
+                if (callback && typeof callback === 'function') {
+                    callback(false, uniqueSenders, chatId, userId);
+                }
             }
         }
 
