@@ -110,8 +110,8 @@ const respondRequest = async function (data, cb) {
             processedAt: Date.now()
         });
     } catch (ex) {
-        logger.error('Error responding to connection request:', ex);
-        cb({ 
+        console.error('Error responding to connection request:', ex);
+        cb({
             status: 'error',
             error: ex.message,
             code: 'RESPOND_REQUEST_ERROR'

@@ -5,17 +5,15 @@
  */
 
 const path = require('path');
-const apn = require('apn');
 const config = require('../utils/config');
+const NativeApnsClient = require('./apns.native');
 
 const certsFolder = path.resolve(__dirname, '..', 'certs');
 
-const apnProvider = new apn.Provider({
-    token: {
-        key: path.join(certsFolder, 'AuthKey_2XCWJRBL6T.p8'),
-        keyId: config.IOS_KEY_TOKEN,
-        teamId: config.IOS_TEAM_ID,
-    },
+const apnClient = new NativeApnsClient({
+    key: path.join(certsFolder, 'AuthKey_2XCWJRBL6T.p8'),
+    keyId: config.IOS_KEY_TOKEN,
+    teamId: config.IOS_TEAM_ID,
     production: config.ENV_NAME === 'production',
 });
 
@@ -70,23 +68,38 @@ class VoiPNotifications {
 }
 
 const _send = (data, user) => {
-    const note = new apn.Notification();
-    note.expiry = 0;
-    note.badge = 0;
-    note.sound = 'default';
-    note.alert = data.title;
-    note.category = data.category;
-    note.topic = `${config.IOS_BUNDLE}.voip`;
-    note.payload = data.custom;
-    note.pushType = 'background';
-    note.priority = 5;
-
-    if (data.category === 'VOIPMissedCall' || data.category === 'VOIPCallEnded') {
-        note.badge = 1;
-        note.expiry = Math.floor(Date.now() / 1000) + 3600;
+    // Validate device and token
+    if (!user?.device?.voipToken) {
+        console.warn(`VoIP:_send — No voip token for user: ${user?._id || 'unknown'}`);
+        return Promise.resolve({ skipped: true });
     }
 
-    return apnProvider.send(note, user.device.voipToken);
+    const payload = {
+        aps: {
+            alert: data.title,
+            sound: 'default',
+            badge: 0,
+            category: data.category,
+            'content-available': 1,
+        },
+        ...data.custom,
+    };
+
+    let expiration = 0;
+
+    if (data.category === 'VOIPMissedCall' || data.category === 'VOIPCallEnded') {
+        payload.aps.badge = 1;
+        expiration = Math.floor(Date.now() / 1000) + 3600;
+    }
+
+    return apnClient.send({
+        deviceToken: user.device.voipToken,
+        topic: `${config.IOS_BUNDLE}.voip`,
+        pushType: 'background',
+        priority: 5,
+        expiration,
+        payload,
+    });
 };
 
 module.exports = VoiPNotifications;

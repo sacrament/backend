@@ -123,13 +123,13 @@ const updateToken = async (req, res) => {
     try {
         const userId = req.decodedToken.userId;
         const { id } = req.params;
-        const { token } = req.body;
+        const { token, voipToken } = req.body;
 
         if (!token || token.trim() === '') {
             return res.status(400).json({ status: 'error', message: 'token is required' });
         }
 
-        const device = await deviceService.updateToken(id, userId, token);
+        const device = await deviceService.updateToken(id, userId, token, voipToken);
 
         return res.status(200).json({ status: 'success', device });
     } catch (ex) {

@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 const logger = require('../../utils/logger');
 const { UserService, ChatService, MessageService } = require('../../services');
 const { getChatService } = require('../services');
-const PushNotificationService = require('../../notifications');
+const pushNotificationService = require('../../notifications');
 const e2eeService = require('../../services/domain/e2ee/e2ee.service');
 const chatService = new ChatService();
 // Instantiate a message service
@@ -35,7 +35,8 @@ module.exports = class Chat {
             'total unread chats': totalUnreadChats,
             'mark conversation seen': markConversationSeen,
             'exchange info': exchangeInfo,
-            'clear chat': clearChat
+            'clear chat': clearChat,
+            'edit message': editMessage
         };
 
         // setup the chat model and message model 
@@ -53,13 +54,7 @@ const newChat = async function(data, ack) {
         console.log(`New Chat: ${JSON.stringify(data)}`)
 
         const from = this.user.id;
-        data.userId = from;
-
-        // Register E2EE device if client sent key material with chat creation
-        // if (data.device) {
-        //     const { registrationId, identityKey, signedPreKey, oneTimePreKeys } = data.device;
-        //     await e2eeService.registerDevice(from, { registrationId, identityKey, signedPreKey, oneTimePreKeys });
-        // }
+        data.userId = from; 
 
         chatService.create(data).then(async (result) => {
             ack(result);
@@ -232,9 +227,7 @@ const blockChat = async function(data, ack) {
             //MARK: TODO: THis is wrong
             // Should be block chat not member left chat
             if (result.offlineReceivers.length) {
-                const pushNotification = new PushNotificationService();
-                // result.from = from;
-                pushNotification.blockChat(result);
+                pushNotificationService.blockChat(result);
             }
         }).catch((err) => { 
             console.error(`Error while blocking/unblcoking chat user: ${err.message}`)
@@ -553,6 +546,62 @@ const newMessage = async function(data, ack) {
 };
 
 /**
+ * Edit a text message's content.
+ * Only the original sender can edit, and only text messages.
+ */
+const editMessage = async function(data, ack) {
+    try {
+        const from = this.user;
+        const { messageId, content: newContent } = data;
+
+        if (!messageId || !newContent) {
+            return ack({ error: 'messageId and content are required' });
+        }
+
+        const result = await messageService.editMessage(messageId, from.id, newContent);
+        const message = result.message;
+
+        const chat = await chatService.getChatById(message.chatId.toString());
+        const members = chat.members;
+        const offlineReceivers = [];
+
+        ack({ message, title: result.title });
+
+        for (const member of members) {
+            if (!member.canChat) continue;
+
+            const to = member.user._id.toString();
+            if (to === from.id) continue;
+
+            const isOnline = await chatSocketService.isUserConnected(to);
+            if (isOnline) {
+                this.to(to).emit('message edited', {
+                    messageId: message._id,
+                    content: newContent,
+                    editedOn: message.editedOn,
+                    chatId: message.chatId,
+                });
+            } else if (!member.options?.muted) {
+                offlineReceivers.push(member);
+            }
+        }
+
+        if (offlineReceivers.length > 0) {
+            const senderUser = await userService.getUserById(from.id);
+            pushNotificationService.editMessage({
+                message,
+                chat,
+                offlineReceivers,
+                from: senderUser,
+            });
+        }
+    } catch (ex) {
+        logger.error(`Error editing message: ${ex.message}`);
+        ack({ error: ex.message });
+    }
+};
+
+/**
  * Helper: Distribute message to all recipients
  * Handles online delivery via socket and offline via push notifications
  * Returns delivery statistics for logging and monitoring
@@ -579,7 +628,7 @@ async function distributeMessage(socket, tempMessage, savedMessage, updatedChat,
                         .catch(err => logger.warn(`Failed to mark invisible: ${err.message}`));
                     
                     return;
-                }
+                } 
 
                 // Check if recipient is online
                 const isOnline = await chatSocketService.isUserConnected(recipientId);
@@ -632,8 +681,7 @@ async function distributeMessage(socket, tempMessage, savedMessage, updatedChat,
 
     // Send push notifications to offline users (batch operation)
     if (offlineReceivers.length > 0) {
-        try {
-            const pushNotificationService = new PushNotificationService();
+        try { 
             
             // Filter offline users who haven't muted notifications
             const notifiableReceivers = offlineReceivers.filter(
@@ -641,14 +689,15 @@ async function distributeMessage(socket, tempMessage, savedMessage, updatedChat,
             );
 
             if (notifiableReceivers.length > 0) {
+                const senderUser = await userService.getUserById(sender.id);
                 pushNotificationService.newMessage({
                     message: savedMessage,
                     chat: updatedChat,
                     offlineReceivers: notifiableReceivers,
-                    from: tempMessage.from,
+                    from: senderUser,
                     timestamp: Date.now()
                 });
-                
+
                 logger.info(`Push notifications queued for ${notifiableReceivers.length} users`);
             }
         } catch (err) {
@@ -716,8 +765,7 @@ const messages = async function(data, ack) {
 
                     console.log(`Offline receivers: ${offlineReceivers.length}`);
                     // send a Silent push 
-                    const pushNotification = new PushNotificationService();
-                    pushNotification.markConversationSeen({
+                    pushNotificationService.markConversationSeen({
                         chat: chatId,
                         by: userId,
                         date: Date.now(),
@@ -800,9 +848,7 @@ const reactOnMessage = async function(data, ack) {
             if (result.offlineReceivers.length) {
                 // Send the push notifications 
                 // result.from = fromUser;
-
-                const pushNotification = new PushNotificationService();
-                pushNotification.reactOnMessage(result);
+                pushNotificationService.reactOnMessage(result);
             } else {
                 console.log(`No offline users`)
             }
@@ -886,8 +932,7 @@ const deleteMessage = async function(data, ack) {
         }).then(result => {
             if (result.offlineReceivers.length) {
                 
-                const pushNotification = new PushNotificationService(); 
-                pushNotification.messageDeleted(result);
+                pushNotificationService.messageDeleted(result);
             } else {
                 console.log(`No offline users`)
             }
@@ -939,9 +984,7 @@ const messageSeen = async function(data, ack) {
             });
 
             if (offlineReceivers.length > 0) {
-
-                const pushNotification = new PushNotificationService();
-                pushNotification.markMessageSeen({
+                pushNotificationService.markMessageSeen({
                     messageId: messageId,
                     by: from,
                     date: messageDate,
@@ -996,8 +1039,7 @@ const messageDelivered = async function(data, ack) {
             });
 
             if (offlineReceivers.length > 0) { 
-                const pushNotification = new PushNotificationService();
-                pushNotification.markMessageReceived({
+                pushNotificationService.markMessageReceived({
                     messageId: messageId,
                     by: from,
                     date: messageDate,
@@ -1021,13 +1063,48 @@ const messageDelivered = async function(data, ack) {
  * @param {*} ack
  */
 const markConversationSeen = async function(data, ack) {
+    var offlineReceivers = [];
     try {
-        console.log(`Marking conversation seen/read`)
-        var offlineReceivers = []; 
         const from = this.user.id;
-        const chatId = data.chatId;
-        const date = data.date;
-        const senders = data.senders;
+        
+        // Handle different possible data structures
+        // Sometimes data might be null/undefined if no arguments sent
+        let chatId, date, senders;
+        
+        if (!data) {
+            console.warn(`[Mark Conversation Seen] No data object received`);
+            data = {};
+        } else if (typeof data === 'string') {
+            // If data was passed as string, it's likely the chatId
+            console.warn(`[Mark Conversation Seen] Data received as string, assuming it's chatId`);
+            chatId = data;
+        } else if (typeof data === 'object') {
+            // Normal case: data object with properties
+            chatId = data.chatId;
+            date = data.date;
+            senders = data.senders;
+        } 
+        
+        if (!chatId) {
+            const errorMsg = 'Chat ID is required in request data';
+            console.error(`[Mark Conversation Seen Error] ${errorMsg} - Received data:`, {
+                data,
+                from
+            });
+            throw new Error(errorMsg);
+        }
+
+        if (!from) {
+            throw new Error('User ID is missing from socket context');
+        }
+
+        if (!date) {
+            throw new Error('Date is required');
+        }
+
+        if (!senders || !Array.isArray(senders) || senders.length === 0) {
+            console.warn(`[Mark Conversation Seen] Warning: senders is empty or not an array:`, senders);
+        }
 
         const result = await messageService.markConversationSeen(from, chatId, date)
     
@@ -1058,7 +1135,7 @@ const markConversationSeen = async function(data, ack) {
         // }
 
         // console.log('From: ' + from);
-        const promises = senders.map(async member => {
+        const promises = (senders || []).map(async member => {
             // console.log('To Sender: ' + member);
             const socket = await chatSocketService.isUserConnected(member);
 
@@ -1075,8 +1152,7 @@ const markConversationSeen = async function(data, ack) {
          
         if (offlineReceivers.length) {
             // send a Silent push
-            const pushNotification = new PushNotificationService();
-            pushNotification.markConversationSeen({
+            pushNotificationService.markConversationSeen({
                 chat: chatId, 
                 by: from, 
                 date: date,
@@ -1085,9 +1161,23 @@ const markConversationSeen = async function(data, ack) {
             })
         }
     } catch (ex) {
-        console.error(`Error on conversation seen: ${ex.message}`)
-        ack(ex.message);
-    };
+        console.error(`[Error] Conversation seen failed:`, {
+            message: ex.message,
+            stack: ex.stack.split('\n').slice(0, 3).join('\n'), // First 3 lines of stack
+            data: {
+                dataType: typeof data,
+                dataKeys: Object.keys(data || {}),
+                chatId: data?.chatId,
+                date: data?.date,
+                sendersCount: data?.senders?.length,
+                userId: this.user?.id,
+                offlineReceivers
+            }
+        });
+        if (ack && typeof ack === 'function') {
+            ack({ error: ex.message });
+        }
+    }
 };
 
 /**
@@ -1117,9 +1207,22 @@ const totalUnreadChats = async function(data, ack) {
  * @param {*} ack
  */
 const exchangeInfo = async function(data, ack) {
+    const callback = typeof ack === 'function'
+        ? ack
+        : (typeof data === 'function' ? data : null);
+
+    const payload = (data && typeof data === 'object' && !Array.isArray(data))
+        ? data
+        : {};
+
     try {
         const from = this.user.id;
-        const chatId = data.chatId?.toString();
+        const chatId = payload.chatId?.toString();
+
+        if (!chatId) {
+            if (callback) callback({ error: 'chatId is required' });
+            return;
+        }
 
         const chatMembers = await chatService.getChatMembers(chatId);
         let receivers = [];
@@ -1130,7 +1233,7 @@ const exchangeInfo = async function(data, ack) {
 
             if (memberIsOnline) {
                 // Send the message to online users 
-                this.to(member.toString()).emit('exchange info', data);
+                this.to(member.toString()).emit('exchange info received', payload);
 
                 receivers.push(member.toString());
             }
@@ -1141,16 +1244,16 @@ const exchangeInfo = async function(data, ack) {
         await Promise.all(promises);  
 
         // ACK back to the sender
-        ack({receivers: receivers});
+        if (callback) callback({receivers: receivers});
         // Store the public key to chat
         try {
-            await chatService.updateChatWithPublicKey(data);
+            await chatService.updateChatWithPublicKey(payload);
             console.info('Chat was updated with public key');
         } catch (ex) {
-            console.err('Chat was not updated with public key: ' + ex.message);
+            console.error('Chat was not updated with public key: ' + ex.message);
         }
     } catch (ex) {
         console.error(`General error exchange info: ${ex.message}`)
-        ack(ex.message);
+        if (callback) callback({ error: ex.message });
     }
 }

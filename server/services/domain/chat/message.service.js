@@ -152,17 +152,13 @@ class MessageService {
                         path: 'replyTo',
                         select: '-isImported -importedOn -summary -replyTo -__v -uniqueId',
                         populate: {
-                            path: 'media reactions status from status.user',
+                            path: 'media reactions from',
                             select: '_id id name email phone imageUrl status kind date from thumbnail url type',
                             populate: {
                                 path: 'from',
                                 select: utils.userColumnsToShow()
                             }
                         }
-                    },
-                    {
-                        path: 'status.user',
-                        select: utils.userColumnsToShow()
                     },
                     {
                         path: 'media',
@@ -295,16 +291,31 @@ class MessageService {
         validateObjectId(messageId, 'Message ID');
         validateRequired(date, 'Date');
 
-        const filter = { _id: messageId, 'status.user': { $eq: byUser } };
+        // First, find the message to verify it exists
+        const message = await this.model.findById(messageId);
+        
+        if (!message) {
+            throw new Error('Message not found');
+        }
+
+        // Verify user is a member of the chat
+        const ChatModel = mongoose.model('Chat');
+        const chatMembership = await ChatModel.findOne({
+            _id: message.chatId,
+            'members.user': { $eq: new ObjectId(byUser) }
+        });
+
+        if (!chatMembership) {
+            throw new Error('User is not part of the chat');
+        }
+
+        // Update the read status
+        const filter = { _id: messageId };
         const update = { $set: { 'status.read': new Date(date * 1000) } };
 
         const editedMessage = await this.model
             .findOneAndUpdate(filter, update, { new: true, runValidators: true })
             .lean();
-
-        if (!editedMessage) {
-            throw new Error('User is not part of the chat');
-        }
 
         return editedMessage;
     }
@@ -548,10 +559,6 @@ class MessageService {
                     select: utils.userColumnsToShow()
                 },
                 {
-                    path: 'status.user',
-                    select: utils.userColumnsToShow()
-                },
-                {
                     path: 'media',
                     select: utils.mediaColumnsToShow()
                 },
@@ -714,10 +721,24 @@ class MessageService {
      */
     async markConversationSeen(userId, chatId, date = null) {
         validateRequired(userId, 'User ID');
-        validateObjectId(chatId, 'Chat ID');
+        
+        // Convert userId to string if it's a number
+        if (typeof userId === 'number') {
+            userId = await normalizeUserId(userId);
+        }
+        
+        // Ensure chatId is a string before validation
+        if (!chatId) {
+            throw new Error('Chat ID is required');
+        }
+        
+        // Convert to string if it's an ObjectId instance
+        const chatIdStr = chatId.toString ? chatId.toString() : String(chatId);
+        
+        validateObjectId(chatIdStr, 'Chat ID');
 
         const query = {
-            chatId: chatId,
+            chatId: new ObjectId(chatIdStr),
             from: { $ne: new ObjectId(userId) },
             'status.read': { $eq: null }
         };
@@ -727,11 +748,11 @@ class MessageService {
 
         const result = await this.model.updateMany(query, update);
 
-        console.log(`Conversation marked as seen, Total: ${result.nModified}`);
+        console.log(`✓ Conversation marked as seen - chatId: ${chatIdStr}, Updated: ${result.modifiedCount} messages`);
 
         return {
             status: 'unread messages',
-            total: result.nModified
+            total: result.modifiedCount
         };
     }
 
@@ -758,6 +779,34 @@ class MessageService {
      * @param {number} timestamp - Delivery timestamp (optional, defaults to now)
      * @returns {Promise<number>} - Number of messages marked as delivered
      */
+    /**
+     * Edit a text message's content. Only the original sender can edit, and only text messages.
+     *
+     * @param {string} messageId  - The message _id
+     * @param {string} userId     - Must match message.from
+     * @param {string} newContent - Replacement text
+     * @returns {{ message, title }}
+     */
+    async editMessage(messageId, userId, newContent) {
+        validateRequired(messageId, 'Message ID');
+        validateRequired(userId, 'User ID');
+        validateString(newContent, 'New content');
+
+        const message = await this.model
+            .findOneAndUpdate(
+                { _id: messageId, from: userId, kind: 'text' },
+                { $set: { content: newContent, editedOn: new Date(), editedBy: userId } },
+                { new: true, runValidators: true }
+            )
+            .lean();
+
+        if (!message) {
+            throw new Error('Message not found or you are not authorised to edit it');
+        }
+
+        return { message, title: 'Message edited' };
+    }
+
     async markPendingMessagesAsDelivered(userId, timestamp = Date.now()) {
         validateRequired(userId, 'User ID');
 

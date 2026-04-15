@@ -23,14 +23,21 @@ module.exports = class ChatService {
             // Ping the first socket to confirm it's still alive
             const socket = sockets[0];
             return await new Promise((resolve) => {
+                let settled = false;
+                const finish = (value) => {
+                    if (settled) return;
+                    settled = true;
+                    resolve(value);
+                };
+
                 const timeout = setTimeout(() => {
                     console.warn(`User lost connection during status check: ${user}`);
-                    resolve(false);
+                    finish(false);
                 }, 2500);
 
                 socket.emit('check status', () => {
                     clearTimeout(timeout);
-                    resolve(true);
+                    finish(true);
                 });
             });
         } catch (error) {

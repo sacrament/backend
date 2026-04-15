@@ -199,7 +199,10 @@ class ChatService {
                     from: 'messages',
                     let: { msgId: '$lastMessage' },
                     pipeline: [
-                        { $match: { $expr: { $eq: ['$_id', '$$msgId'] } } },
+                        { $match: { $expr: { $and: [
+                            { $ne: ['$$msgId', null] },
+                            { $eq: ['$_id', '$$msgId'] }
+                        ] } } },
                         {
                             $lookup: {
                                 from: 'users',
@@ -228,7 +231,8 @@ class ChatService {
                                 reactions: 1,
                                 media: 1,
                                 replyTo: 1,
-                                status: 1
+                                status: 1,
+                                encrypted: 1
                             }
                         }
                     ],
@@ -303,7 +307,7 @@ class ChatService {
                     _id: 1,
                     active: 1,
                     createdOn: 1,
-                    lastMessage: 1,
+                    lastMessage: { $ifNull: ['$lastMessage', null] },
                     members: 1,
                     uniqueId: 1
                 }

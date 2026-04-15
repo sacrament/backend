@@ -12,6 +12,7 @@ module.exports = {
     require('../models/message');
     require('../models/chat');
     require('../models/calls/history');
+    require('../models/calls/request');
     require('../models/user.blocked');
     require('../models/content.storage');
     require('../models/nearby.users.log');

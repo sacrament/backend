@@ -7,6 +7,7 @@ const VideoGrant = AccessToken.VideoGrant;
 const mongoose = require('mongoose');
 const ObjectId = mongoose.Types.ObjectId;
 const CallHistory = mongoose.model('CallHistory');
+const CallRequest = mongoose.model('CallRequest');
 const Chat = mongoose.model('Chat');
 const Message = mongoose.model('Message');
 const BlockUser = mongoose.model('BlockUser');
@@ -183,8 +184,8 @@ class CallService {
             const call = await client.video.rooms.create({
                 enableTurn: true,
                 statusCallback: config.ENV_NAME === 'development'
-                    ? 'http://192.168.100.51:3001/api/call/details'
-                    : 'https://chat.winky.com/api/call/details',
+                    ? 'https://clgmhjdn-3001.euw.devtunnels.ms/api/call/details'
+                    : 'https://api.winky.com/api/call/details',
                 type: 'peer-to-peer',
                 uniqueName: uniqueId,
             });
@@ -442,6 +443,150 @@ class CallService {
         );
 
         return call;
+    }
+
+    /**
+     * Persist a new call request in pending state.
+     */
+    async saveCallRequest({ requestId, from, to, chatId, mode, ipAddress, networkInfo }) {
+        const request = await CallRequest.findOneAndUpdate(
+            { requestId },
+            {
+                $set: {
+                    from: new ObjectId(from),
+                    to: new ObjectId(to),
+                    chatId: chatId && ObjectId.isValid(chatId) ? new ObjectId(chatId) : null,
+                    mode: mode === 'video' ? 'video' : 'audio',
+                    response: 'pending',
+                    ipAddress: ipAddress || null,
+                    networkInfo: networkInfo || null,
+                },
+            },
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+        ).lean();
+
+        return request;
+    }
+
+    /**
+     * Update the response on an existing call request (accepted / declined / cancelled).
+     */
+    async recordCallRequestResponse(data) {
+        const request = await CallRequest.findOneAndUpdate(
+            { requestId: data.requestId },
+            {
+                $set: {
+                    response: data.response,
+                    respondedOn: data.respondedOn || new Date(),
+                },
+            },
+            { new: true }
+        ).lean();
+
+        return request;
+    }
+
+    /**
+     * Find an accepted call request for caller->callee that can authorize room creation.
+     */
+    async getAcceptedCallRequest({ requestId, from, to, chatId }) {
+        if (!requestId) {
+            return null;
+        }
+
+        const query = {
+            requestId,
+            from: new ObjectId(from),
+            to: new ObjectId(to),
+            response: 'accepted',
+            consumedOn: null,
+        };
+
+        if (chatId && ObjectId.isValid(chatId)) {
+            query.chatId = new ObjectId(chatId);
+        }
+
+        return CallRequest.findOne(query).sort({ respondedOn: -1 }).lean();
+    }
+
+    async markCallRequestConsumed(callRequestId) {
+        return CallRequest.findByIdAndUpdate(
+            callRequestId,
+            { consumedOn: new Date() },
+            { new: true }
+        ).lean();
+    }
+
+    /**
+     * Revoke call and video permissions for a user in a chat, and disable their
+     * active call request(s).
+     *
+     * @param {string} chatId
+     * @param {string} targetUserId - whose permissions to revoke
+     * @param {string} [requestId]  - if provided, disables that specific request only
+     */
+    async revokeCallPermission({ chatId, targetUserId, requestId }) {
+        if (!chatId || !ObjectId.isValid(chatId)) {
+            throw new Error('Invalid chatId');
+        }
+
+        const chatUpdate = Chat.updateOne(
+            { _id: new ObjectId(chatId) },
+            {
+                $set: {
+                    'members.$[target].canCall': false,
+                    'members.$[target].canVideo': false,
+                    'members.$[target].updatedOn': new Date(),
+                },
+            },
+            { arrayFilters: [{ 'target.user': new ObjectId(targetUserId) }] }
+        );
+
+        let requestUpdate;
+        if (requestId) {
+            requestUpdate = CallRequest.updateOne(
+                { requestId, response: 'accepted', consumedOn: null },
+                { $set: { response: 'disabled' } }
+            );
+        } else {
+            const query = { to: new ObjectId(targetUserId), response: 'accepted', consumedOn: null };
+            query.chatId = new ObjectId(chatId);
+            requestUpdate = CallRequest.updateMany(query, { $set: { response: 'disabled' } });
+        }
+
+        await Promise.all([chatUpdate, requestUpdate]);
+    }
+
+    /**
+     * Ensure both chat members can call after request acceptance.
+     */
+    async syncChatCallPermissions(chatId, callerId, calleeId, mode = 'audio') {
+        if (!chatId || !ObjectId.isValid(chatId)) {
+            return;
+        }
+
+        const set = {
+            'members.$[caller].canCall': true,
+            'members.$[caller].updatedOn': new Date(),
+            'members.$[callee].canCall': true,
+            'members.$[callee].updatedOn': new Date(),
+        };
+
+        if (mode === 'video') {
+            set['members.$[caller].canVideo'] = true;
+            set['members.$[callee].canVideo'] = true;
+        }
+
+        await Chat.updateOne(
+            { _id: new ObjectId(chatId) },
+            { $set: set },
+            {
+                arrayFilters: [
+                    { 'caller.user': new ObjectId(callerId) },
+                    { 'callee.user': new ObjectId(calleeId) },
+                ],
+            }
+        );
     }
 }
 

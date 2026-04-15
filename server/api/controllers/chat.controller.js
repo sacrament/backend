@@ -3,7 +3,7 @@ const ChatService = require('../../services/domain/chat/chat.service');
 const UserService = require('../../services/domain/user/user.service');
 const AWSS3Service = require('../../services/external/aws/s3.service');
 const CS = require('../../socket/chat.service');
-const PushNotificationService = require('../../notifications/index');
+const pushNotificationService = require('../../notifications/index');
 const { getIO } = require('../../socket/io');
 const logger = require('../../utils/logger');
 
@@ -18,23 +18,37 @@ const awsUploadService = new AWSS3Service();
  * @param {*} res
  */
 const newChat = async (req, res) => {
-    const { chat } = req.body;
+    try {
+        const { chat } = req.body;
 
-    const userId = req.decodedToken.userId;
-    chat.userId = userId;
-    const data = { chat: chat};
-    // Create in-memory chat object
-    // const tempChat = await chatService.create(data);
-    // Do something with the newly chat object
-    // the temp chat is in memory object, not stored to db
+        // Validate chat object exists
+        if (!chat) {
+            return res.status(400).json({ status: 'error', message: 'Chat object is required' });
+        }
 
-    // Save the chat
-    chatService.create(data).then((result) => {
-        res.status(200).json({status: 'success', message: result.message, chat: result.chat })
-    }).catch((err) => {
-        logger.error('New chat error:', err);
-        res.status(500).json({status: 'error', message: err.message})
-    })
+        const userId = req.decodedToken.userId;
+        if (!userId) {
+            return res.status(401).json({ status: 'error', message: 'User ID not found in token' });
+        }
+
+        chat.userId = userId;
+        const data = { chat: chat };
+        // Create in-memory chat object
+        // const tempChat = await chatService.create(data);
+        // Do something with the newly chat object
+        // the temp chat is in memory object, not stored to db
+
+        // Save the chat
+        chatService.create(data).then((result) => {
+            res.status(200).json({ status: 'success', message: result.message, chat: result.chat })
+        }).catch((err) => {
+            logger.error('New chat error:', err);
+            res.status(500).json({ status: 'error', message: err.message })
+        })
+    } catch (error) {
+        logger.error('New chat exception:', error);
+        res.status(500).json({ status: 'error', message: error.message });
+    }
 }
 
 /**
@@ -89,13 +103,9 @@ const all = async (req, res) => {
 
     const { skip } = req.query
 
-    chatService.getAll(userId, parseInt(skip)).then(async (chats) => {
-        // try {
-        //     const unread = await chatService.countTotalUnreadChatsForUser(userId);
-        //     res.status(200).json({status: 'success', result: { total: chats.length, chats: chats, totalUnread: unread }})
-        // } catch (ex) {
-            res.status(200).json({status: 'success', result: { total: chats.length, chats: chats }})
-        // }
+    chatService.getAll(userId, parseInt(skip))
+    .then(async (chats) => { 
+        res.status(200).json({status: 'success', result: { total: chats.length, chats: chats }}) 
     }).catch((err) => {
         logger.error('Get all chats error:', err);
         res.status(500).json({status: 'error', message: err.message})
@@ -385,7 +395,7 @@ const updateMessageReceived = async (messageById, from, date) => {
                 /// Offline people. Send a push notification
                 // offlineReceivers.push(creator);
                 //MARK: TODO: FInish the message ack
-                new PushNotificationService().markMessageReceived({
+                pushNotificationService.markMessageReceived({
                     messageId: messageById,
                     by: from,
                     date: date,
@@ -447,7 +457,7 @@ const updateMessageSeen = async (messageById, from, date) => {
                 /// Offline people. Send a push notification
                 // offlineReceivers.push(creator);
                 //MARK: TODO: FInish the message ack
-                new PushNotificationService().markMessageSeen({
+                pushNotificationService.markMessageSeen({
                     messageId: messageById,
                     by: from,
                     date: date,
@@ -559,11 +569,10 @@ const sendMessage = async (req, res) => {
             });
         }).then(async result => {
             if (result.offlineReceivers.length) {
-                const pushNotification = new PushNotificationService();
                 // Send the push notifications
                 let fromUser = await userService.getUserById(from, true);
                 result.from = fromUser;
-                pushNotification.newMessage(result);
+                pushNotificationService.newMessage(result);
             } else {
                 logger.info(`No offline users`)
             }

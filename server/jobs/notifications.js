@@ -13,9 +13,7 @@
  *   await getAgenda().schedule('in 10 minutes', 'push:connection-request-reminder', { from, request, to });
  */
 
-const PushNotificationService = require('../notifications');
-
-const push = new PushNotificationService();
+const push = require('../notifications');
 
 const JOBS = [
     {

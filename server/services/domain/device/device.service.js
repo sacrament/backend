@@ -98,9 +98,10 @@ class DeviceService {
             { new: true }
         );
 
-        if (!device) {
-            throw new Error('Device not found');
-        }
+        if (!device) throw new Error('Device not found');
+
+        // Ensure User.device always points to this device
+        await UserModel.updateOne({ _id: userId }, { $set: { device: deviceId } });
 
         return device;
     }
@@ -125,6 +126,12 @@ class DeviceService {
         const updates = { status: 'active', updatedOn: new Date() };
         if (token) updates.token = token;
 
+        // Disable every other active device for this user first
+        await DeviceModel.updateMany(
+            { user: userId, status: 'active', _id: { $ne: deviceId } },
+            { $set: { status: 'disabled', token: null, voipToken: null } }
+        );
+
         const device = await DeviceModel.findOneAndUpdate(
             { _id: deviceId, user: userId },
             { $set: updates },
@@ -132,6 +139,10 @@ class DeviceService {
         );
 
         if (!device) throw new Error('Device not found');
+
+        // Keep User.device pointing at the now-active device
+        await UserModel.updateOne({ _id: userId }, { $set: { device: deviceId } });
+
         return device;
     }
 
@@ -144,11 +155,18 @@ class DeviceService {
     async disableDevice(deviceId, userId) {
         const device = await DeviceModel.findOneAndUpdate(
             { _id: deviceId, user: userId },
-            { $set: { status: 'disabled', token: null, updatedOn: new Date() } },
+            { $set: { status: 'disabled', token: null, voipToken: null, updatedOn: new Date() } },
             { new: true }
         );
 
         if (!device) throw new Error('Device not found');
+
+        // If this was the user's current active device, clear the reference
+        await UserModel.updateOne(
+            { _id: userId, device: deviceId },
+            { $set: { device: null } }
+        );
+
         return device;
     }
 
@@ -159,14 +177,22 @@ class DeviceService {
      * @param {string} token
      * @returns {Promise<Object>}
      */
-    async updateToken(deviceId, userId, token) {
+    async updateToken(deviceId, userId, token, voipToken) {
+        const updates = { status: 'active', updatedOn: new Date() };
+        if (token)     updates.token     = token;
+        if (voipToken) updates.voipToken = voipToken;
+
         const device = await DeviceModel.findOneAndUpdate(
             { _id: deviceId, user: userId },
-            { $set: { token, updatedOn: new Date() } },
+            { $set: updates },
             { new: true }
         );
 
         if (!device) throw new Error('Device not found');
+
+        // A token refresh means this device is the live one — keep User.device current
+        await UserModel.updateOne({ _id: userId }, { $set: { device: deviceId } });
+
         return device;
     }
 

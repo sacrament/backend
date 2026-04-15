@@ -12,8 +12,10 @@ const KeyEscrow     = require('../../models/key.escrow');
 const KeyBackup     = require('../../models/key.backup');
 const { UserConnectStatus } = require('../../models/user.connect');
 const { getIO }     = require('../../socket/io');
+const NearbyNotificationService = require('../../services/domain/nearby/nearby.notification.service');
 const userService   = new UserService();
 const deviceService = new DeviceService();
+const nearbyNotifications = new NearbyNotificationService();
 const logger        = require('../../utils/logger');
 
 /**
@@ -227,7 +229,12 @@ const updateCurrentUserLocation = async (req, res) => {
     if (isNaN(lat) || lat < -90  || lat > 90)  return res.status(400).json({ status: 'error', message: 'Invalid latitude. Must be between -90 and 90' });
     if (isNaN(lon) || lon < -180 || lon > 180) return res.status(400).json({ status: 'error', message: 'Invalid longitude. Must be between -180 and 180' });
 
-    await userService.updateLocation(req.decodedToken.userId, lat, lon);
+    const userId = req.decodedToken.userId;
+    await userService.updateLocation(userId, lat, lon);
+
+    // Fire-and-forget: notify nearby users without blocking the response
+    nearbyNotifications.onLocationUpdate(userId, lon, lat).catch(() => {});
+
     return res.status(202).json({ status: 'success', message: 'Location updated' });
 
   } catch (error) {
