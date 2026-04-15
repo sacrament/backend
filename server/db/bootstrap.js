@@ -25,6 +25,8 @@ module.exports = {
     require('../models/user.disappeared');
     require('../models/key.escrow');
     require('../models/key.backup');
+    require('../models/moderation.log');
+    require('../models/user.ban');
   },
 
   async connectDatabase() {

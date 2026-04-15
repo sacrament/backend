@@ -143,6 +143,26 @@ const twilioCallStatusCallbackDetails = async (req, res) => {
     await callService.callStatusUpdate(data);
 }
 
+/**
+ * POST /api/call/deleteByUser
+ * Body: { userId }
+ * Deletes all call history records where from or to matches userId.
+ */
+const deleteCallsByUser = async (req, res) => {
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ status: 'error', message: 'userId is required' });
+
+    try {
+        const mongoose = require('mongoose');
+        const CallHistory = mongoose.model('CallHistory');
+        const result = await CallHistory.deleteMany({ $or: [{ from: userId }, { to: userId }] });
+        return res.status(200).json({ success: true, deletedCount: result.deletedCount });
+    } catch (error) {
+        logger.error('Delete calls by user error:', error);
+        return res.status(500).json({ status: 'error', message: 'Failed to delete calls' });
+    }
+};
+
 module.exports = {
     bindDevice,
     unbindDevice,
@@ -152,5 +172,6 @@ module.exports = {
     callHistory,
     twilioCallStatusCallbackDetails,
     storeCallInfo,
-    callDetails
+    callDetails,
+    deleteCallsByUser,
 };

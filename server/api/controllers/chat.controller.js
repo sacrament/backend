@@ -641,8 +641,64 @@ const updateConversationSeen = async (chatId, from, date, senders) => {
     });
 }
 
+/**
+ * GET /api/chat/exists?userId=:userId
+ * Returns whether a direct chat exists between the authenticated user and userId.
+ */
+const chatExists = async (req, res) => {
+    const { userId } = req.query;
+    if (!userId) return res.status(400).json({ status: 'error', message: 'userId query param is required' });
+
+    const me = req.decodedToken.userId;
+
+    try {
+        const Chat = require('mongoose').model('Chat');
+        const chat = await Chat.findOne({
+            'members.user': { $all: [me, userId] },
+        }).select('_id').lean();
+
+        return res.status(200).json({ exists: !!chat, chatId: chat?._id?.toString() ?? null });
+    } catch (error) {
+        logger.error('Chat exists error:', error);
+        return res.status(500).json({ status: 'error', message: 'Failed to check chat existence' });
+    }
+};
+
+/**
+ * GET /api/chat/messages/count?userId=:userId
+ * Returns total number of messages in the chat between the authenticated user and userId.
+ */
+const getMessageCountForUser = async (req, res) => {
+    const { userId } = req.query;
+    if (!userId) return res.status(400).json({ status: 'error', message: 'userId query param is required' });
+
+    const me = req.decodedToken.userId;
+
+    try {
+        const mongoose = require('mongoose');
+        const Chat    = mongoose.model('Chat');
+        const Message = mongoose.model('Message');
+
+        const chat = await Chat.findOne({
+            'members.user': { $all: [me, userId] },
+        }).select('_id').lean();
+
+        if (!chat) return res.status(200).json({ count: 0 });
+
+        const count = await Message.countDocuments({
+            chatId: chat._id,
+            'deleted.forEveryone': { $ne: true },
+        });
+
+        return res.status(200).json({ count });
+    } catch (error) {
+        logger.error('Message count error:', error);
+        return res.status(500).json({ status: 'error', message: 'Failed to get message count' });
+    }
+};
+
 module.exports = {
-    all, 
+    all,
     newChat,
     deleteChat,
     chatById,
@@ -660,4 +716,6 @@ module.exports = {
     messageSeenAck,
     sendMessage,
     conversationSeen,
+    chatExists,
+    getMessageCountForUser,
 }
