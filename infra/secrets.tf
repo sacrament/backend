@@ -110,6 +110,25 @@ resource "aws_secretsmanager_secret_version" "push" {
   }
 }
 
+# ── Ops / Monitoring ─────────────────────────────────────────────────────────
+
+resource "aws_secretsmanager_secret" "ops" {
+  name                    = "${local.secret_prefix}/ops"
+  description             = "Operational config (alert email, etc.) for ${var.project}"
+  recovery_window_in_days = 7
+}
+
+resource "aws_secretsmanager_secret_version" "ops" {
+  secret_id = aws_secretsmanager_secret.ops.id
+  secret_string = jsonencode({
+    ALERT_EMAIL = "REPLACE_ME"
+  })
+
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}
+
 # ── Google OAuth ──────────────────────────────────────────────────────────────
 
 resource "aws_secretsmanager_secret" "google" {
