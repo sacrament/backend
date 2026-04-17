@@ -17,6 +17,7 @@ const supportRoutes      = require('./support');
 const genericRoutes      = require('./generic');
 const e2eeRoutes         = require('./e2ee');
 const moderationRoutes   = require('./moderation');
+const webhookRoutes      = require('./webhook');
 
 // ─── Rate limiters ────────────────────────────────────────────────────────────
 
@@ -49,6 +50,8 @@ const router = express.Router();
 
 router.get('/', (req, res) => res.json({ title: 'Winky' }));
 router.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
+
+router.use('/api/webhook', webhookRoutes); // For Twilio status callbacks that don't have client token
 
 // Rate limiters
 router.post('/api/auth/phone/secured', otpLimiter);

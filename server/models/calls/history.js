@@ -14,7 +14,7 @@ const CallHistory = new Schema({
     endedAt:         { type: Date, default: null },
 
     // Outcome
-    status:          { type: String, enum: ['ringing', 'answered', 'missed', 'rejected', 'error'], default: 'ringing', index: true },
+    status:          { type: String, enum: ['ringing', 'answered', 'ended', 'missed', 'rejected', 'error'], default: 'ringing', index: true },
     durationSeconds: { type: Number, default: null },                  // filled on end
     answered:        { type: Boolean, default: false },
 

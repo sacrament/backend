@@ -104,14 +104,6 @@ class CallService {
                 };
             }
 
-            // 6. If video call, check canVideo permission
-            if (callType === 'video' && !callerMember.canVideo) {
-                return {
-                    allowed: false,
-                    reason: 'Video call permission not granted. Ask the other user to allow video calls.',
-                    code: 'NO_VIDEO_PERMISSION'
-                };
-            }
 
             // 7. Check missed call rate limit (prevent harassment)
             const recentMissedCalls = await CallHistory.countDocuments({
@@ -183,9 +175,12 @@ class CallService {
         try {
             const call = await client.video.rooms.create({
                 enableTurn: true,
+                maxParticipants: 2,
+                maxParticipantDuration: 15 * 60, // 15 minutes
+                emptyRoomTimeout: 30, // delete room if no participants join within 30 seconds of creation
                 statusCallback: config.ENV_NAME === 'development'
-                    ? 'https://clgmhjdn-3001.euw.devtunnels.ms/api/call/details'
-                    : 'https://api.winky.com/api/call/details',
+                    ? 'https://clgmhjdn-3001.euw.devtunnels.ms/api/webhook/twilio/details'
+                    : 'https://api.winky.com/api/webhook/twilio/details',
                 type: 'peer-to-peer',
                 uniqueName: uniqueId,
             });
@@ -338,11 +333,20 @@ class CallService {
      * Update call from Twilio webhook — updates end time and duration on the existing document.
      */
     async callStatusUpdate(callDetails) {
-        console.log(`Call status update for: ${callDetails.RoomSid}`);
-
         const roomId = callDetails.RoomSid || callDetails.roomId;
+        const event  = callDetails.StatusCallbackEvent || callDetails.RoomStatus;
 
-        if (callDetails.RoomStatus !== 'completed') {
+        console.log(`[Twilio webhook] event=${event} roomId=${roomId} RoomStatus=${callDetails.RoomStatus} RoomDuration=${callDetails.RoomDuration}`);
+
+        // Only act on room completion events
+        const isCompleted = callDetails.RoomStatus === 'completed' || event === 'room-ended';
+        if (!isCompleted) {
+            console.log(`[Twilio webhook] ignoring event: ${event}`);
+            return;
+        }
+
+        if (!roomId) {
+            console.warn('[Twilio webhook] no roomId in payload, skipping');
             return;
         }
 
@@ -351,8 +355,8 @@ class CallService {
 
         const existing = await CallHistory.findOne({ roomId }).lean();
         if (!existing) {
-            console.log(`No call found for room: ${roomId}`);
-            throw new Error(`No call found for room: ${roomId}`);
+            console.warn(`[Twilio webhook] no CallHistory found for room: ${roomId}`);
+            return;
         }
 
         const wasAnswered = existing.answered === true;
@@ -360,7 +364,7 @@ class CallService {
 
         const update = {
             endedAt: now,
-            status:  wasAnswered ? 'answered' : 'missed',
+            status:  wasAnswered ? 'ended' : 'missed',
             durationSeconds: durationSecs !== null
                 ? durationSecs
                 : (wasAnswered && answeredAt
@@ -374,7 +378,7 @@ class CallService {
             { new: true }
         );
 
-        console.log(`Call updated (completed): ${roomId}`);
+        console.log(`[Twilio webhook] CallHistory updated — roomId=${roomId} status=${update.status} duration=${update.durationSeconds}s`);
         return call;
     }
 
@@ -397,7 +401,7 @@ class CallService {
 
         const update = {
             endedAt: now,
-            status:  wasAnswered ? 'answered' : 'missed',
+            status:  wasAnswered ? 'ended' : 'missed',
             durationSeconds: (wasAnswered && answeredAt)
                 ? Math.round((now - new Date(answeredAt)) / 1000)
                 : null,
@@ -450,6 +454,41 @@ class CallService {
     /**
      * Mark call as missed and increment counter
      */
+    /**
+     * Check if a user is currently in an active call (ringing or answered, not yet ended).
+     * @param {string} userId
+     * @returns {Promise<boolean>}
+     */
+    async isUserInActiveCall(userId) {
+        const active = await CallHistory.findOne({
+            $or: [{ from: userId }, { to: userId }],
+            status: { $in: ['ringing', 'answered'] },
+            endedAt: null,
+        }).lean();
+        return !!active;
+    }
+
+    /**
+     * Record a call that was rejected because the callee was busy on another call.
+     * @param {{ from, to, callType, ipAddress, networkInfo }} data
+     * @returns {Promise<CallHistory>}
+     */
+    async recordBusyRejection(data) {
+        const call = new CallHistory({
+            roomId:      null,
+            from:        data.from,
+            to:          data.to,
+            callType:    data.callType || 'voice',
+            status:      'rejected',
+            endedAt:     new Date(),
+            ipAddress:   data.ipAddress || null,
+            networkInfo: data.networkInfo || null,
+        });
+        await call.save();
+        console.log(`Busy rejection recorded: ${call._id}`);
+        return call;
+    }
+
     /**
      * Mark call as missed and increment rate-limit counter.
      */
@@ -626,24 +665,21 @@ class CallService {
      * Ensure both chat members can call after request acceptance.
      */
     async syncChatCallPermissions(chatId, callerId, calleeId, mode = 'audio') {
-        if (!chatId || !ObjectId.isValid(chatId)) {
-            return;
-        }
-
         const set = {
             'members.$[caller].canCall': true,
             'members.$[caller].updatedOn': new Date(),
             'members.$[callee].canCall': true,
             'members.$[callee].updatedOn': new Date(),
+            'members.$[caller].canVideo': true,
+            'members.$[callee].canVideo': true,
         };
 
-        if (mode === 'video') {
-            set['members.$[caller].canVideo'] = true;
-            set['members.$[callee].canVideo'] = true;
-        }
+        const filter = chatId && ObjectId.isValid(chatId)
+            ? { _id: new ObjectId(chatId) }
+            : { 'members.user': { $all: [new ObjectId(callerId), new ObjectId(calleeId)] } };
 
-        await Chat.updateOne(
-            { _id: new ObjectId(chatId) },
+        const result = await Chat.updateOne(
+            filter,
             { $set: set },
             {
                 arrayFilters: [
@@ -652,6 +688,10 @@ class CallService {
                 ],
             }
         );
+
+        if (!result.matchedCount) {
+            console.warn(`syncChatCallPermissions — no chat found for chatId=${chatId} caller=${callerId} callee=${calleeId}`);
+        }
     }
 }
 

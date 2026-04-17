@@ -439,6 +439,35 @@ const createRoom = async function(data, ack) {
 
         const callType = mode === 'video' ? 'video' : 'voice';
         const meta = { ipAddress, networkInfo: networkType || null };
+
+        // ── Busy check ────────────────────────────────────────────────────────
+        // If the callee is already on an active call, reject immediately.
+        const calleeIsBusy = await callService.isUserInActiveCall(calleeId);
+        if (calleeIsBusy) {
+            const busyRecord = await callService.recordBusyRejection({
+                from:        callerId,
+                to:          calleeId,
+                callType,
+                ipAddress:   meta.ipAddress,
+                networkInfo: meta.networkInfo,
+            });
+
+            // Tell the caller the line is busy
+            ack({ success: false, busy: true, error: 'User is busy on another call' });
+
+            // Notify the callee so they see the missed call in their history
+            const isCalleeOnline = await chatSocketService.isUserConnected(calleeId);
+            if (isCalleeOnline) {
+                this.to(calleeId).emit('call missed', {
+                    from: callerObject,
+                    call: { _id: busyRecord._id.toString() },
+                });
+            }
+
+            return;
+        }
+        // ─────────────────────────────────────────────────────────────────────
+
         const { call, token, callHistoryId } = await callService.createCallRoom(callerId, calleeId, callType, meta);
 
         ack({

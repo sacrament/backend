@@ -25,8 +25,6 @@ router.post('/decline', verifyToken, declineCall);
 
 router.post('/storeInfo', verifyToken, storeCallInfo);
 router.get('/history', verifyToken, callHistory);
-
-router.post('/details', twilioCallStatusCallbackDetails);
 router.get('/details/:roomId', callDetails);
 
 router.post('/deleteByUser', verifyToken, deleteCallsByUser);

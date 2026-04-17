@@ -45,6 +45,7 @@ class PushNotificationService {
                 title,
                 body,
                 category: 'NewMessage',
+                pref: 'newMessages',
                 custom: { chat: chatRef(chat), message, fromUser: from, save: 1, newMessage: true },
             }, offlineReceivers);
         } catch (ex) {
@@ -251,6 +252,7 @@ class PushNotificationService {
                 title: from.name,
                 body: `Wants to ${modeLabel} call you`,
                 category: 'CallRequest',
+                pref: 'chatRequests',
                 custom: {
                     requestId: content.requestId,
                     chatId: content.chatId,
@@ -309,6 +311,7 @@ class PushNotificationService {
                 title: 'New users nearby',
                 body: 'Someone is close to you right now',
                 category: 'NewUsersNearby',
+                pref: 'nearbyWinks',
                 custom: { newUsersNearby: true },
             }, [recipient]);
         } catch (ex) {
@@ -324,9 +327,10 @@ class PushNotificationService {
         try {
             const { movingUser, recipient } = content;
             await this.#send({
-                title: `${movingUser.name} is nearby`,
-                body: `Your connection ${movingUser.name} is nearby`,
+                title: `Nearby connection`,
+                body: `${movingUser.name} is nearby you right now`,
                 category: 'ConnectionNearby',
+                pref: 'nearbyWinks',
                 custom: { connectionNearby: true, userId: movingUser._id?.toString() ?? movingUser.id },
             }, [recipient]);
         } catch (ex) {
@@ -342,6 +346,7 @@ class PushNotificationService {
                 title: request.from.name,
                 body: 'Sent you a connection request',
                 category: 'NewConnectionRequest',
+                pref: 'connectionRequests',
                 custom: { request, fromUser: request.from, save: 1, isConnectionRequest: true },
             }, [request.to]);
         } catch (ex) {
@@ -393,6 +398,7 @@ class PushNotificationService {
                 title: 'Connection request reminder',
                 body: `${from.name} sent you a connection request`,
                 category: 'ReminderConnectionRequest',
+                pref: 'connectionRequests',
                 custom: { request, fromUser: from, save: 1, isConnectionRequestReminder: true },
             }, [to]);
         } catch (ex) {
@@ -422,6 +428,13 @@ class PushNotificationService {
                         console.warn(`push:_send — Could not fetch user details for ${member}`);
                         return { skipped: true };
                     }
+                }
+
+                // Check notification preference if one was specified for this push type
+                const prefs = user.notificationPreferences ?? (await getUserPreferences(user._id.toString()));
+                if (data.pref && prefs?.[data.pref] === false) {
+                    console.log(`push:_send — User ${user._id?.toString()} has ${data.pref} disabled, skipping`);
+                    return { skipped: true, reason: 'preference_disabled' };
                 }
 
                 // Validate device exists
@@ -468,6 +481,21 @@ class PushNotificationService {
                     delete iOSContent.aps.badge;
                     delete iOSContent.badge;
                     delete iOSContent.aps.sound;
+                }
+
+                // Apply user notification preferences: sound, badge, vibration
+                if (prefs?.sound === false) {
+                    delete iOSContent.aps.sound;
+                    androidContent.addData('sound', null);
+                }
+                if (prefs?.badge === false) {
+                    delete iOSContent.aps.badge;
+                    delete iOSContent.badge;
+                    androidContent.addData('badge', 0);
+                }
+                if (prefs?.vibration === false) {
+                    // Android: vibrate key; iOS has no direct vibration toggle in APNs
+                    androidContent.addData('vibrate', false);
                 }
 
                 // Normalize device type — handles both embedded ('IOS'/'ANDROID') and Device-collection ('iOS'/'Android')
@@ -625,6 +653,12 @@ const getUnreadMessagesForUser = (userId) => {
 const getUserDetails = (userId) => {
     const userService = new UserService();
     return userService.getUserById(userId, true);
+};
+
+const getUserPreferences = async (userId) => {
+    const User = require('mongoose').model('User');
+    const doc = await User.findById(userId, 'notificationPreferences').lean();
+    return doc?.notificationPreferences ?? null;
 };
 
 const chatRef = (chat) => ({
