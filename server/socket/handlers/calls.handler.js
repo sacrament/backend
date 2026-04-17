@@ -2,6 +2,7 @@ const { CallService, UserService } = require('../../services');
 const { getChatService } = require('../services');
 const VoipPushNotificationService = require('../../notifications/voip');
 const pushNotificationService = require('../../notifications');
+const mongoose = require('mongoose');
 
 // Short-lived store for pending call requests (pre-acceptance, in-memory)
 const pendingRequests = new Map();
@@ -19,6 +20,7 @@ module.exports = class Calls {
             'cancel call request':  cancelCallRequest,
             'disable calls':  disableCalls,
             'call':                 initiateCall,
+            'join room':            joinRoom,
             'end':                  endCall, 
             'create room':     createRoom,
         };
@@ -34,7 +36,7 @@ module.exports = class Calls {
  */
 const sendCallRequest = async function(data, ack) {
     try {
-        const { requestId, userId: calleeIdRaw, chatId, mode, networkType } = data;
+        const { requestId, to, chatId, mode, networkType } = data;
 
         const userService = new UserService();
         const callerObject = await resolveUserByAnyId(userService, this.user.id);
@@ -44,7 +46,7 @@ const sendCallRequest = async function(data, ack) {
 
         const callerId = callerObject._id.toString();
 
-        const calleeObject = await resolveUserByAnyId(userService, calleeIdRaw);
+        const calleeObject = await resolveUserByAnyId(userService, to);
         if (!calleeObject) {
             return ack({ error: 'Callee not found' });
         }
@@ -191,23 +193,49 @@ const cancelCallRequest = async function(data, ack) {
 
 /**
  * Caller is in the Twilio room and signals the callee to join.
- * Params: { callId, userId, mode, roomName }
+ * Params: { callId, userId, mode, roomName, requestId }
  *
- * Emits "incoming call" to callee: { callId, roomName, mode, from }
+ * callId    — server-issued MongoDB _id returned in `create room` ack.
+ * userId    — recipient user id.
+ * roomName  — Twilio room SID from `create room` ack (unused server-side, kept for client symmetry).
+ * requestId — same requestId sent to `create room`.
+ *
+ * Emits "incoming call" to callee: { callId (room SID), callHistoryId, roomName, mode, from }
  */
 const initiateCall = async function(data, ack) {
     try {
-        const { callId, userId: calleeIdRaw, mode, roomName } = data;
+        const { callId: callHistoryId, userId: calleeIdRaw, mode, roomName } = data;
         const callerId = this.user.id;
 
-        const userService = new UserService();
-        const callerObject = await resolveUserByAnyId(userService, callerId);
-        const calleeObject = await resolveUserByAnyId(userService, calleeIdRaw);
-
-        if (!callerObject) {
-            return ack({ error: 'Caller not found' });
+        if (!callHistoryId) {
+            return ack({ error: 'callId is required' });
         }
 
+        const callService = new CallService();
+        const userService = new UserService();
+
+        // Resolve call record server-side.
+        // If the value is a valid ObjectId use the DB _id lookup (preferred);
+        // otherwise treat it as a Twilio room SID (legacy / client sent wrong field).
+        const isObjectId = mongoose.Types.ObjectId.isValid(callHistoryId) && String(new mongoose.Types.ObjectId(callHistoryId)) === callHistoryId;
+        const callRecord = isObjectId
+            ? await callService.getCallById(callHistoryId)
+            : await callService.getCall(callHistoryId);
+        if (!callRecord) {
+            return ack({ error: 'Call not found' });
+        }
+
+        // Guard: only the caller (from) may initiate
+        const resolvedCallId = callRecord.roomId;
+        const resolvedCallerId = callRecord.from._id.toString();
+        const resolvedCalleeId = callRecord.to._id.toString();
+
+        const callerObject = await resolveUserByAnyId(userService, callerId);
+        if (!callerObject || callerObject._id.toString() !== resolvedCallerId) {
+            return ack({ error: 'Caller not found or unauthorised' });
+        }
+
+        const calleeObject = await resolveUserByAnyId(userService, calleeIdRaw || resolvedCalleeId);
         if (!calleeObject) {
             return ack({ error: 'Callee not found' });
         }
@@ -215,18 +243,32 @@ const initiateCall = async function(data, ack) {
         const calleeId = calleeObject._id.toString();
         const isCalleeOnline = await chatSocketService.isUserConnected(calleeId);
 
+        // Generate a Twilio access token for the receiver so they can join immediately
+        const { token: receiverToken } = await callService.call(resolvedCallId, resolvedCallerId, calleeId);
+
+        const callPayload = {
+            from:  callerObject,
+            mode,
+            token: receiverToken,
+            call: {
+                _id: callRecord._id.toString(),
+                sid: resolvedCallId,
+            },
+        };
+
         if (isCalleeOnline) {
-            this.to(calleeId).emit('incoming call', { callId, roomName, mode, from: callerObject });
+            this.to(calleeId).emit('incoming call', callPayload);
         } else {
+            const notifPayload = { call: { sid: resolvedCallId }, from: callerObject, to: calleeObject, mode, token: receiverToken };
             if (calleeObject.device?.type === 'ANDROID') {
-                await pushNotificationService.incomingCall({ call: { sid: callId }, from: callerObject, to: calleeObject, mode, token: null });
+                await pushNotificationService.incomingCall(notifPayload);
             } else {
                 const voipService = new VoipPushNotificationService();
-                await voipService.incomingCall({ call: { sid: callId }, from: callerObject, to: calleeObject, mode, token: null });
+                await voipService.incomingCall(notifPayload);
             }
         }
 
-        ack({ success: true, isCalleeOnline });
+        ack({ success: true, isCalleeOnline, callId: resolvedCallId });
     } catch (ex) {
         console.error(`initiate call error: ${ex.message}`);
         ack({ error: ex.message });
@@ -237,28 +279,38 @@ const initiateCall = async function(data, ack) {
  * Either party ends the active call.
  * Params: { callId, roomName }
  *
+ * callId   — server-issued MongoDB _id (from `create room` ack, patched onto the call object).
+ * roomName — Twilio room SID, used as fallback if callId lookup yields nothing.
+ *
  * Looks up the call record to identify the other party, ends the Twilio room,
  * then emits "end call" to the other party or sends a push notification.
  */
 const endCall = async function(data, ack) {
     try {
-        const { callId, roomName } = data;
+        const { callId: callHistoryId, roomName } = data;
         const senderId = this.user.id;
 
         const callService = new CallService();
         const userService = new UserService();
 
-        // Resolve the other party from call history
-        const callRecord = await callService.getCall(callId);
+        // Prefer server-issued DB id; fall back to treating roomName as Twilio room SID
+        const isObjectId = callHistoryId && mongoose.Types.ObjectId.isValid(callHistoryId) && String(new mongoose.Types.ObjectId(callHistoryId)) === callHistoryId;
+        const callRecord = isObjectId
+            ? await callService.getCallById(callHistoryId)
+            : await callService.getCall(callHistoryId || roomName);
+
         if (!callRecord) {
             return ack({ error: 'Call not found' });
         }
+
+        // Use the server-resolved room SID for all subsequent operations
+        const resolvedRoomSid = callRecord.roomId;
 
         const callerId = callRecord.from._id.toString();
         const calleeId = callRecord.to._id.toString();
         const otherPartyId = senderId === callerId ? calleeId : callerId;
 
-        const endedCall = await callService.endCall(callId, calleeId, callerId);
+        const endedCall = await callService.endCall(resolvedRoomSid, calleeId, callerId);
         const senderObject = await resolveUserByAnyId(userService, senderId);
         if (!senderObject) {
             return ack({ error: 'Sender not found' });
@@ -268,7 +320,13 @@ const endCall = async function(data, ack) {
         ack({ success: true, call: endedCall });
 
         if (isOtherOnline) {
-            this.to(otherPartyId).emit('end call', { callId, roomName, from: senderObject });
+            this.to(otherPartyId).emit('end call', {
+                from: senderObject,
+                call: {
+                    _id: callRecord._id.toString(),
+                    sid: resolvedRoomSid,
+                },
+            });
         } else {
             const otherObject = await resolveUserByAnyId(userService, otherPartyId);
             if (!otherObject) {
@@ -283,6 +341,52 @@ const endCall = async function(data, ack) {
         }
     } catch (ex) {
         console.error(`end call error: ${ex.message}`);
+        ack({ error: ex.message });
+    }
+};
+
+/**
+ * Receiver joins an existing Twilio room after receiving an "incoming call" event.
+ * Params: { callId, roomName, mode }
+ *
+ * Issues a Twilio access token for the callee and emits "call joined" to the caller.
+ * Ack: { callId, roomName, token, mode }
+ */
+const joinRoom = async function(data, ack) {
+    try {
+        const { callId, roomName, mode } = data;
+        const calleeId = this.user.id;
+
+        if (!callId) {
+            return ack({ error: 'callId is required' });
+        }
+
+        const callService = new CallService();
+        const userService = new UserService();
+
+        const calleeObject = await resolveUserByAnyId(userService, calleeId);
+        if (!calleeObject) {
+            return ack({ error: 'Callee not found' });
+        }
+
+        // Fetch room & issue token for the callee (records incoming call history)
+        const { call, token } = await callService.call(callId, null, calleeObject._id.toString());
+
+        // Notify the caller that the receiver has joined
+        const callRecord = await callService.getCall(callId);
+        if (callRecord) {
+            const callerId = callRecord.from._id.toString();
+            this.to(callerId).emit('call joined', {
+                callId,
+                roomName: call.uniqueName || roomName,
+                mode,
+                joinedBy: calleeObject._id.toString(),
+            });
+        }
+
+        ack({ success: true, callId, roomName: call.uniqueName || roomName, token, mode });
+    } catch (ex) {
+        console.error(`join room error: ${ex.message}`);
         ack({ error: ex.message });
     }
 };
@@ -330,19 +434,24 @@ const createRoom = async function(data, ack) {
         });
 
         if (!approvedRequest) {
-            return ack({ error: 'Call request not approved yet' });
+            return ack({ error: 'Call request not approved yet', success: false });
         }
 
         const callType = mode === 'video' ? 'video' : 'voice';
         const meta = { ipAddress, networkInfo: networkType || null };
-        const { call, token } = await callService.createCallRoom(callerId, calleeId, callType, meta);
+        const { call, token, callHistoryId } = await callService.createCallRoom(callerId, calleeId, callType, meta);
 
-        await callService.markCallRequestConsumed(approvedRequest._id);
-
-        ack({ success: true, callId: call.sid, roomName: call.uniqueName, token, mode });
+        ack({
+            success: true,
+            token,
+            call: {
+                _id: callHistoryId,
+                sid: call.sid,
+            },
+        });
     } catch (ex) {
         console.error(`create room error: ${ex.message}`);
-        ack({ error: ex.message });
+        ack({ error: ex.message, success: false });
     }
 };
 

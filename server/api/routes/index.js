@@ -1,6 +1,7 @@
 const express       = require('express');
 const crypto        = require('crypto');
 const rateLimit     = require('express-rate-limit');
+const { ipKeyGenerator } = require('express-rate-limit');
 const { verifyToken, verifyClientToken } = require('../../middleware/verify');
 
 // Route modules
@@ -33,7 +34,7 @@ const otpLimiter = rateLimit({
     max: 3,
     keyGenerator: (req) => {
         const phone = req.body?.phoneNumber || '';
-        if (!phone) return 'no-phone';
+        if (!phone) return ipKeyGenerator(req);
         // Hash the phone number to use as rate limit key
         return crypto.createHash('sha256').update(phone).digest('hex');
     },

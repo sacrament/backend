@@ -27,8 +27,8 @@ let eventHandlers = null;
 let handlersInitialized = false;
 const messageService = new MessageService();
 
-// Reconnection grace period: keep session data for 5 minutes (300000ms)
-const RECONNECTION_GRACE_PERIOD = 5 * 60 * 1000;
+// Reconnection grace period: keep session data for 30 seconds
+const RECONNECTION_GRACE_PERIOD = 30 * 1000;
 
 /**
  * Initialize Socket.IO with authentication and event handlers
@@ -260,9 +260,17 @@ const onDisconnected = (socket, io) => {
             // For temporary disconnections (network issues), keep session alive
             if (reason === 'transport error' || reason === 'ping timeout' || reason === 'transport close') {
                 console.log(`⏱ Reconnection grace period started for user: ${userId} (${RECONNECTION_GRACE_PERIOD / 1000}s)`);
-                
+
+                // Cancel any existing grace-period timer for this user before creating a new one
+                if (userSessions.has(userId)) {
+                    const existing = userSessions.get(userId);
+                    if (existing.gracePeriodTimer) {
+                        clearTimeout(existing.gracePeriodTimer);
+                    }
+                }
+
                 // Set a timer to clean up session if not reconnected within grace period
-                setTimeout(() => {
+                const timer = setTimeout(() => {
                     if (userSessions.has(userId)) {
                         const session = userSessions.get(userId);
                         // Only clean up if socket hasn't been renewed
@@ -274,8 +282,17 @@ const onDisconnected = (socket, io) => {
                         }
                     }
                 }, RECONNECTION_GRACE_PERIOD);
+
+                // Store timer reference so it can be cancelled on the next disconnect
+                if (userSessions.has(userId)) {
+                    userSessions.get(userId).gracePeriodTimer = timer;
+                }
             } else {
-                // For intentional disconnects, clean up immediately
+                // For intentional disconnects, cancel any pending timer and clean up immediately
+                if (userSessions.has(userId)) {
+                    const session = userSessions.get(userId);
+                    if (session.gracePeriodTimer) clearTimeout(session.gracePeriodTimer);
+                }
                 userSessions.delete(userId);
                 console.log(`Session ended for user: ${userId}`);
                 socket.broadcast.emit('user disconnected', { userId });

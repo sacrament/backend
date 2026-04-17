@@ -69,7 +69,7 @@ class VoiPNotifications {
 
 const _send = (data, user) => {
     // Validate device and token
-    if (!user?.device?.voipToken) {
+if (!user?.device?.voipToken) {
         console.warn(`VoIP:_send — No voip token for user: ${user?._id || 'unknown'}`);
         return Promise.resolve({ skipped: true });
     }
@@ -95,8 +95,8 @@ const _send = (data, user) => {
     return apnClient.send({
         deviceToken: user.device.voipToken,
         topic: `${config.IOS_BUNDLE}.voip`,
-        pushType: 'background',
-        priority: 5,
+        pushType: 'voip',
+        priority: 10,
         expiration,
         payload,
     });

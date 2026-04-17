@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
-const { getAccessToken, bindDevice, unbindDevice, sendNotification, declineCall, callHistory, storeCallInfo, twilioCallStatusCallbackDetails, callDetails, deleteCallsByUser } = require('../controllers/call.controller');
+const { getAccessToken, bindDevice, unbindDevice, sendNotification, declineCall, callHistory, storeCallInfo, twilioCallStatusCallbackDetails, callDetails, deleteCallsByUser, getCallRequests } = require('../controllers/call.controller');
 const { verifyToken } = require('../../middleware/verify');
 
 router.get('/', (req, res)  => {
@@ -30,5 +30,8 @@ router.post('/details', twilioCallStatusCallbackDetails);
 router.get('/details/:roomId', callDetails);
 
 router.post('/deleteByUser', verifyToken, deleteCallsByUser);
+
+// get call requests for the authenticated user (optional ?response= filter)
+router.get('/requests', verifyToken, getCallRequests);
 
 module.exports = router;
