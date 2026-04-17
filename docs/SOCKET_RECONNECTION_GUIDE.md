@@ -216,7 +216,7 @@ export default SocketService;
 ```javascript
 // Initialize
 const socketService = new SocketService(authToken);
-socketService.connect('https://api.winky.com');
+socketService.connect('https://service.winky.com');
 
 // Set up callbacks
 socketService.onConnected = (data) => {

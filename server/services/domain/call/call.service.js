@@ -180,7 +180,7 @@ class CallService {
                 emptyRoomTimeout: 30, // delete room if no participants join within 30 seconds of creation
                 statusCallback: config.ENV_NAME === 'development'
                     ? 'https://clgmhjdn-3001.euw.devtunnels.ms/api/webhook/twilio/details'
-                    : 'https://api.winky.com/api/webhook/twilio/details',
+                    : 'https://service.winky.com/api/webhook/twilio/details',
                 type: 'peer-to-peer',
                 uniqueName: uniqueId,
             });
