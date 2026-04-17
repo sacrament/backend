@@ -165,8 +165,8 @@ const requestPhoneOtp = async (req, res) => {
 
     }
 
-    const rateLimitKey = `phone_${phoneNumber}`;
-    const ipLimitKey = `ip_${clientIp}`;
+    const phoneHash = crypto.createHash('sha256').update(phoneNumber).digest('hex');
+    const rateLimitKey = `phone_${phoneHash}`;
 
     if (!checkGlobalOtpBudget()) {
       logger.warn(`[requestPhoneOtp] Rejected: global OTP budget exhausted - phone: ${phoneNumber}`);
@@ -176,11 +176,6 @@ const requestPhoneOtp = async (req, res) => {
     if (!checkRateLimit(rateLimitKey, 3, 10 * 60).allowed) {
       logger.warn(`[requestPhoneOtp] Rejected: phone rate limit exceeded - phone: ${phoneNumber}`);
       return res.status(429).json({ status: 'error', code: 3129, message: 'Rate limit exceeded for phone number' });
-    }
-
-    if (!checkRateLimit(ipLimitKey, 5, 24 * 60 * 60).allowed) {
-      logger.warn(`[requestPhoneOtp] Rejected: IP rate limit exceeded - ip: ${clientIp}`);
-      return res.status(429).json({ status: 'error', code: 9213, message: 'Rate limit exceeded for IP address' });
     }
 
     logger.info(`[requestPhoneOtp] All checks passed, sending OTP - phone: ${phoneNumber}`);

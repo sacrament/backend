@@ -29,16 +29,21 @@ function authenticateSocket(socket, next) {
     }
 
     if (!token) {
+      console.warn(`[Socket Auth] No token provided for socket: ${socket.id}`);
       return next(new Error('Authentication error: No token provided'));
     }
 
     // Verify JWT token
     jwt.verify(token, config.APP_SECRET, (err, decoded) => {
       if (err) {
-        console.error('Socket authentication error:', err.message);
+        console.error(`[Socket Auth] Token verification failed for socket ${socket.id}:`, err.message);
         
         if (err.name === 'TokenExpiredError') {
           return next(new Error('Authentication error: Token expired'));
+        }
+        
+        if (err.name === 'JsonWebTokenError') {
+          return next(new Error('Authentication error: Invalid token format'));
         }
         
         return next(new Error('Authentication error: Invalid token'));
@@ -49,10 +54,11 @@ function authenticateSocket(socket, next) {
       socket.userId = decoded.userId;
       socket.token = token;
 
+      console.log(`[Socket Auth] ✓ Authentication successful for user: ${decoded.userId} (socket: ${socket.id})`);
       next();
     });
   } catch (error) {
-    console.error('Socket auth middleware error:', error);
+    console.error(`[Socket Auth] Middleware error for socket ${socket.id}:`, error.message);
     next(new Error('Authentication error: ' + error.message));
   }
 }

@@ -1,7 +1,7 @@
 # ── ACM Certificate ───────────────────────────────────────────────────────────
 
 resource "aws_acm_certificate" "api" {
-  domain_name       = "api.winky.com"
+  domain_name       = "service.winky.com"
   validation_method = "DNS"
 
   lifecycle {
@@ -43,7 +43,7 @@ resource "aws_acm_certificate_validation" "api" {
 
 resource "aws_route53_record" "api" {
   zone_id = data.aws_route53_zone.main.zone_id
-  name    = "api.winky.com"
+  name    = "service.winky.com"
   type    = "A"
 
   alias {

@@ -3,7 +3,7 @@ const ChatService = require('../../services/domain/chat/chat.service');
 const UserService = require('../../services/domain/user/user.service');
 const AWSS3Service = require('../../services/external/aws/s3.service');
 const CS = require('../../socket/chat.service');
-const PushNotificationService = require('../../notifications/index');
+const pushNotificationService = require('../../notifications/index');
 const { getIO } = require('../../socket/io');
 const logger = require('../../utils/logger');
 
@@ -18,23 +18,37 @@ const awsUploadService = new AWSS3Service();
  * @param {*} res
  */
 const newChat = async (req, res) => {
-    const { chat } = req.body;
+    try {
+        const { chat } = req.body;
 
-    const userId = req.decodedToken.userId;
-    chat.userId = userId;
-    const data = { chat: chat};
-    // Create in-memory chat object
-    // const tempChat = await chatService.create(data);
-    // Do something with the newly chat object
-    // the temp chat is in memory object, not stored to db
+        // Validate chat object exists
+        if (!chat) {
+            return res.status(400).json({ status: 'error', message: 'Chat object is required' });
+        }
 
-    // Save the chat
-    chatService.create(data).then((result) => {
-        res.status(200).json({status: 'success', message: result.message, chat: result.chat })
-    }).catch((err) => {
-        logger.error('New chat error:', err);
-        res.status(500).json({status: 'error', message: err.message})
-    })
+        const userId = req.decodedToken.userId;
+        if (!userId) {
+            return res.status(401).json({ status: 'error', message: 'User ID not found in token' });
+        }
+
+        chat.userId = userId;
+        const data = { chat: chat };
+        // Create in-memory chat object
+        // const tempChat = await chatService.create(data);
+        // Do something with the newly chat object
+        // the temp chat is in memory object, not stored to db
+
+        // Save the chat
+        chatService.create(data).then((result) => {
+            res.status(200).json({ status: 'success', message: result.message, chat: result.chat })
+        }).catch((err) => {
+            logger.error('New chat error:', err);
+            res.status(500).json({ status: 'error', message: err.message })
+        })
+    } catch (error) {
+        logger.error('New chat exception:', error);
+        res.status(500).json({ status: 'error', message: error.message });
+    }
 }
 
 /**
@@ -89,36 +103,15 @@ const all = async (req, res) => {
 
     const { skip } = req.query
 
-    chatService.getAll(userId, parseInt(skip)).then(async (chats) => {
-        // try {
-        //     const unread = await chatService.countTotalUnreadChatsForUser(userId);
-        //     res.status(200).json({status: 'success', result: { total: chats.length, chats: chats, totalUnread: unread }})
-        // } catch (ex) {
-            res.status(200).json({status: 'success', result: { total: chats.length, chats: chats }})
-        // }
+    chatService.getAll(userId, parseInt(skip))
+    .then(async (chats) => { 
+        res.status(200).json({status: 'success', result: { total: chats.length, chats: chats }}) 
     }).catch((err) => {
         logger.error('Get all chats error:', err);
         res.status(500).json({status: 'error', message: err.message})
     })
 }
-
-/**
- * G~et all favorite chats
- *
- * @param {*} _
- * @param {*} res
- */
-const allFavorites = (req, res) => {
-    // const userId = req.body.userId;
-    const userId = req.decodedToken.userId;
-
-    chatService.getAllFavoriteChats(userId).then((chats) => {
-        res.status(200).json({status: 'success', result: { total: chats.length, chats: chats }})
-    }).catch((err) => {
-        logger.error('Get all favorite chats error:', err);
-        res.status(500).json({status: 'error', message: err.message})
-    })
-}
+ 
 
 /**
  * Get a chat by an id
@@ -402,7 +395,7 @@ const updateMessageReceived = async (messageById, from, date) => {
                 /// Offline people. Send a push notification
                 // offlineReceivers.push(creator);
                 //MARK: TODO: FInish the message ack
-                new PushNotificationService().markMessageReceived({
+                pushNotificationService.markMessageReceived({
                     messageId: messageById,
                     by: from,
                     date: date,
@@ -464,7 +457,7 @@ const updateMessageSeen = async (messageById, from, date) => {
                 /// Offline people. Send a push notification
                 // offlineReceivers.push(creator);
                 //MARK: TODO: FInish the message ack
-                new PushNotificationService().markMessageSeen({
+                pushNotificationService.markMessageSeen({
                     messageId: messageById,
                     by: from,
                     date: date,
@@ -576,11 +569,10 @@ const sendMessage = async (req, res) => {
             });
         }).then(async result => {
             if (result.offlineReceivers.length) {
-                const pushNotification = new PushNotificationService();
                 // Send the push notifications
                 let fromUser = await userService.getUserById(from, true);
                 result.from = fromUser;
-                pushNotification.newMessage(result);
+                pushNotificationService.newMessage(result);
             } else {
                 logger.info(`No offline users`)
             }
@@ -649,9 +641,64 @@ const updateConversationSeen = async (chatId, from, date, senders) => {
     });
 }
 
+/**
+ * GET /api/chat/exists?userId=:userId
+ * Returns whether a direct chat exists between the authenticated user and userId.
+ */
+const chatExists = async (req, res) => {
+    const { userId } = req.query;
+    if (!userId) return res.status(400).json({ status: 'error', message: 'userId query param is required' });
+
+    const me = req.decodedToken.userId;
+
+    try {
+        const Chat = require('mongoose').model('Chat');
+        const chat = await Chat.findOne({
+            'members.user': { $all: [me, userId] },
+        }).select('_id').lean();
+
+        return res.status(200).json({ exists: !!chat, chatId: chat?._id?.toString() ?? null });
+    } catch (error) {
+        logger.error('Chat exists error:', error);
+        return res.status(500).json({ status: 'error', message: 'Failed to check chat existence' });
+    }
+};
+
+/**
+ * GET /api/chat/messages/count?userId=:userId
+ * Returns total number of messages in the chat between the authenticated user and userId.
+ */
+const getMessageCountForUser = async (req, res) => {
+    const { userId } = req.query;
+    if (!userId) return res.status(400).json({ status: 'error', message: 'userId query param is required' });
+
+    const me = req.decodedToken.userId;
+
+    try {
+        const mongoose = require('mongoose');
+        const Chat    = mongoose.model('Chat');
+        const Message = mongoose.model('Message');
+
+        const chat = await Chat.findOne({
+            'members.user': { $all: [me, userId] },
+        }).select('_id').lean();
+
+        if (!chat) return res.status(200).json({ count: 0 });
+
+        const count = await Message.countDocuments({
+            chatId: chat._id,
+            'deleted.forEveryone': { $ne: true },
+        });
+
+        return res.status(200).json({ count });
+    } catch (error) {
+        logger.error('Message count error:', error);
+        return res.status(500).json({ status: 'error', message: 'Failed to get message count' });
+    }
+};
+
 module.exports = {
     all,
-    allFavorites,
     newChat,
     deleteChat,
     chatById,
@@ -669,4 +716,6 @@ module.exports = {
     messageSeenAck,
     sendMessage,
     conversationSeen,
+    chatExists,
+    getMessageCountForUser,
 }

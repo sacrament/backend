@@ -4,12 +4,52 @@
  * verifyToken is applied at the router level — not repeated here.
  */
 
+const crypto        = require('crypto');
 const mongoose      = require('mongoose');
 const UserService   = require('../../services/domain/user/user.service');
 const DeviceService = require('../../services/domain/device/device.service');
+const KeyEscrow     = require('../../models/key.escrow');
+const KeyBackup     = require('../../models/key.backup');
+const { UserConnectStatus } = require('../../models/user.connect');
+const { getIO }     = require('../../socket/io');
+const NearbyNotificationService = require('../../services/domain/nearby/nearby.notification.service');
 const userService   = new UserService();
 const deviceService = new DeviceService();
+const nearbyNotifications = new NearbyNotificationService();
 const logger        = require('../../utils/logger');
+
+/**
+ * Emit a profile-image-updated event to every connected (friend) user.
+ * Each user joins a Socket.IO room named after their own userId on connect,
+ * so we emit to those rooms directly.
+ */
+async function emitProfileImageUpdatedToConnections(userId, imageUrl) {
+  try {
+    const records = await UserConnectStatus.find({
+      users: userId,
+      status: 'connected',
+    }).select('users').lean();
+
+    const userIdStr = userId.toString();
+    const connectionIds = new Set();
+    for (const r of records) {
+      for (const u of r.users || []) {
+        const id = u.toString();
+        if (id !== userIdStr) connectionIds.add(id);
+      }
+    }
+
+    if (connectionIds.size === 0) return;
+
+    const io = getIO();
+    const payload = { userId: userIdStr, imageUrl, pictureUrl: imageUrl };
+    for (const id of connectionIds) {
+      io.to(id).emit('profile image updated', payload);
+    }
+  } catch (err) {
+    logger.error('Failed to emit profile image updated:', err);
+  }
+}
 
 /**
  * GET /me
@@ -139,6 +179,9 @@ const updateCurrentUserProfile = async (req, res) => {
     }
 
     const user = await userService.updateProfile(req.decodedToken.userId, fields);
+    if (fields.imageUrl !== undefined) {
+      emitProfileImageUpdatedToConnections(req.decodedToken.userId, fields.imageUrl);
+    }
     return res.status(200).json({ status: 'success', user: formatUserResponse(user) });
   } catch (error) {
     if (error.message === 'User not found') return res.status(404).json({ status: 'error', message: 'User not found' });
@@ -157,10 +200,10 @@ const updateCurrentUserPicture = async (req, res) => {
 
     if (!file) return res.status(400).json({ status: 'error', message: 'No file provided' });
 
-    const pictureUrl = file.location
-      || `https://s3.amazonaws.com/winky/users/pictures/${userId}_${Date.now()}_${file.originalname}`;
+    const pictureUrl = file.location;
 
     await userService.updatePicture(userId, pictureUrl);
+    emitProfileImageUpdatedToConnections(userId, pictureUrl);
     return res.status(200).json({ status: 'success', url: pictureUrl });
 
   } catch (error) {
@@ -186,7 +229,12 @@ const updateCurrentUserLocation = async (req, res) => {
     if (isNaN(lat) || lat < -90  || lat > 90)  return res.status(400).json({ status: 'error', message: 'Invalid latitude. Must be between -90 and 90' });
     if (isNaN(lon) || lon < -180 || lon > 180) return res.status(400).json({ status: 'error', message: 'Invalid longitude. Must be between -180 and 180' });
 
-    await userService.updateLocation(req.decodedToken.userId, lat, lon);
+    const userId = req.decodedToken.userId;
+    await userService.updateLocation(userId, lat, lon);
+
+    // Fire-and-forget: notify nearby users without blocking the response
+    nearbyNotifications.onLocationUpdate(userId, lon, lat).catch(() => {});
+
     return res.status(202).json({ status: 'success', message: 'Location updated' });
 
   } catch (error) {
@@ -430,6 +478,162 @@ const unhideConnection = async (req, res) => {
   }
 };
 
+// ─── Key Escrow ──────────────────────────────────────────────────────────────
+
+/**
+ * GET /me/key-escrow
+ * Retrieves the user's key escrow. If not exists, creates it with a new escrow key.
+ */
+const getKeyEscrow = async (req, res) => {
+  try {
+    const userId = req.decodedToken.userId;
+    
+    let escrow = await KeyEscrow.findOne({ userId });
+
+    if (!escrow) {
+      // First time — generate a random 32-byte escrow key
+      const escrowKey = crypto.randomBytes(32).toString('base64');
+      escrow = await KeyEscrow.create({
+        userId,
+        escrowKey,
+        bundle: null,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
+    }
+
+    return res.status(200).json({
+      status: 'success',
+      escrowKey: escrow.escrowKey,
+      bundle: escrow.bundle
+    });
+  } catch (error) {
+    logger.error('Get key escrow error:', error);
+    return res.status(500).json({ status: 'error', message: 'Failed to retrieve key escrow' });
+  }
+};
+
+/**
+ * PUT /me/key-escrow
+ * Uploads/updates the user's key escrow bundle (nonce, ciphertext, version).
+ */
+const uploadKeyEscrow = async (req, res) => {
+  try {
+    const userId = req.decodedToken.userId;
+    const { nonce, ciphertext, version } = req.body;
+
+    if (!nonce || !ciphertext || version === undefined) {
+      return res.status(400).json({ 
+        status: 'error', 
+        message: 'Missing required fields: nonce, ciphertext, version' 
+      });
+    }
+
+    await KeyEscrow.findOneAndUpdate(
+      { userId },
+      {
+        bundle: { nonce, ciphertext, version },
+        updatedAt: new Date()
+      },
+      { upsert: true }
+    );
+
+    return res.status(200).json({ status: 'success', success: true });
+  } catch (error) {
+    logger.error('Upload key escrow error:', error);
+    return res.status(500).json({ status: 'error', message: 'Failed to upload key escrow' });
+  }
+};
+
+// ─── Key Backup ──────────────────────────────────────────────────────────────
+
+/**
+ * PUT /me/key-backup
+ * Stores or overwrites the encrypted passphrase backup.
+ */
+const storeKeyBackup = async (req, res) => {
+  try {
+    const userId = req.decodedToken.userId;
+    const { salt, nonce, ciphertext, tag, version, createdAt } = req.body;
+
+    if (!salt || !nonce || !ciphertext || !tag) {
+      return res.status(400).json({ 
+        status: 'error', 
+        message: 'Missing required fields: salt, nonce, ciphertext, tag' 
+      });
+    }
+
+    if (!createdAt) {
+      return res.status(400).json({ 
+        status: 'error', 
+        message: 'Missing required field: createdAt' 
+      });
+    }
+
+    await KeyBackup.findOneAndUpdate(
+      { userId },
+      { 
+        salt, 
+        nonce, 
+        ciphertext, 
+        tag, 
+        version: version || 2, 
+        createdAt: new Date(createdAt),
+        updatedAt: new Date() 
+      },
+      { upsert: true, new: true }
+    );
+
+    return res.status(200).json({ status: 'success', success: true });
+  } catch (error) {
+    logger.error('Store key backup error:', error);
+    return res.status(500).json({ status: 'error', message: 'Failed to store key backup' });
+  }
+};
+
+/**
+ * GET /me/key-backup
+ * Fetches the encrypted passphrase backup. Returns 404 if none exists.
+ */
+const fetchKeyBackup = async (req, res) => {
+  try {
+    const userId = req.decodedToken.userId;
+    const backup = await KeyBackup.findOne({ userId });
+
+    if (!backup) {
+      return res.status(404).json({ status: 'error', message: 'No backup found' });
+    }
+
+    return res.status(200).json({
+      status: 'success',
+      salt: backup.salt,
+      nonce: backup.nonce,
+      ciphertext: backup.ciphertext,
+      tag: backup.tag,
+      version: backup.version,
+      createdAt: backup.createdAt
+    });
+  } catch (error) {
+    logger.error('Fetch key backup error:', error);
+    return res.status(500).json({ status: 'error', message: 'Failed to fetch key backup' });
+  }
+};
+
+/**
+ * DELETE /me/key-backup
+ * Deletes the encrypted passphrase backup.
+ */
+const deleteKeyBackup = async (req, res) => {
+  try {
+    const userId = req.decodedToken.userId;
+    await KeyBackup.findOneAndDelete({ userId });
+    return res.status(200).json({ status: 'success', success: true });
+  } catch (error) {
+    logger.error('Delete key backup error:', error);
+    return res.status(500).json({ status: 'error', message: 'Failed to delete key backup' });
+  }
+};
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function formatUserResponse(user) {
@@ -516,4 +720,9 @@ module.exports = {
   getHiddenConnections,
   hideConnection,
   unhideConnection,
+  getKeyEscrow,
+  uploadKeyEscrow,
+  storeKeyBackup,
+  fetchKeyBackup,
+  deleteKeyBackup,
 };

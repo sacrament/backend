@@ -6,7 +6,6 @@ const upload = multer();
 
 const {
     all,
-    allFavorites,
     newChat,
     deleteChat,
     chatById,
@@ -21,14 +20,22 @@ const {
     messageSeenAck,
     sendMessage,
     conversationSeen,
+    chatExists,
+    getMessageCountForUser,
 } = require('../controllers/chat.controller');
 
 router.get('/', (req, res, next)  => {
     res.status(200).json({status: 'success', message: 'Chat Router'})
 })
 
+// Check if a chat exists with a user
+router.get('/exists', chatExists);
+
+// Total message count between two users
+router.get('/messages/count', getMessageCountForUser);
+
 /// Create a new chat
-router.post('/new', newChat); 
+router.post('/new', newChat);
 
 /// Leave chat
 /// Admin can not leave chat
@@ -47,10 +54,7 @@ router.patch('/mute/:id', muteChat)
 router.patch('/block/:id', blockChat)
  
 /// ALl chats
-router.get('/all', all);
-
-/// ALl chats
-router.get('/all/favorites', allFavorites);
+router.get('/all', all); 
 
 /// Single chat 
 router.get('/:id', chatById); 

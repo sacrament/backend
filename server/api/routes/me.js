@@ -43,6 +43,20 @@ router.put('/privacy', meController.updateProfilePrivacy);
 // DELETE /me
 router.delete('/', meController.deleteCurrentUserAccount);
 
+// ── Key Escrow ────────────────────────────────────────────────────────────────
+// GET    /me/key-escrow
+router.get('/key-escrow', meController.getKeyEscrow);
+// PUT    /me/key-escrow
+router.put('/key-escrow', meController.uploadKeyEscrow);
+
+// ── Key Backup ────────────────────────────────────────────────────────────────
+// GET    /me/key-backup
+router.get('/key-backup', meController.fetchKeyBackup);
+// PUT    /me/key-backup
+router.put('/key-backup', meController.storeKeyBackup);
+// DELETE /me/key-backup
+router.delete('/key-backup', meController.deleteKeyBackup);
+
 // ── Hidden Users (Radar) ──────────────────────────────────────────────────────
 // GET    /me/hidden/users
 router.get('/hidden/users', meController.getHiddenUsers);

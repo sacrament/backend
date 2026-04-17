@@ -8,11 +8,11 @@
     "@aws-sdk/client-s3": "^3.968.0",
     "@socket.io/redis-adapter": "^8.3.0",
     "agenda": "^6.2.3",
-    "apn": "^2.2.0",
     "body-parser": "^1.20.2",
     "compression": "^1.7.4",
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
     "express": "^4.18.2",
     "express-mongo-sanitize": "^2.2.0",
     "express-rate-limit": "^8.2.1",
@@ -33,7 +33,6 @@
     "socket.io": "^4.8.3",
     "twilio": "^3.83.0",
     "uuid": "^9.0.0",
-    "dotenv": "^17.2.3",
     "winston": "^3.19.0"
   },
   "devDependencies": {

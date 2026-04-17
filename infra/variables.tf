@@ -68,7 +68,7 @@ variable "s3_bucket_name" {
 variable "domain_name" {
   description = "Domain name for the ALB HTTPS listener (must have an ACM cert in us-east-1)"
   type        = string
-  default     = "api.winky.com"
+  default     = "service.winky.com"
 }
 
 variable "acm_certificate_arn" {

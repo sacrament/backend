@@ -24,11 +24,31 @@ module.exports = {
       pingInterval: config.HEARTBEAT_INTERVAL,
       pingTimeout: config.HEARTBEAT_TIMEOUT,
       upgradeTimeout: config.UPGRADE,
+      // Reconnection settings for client auto-reconnection
+      reconnection: true,
+      reconnectionDelay: 1000,           // First reconnection attempt after 1s
+      reconnectionDelayMax: 30000,       // Max delay between reconnection attempts (30s)
+      reconnectionAttempts: Infinity,   // Unlimited reconnection attempts
+      // Server-side settings to preserve disconnected client data
+      maxHttpBufferSize: 1e5,            // 100KB max message size
+      allowRequest: (req, callback) => {
+        callback(null, true);
+      },
+      // Built-in connection state recovery to preserve session/packets on disconnect
+      connectionStateRecovery: {
+        maxDisconnectionDuration: 5 * 60 * 1000,  // 5 minutes (matches grace period)
+        skipMiddlewares: true,                     // Skip auth middleware on recovery for performance
+      },
       cors: {
         origin: process.env.CORS_ORIGIN || '*',
         methods: ['GET', 'POST'],
         credentials: true,
       }
+    });
+
+    // Increase max event listeners to handle concurrent socket operations
+    io.engine.on('connection', (conn) => {
+      conn.setMaxListeners(50);
     });
 
     // Configure Redis adapter for distributed socket.io in production

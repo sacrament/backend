@@ -12,6 +12,7 @@ module.exports = {
     require('../models/message');
     require('../models/chat');
     require('../models/calls/history');
+    require('../models/calls/request');
     require('../models/user.blocked');
     require('../models/content.storage');
     require('../models/nearby.users.log');
@@ -22,6 +23,10 @@ module.exports = {
     require('../models/e2ee.key.backup');
     require('../models/user.muted');
     require('../models/user.disappeared');
+    require('../models/key.escrow');
+    require('../models/key.backup');
+    require('../models/moderation.log');
+    require('../models/user.ban');
   },
 
   async connectDatabase() {

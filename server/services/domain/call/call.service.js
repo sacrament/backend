@@ -7,6 +7,7 @@ const VideoGrant = AccessToken.VideoGrant;
 const mongoose = require('mongoose');
 const ObjectId = mongoose.Types.ObjectId;
 const CallHistory = mongoose.model('CallHistory');
+const CallRequest = mongoose.model('CallRequest');
 const Chat = mongoose.model('Chat');
 const Message = mongoose.model('Message');
 const BlockUser = mongoose.model('BlockUser');
@@ -47,7 +48,7 @@ class CallService {
 
             // 2. Find chat between users
             const chat = await Chat.findOne({
-                type: 'private',
+                // type: 'private',
                 'members.user': { $all: [new ObjectId(fromUserId), new ObjectId(toUserId)] },
                 active: true
             }).populate('members.user', '_id id name imageUrl');
@@ -103,21 +104,13 @@ class CallService {
                 };
             }
 
-            // 6. If video call, check canVideo permission
-            if (callType === 'video' && !callerMember.canVideo) {
-                return {
-                    allowed: false,
-                    reason: 'Video call permission not granted. Ask the other user to allow video calls.',
-                    code: 'NO_VIDEO_PERMISSION'
-                };
-            }
 
             // 7. Check missed call rate limit (prevent harassment)
             const recentMissedCalls = await CallHistory.countDocuments({
-                from: fromUserId,
-                to: toUserId,
-                type: 'missed',
-                date: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+                from:       fromUserId,
+                to:         toUserId,
+                status:     'missed',
+                startedAt:  { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
             });
 
             if (recentMissedCalls >= 3) {
@@ -182,9 +175,12 @@ class CallService {
         try {
             const call = await client.video.rooms.create({
                 enableTurn: true,
+                maxParticipants: 2,
+                maxParticipantDuration: 15 * 60, // 15 minutes
+                emptyRoomTimeout: 30, // delete room if no participants join within 30 seconds of creation
                 statusCallback: config.ENV_NAME === 'development'
-                    ? 'http://192.168.100.51:3001/api/call/details'
-                    : 'https://chat.winky.com/api/call/details',
+                    ? 'https://clgmhjdn-3001.euw.devtunnels.ms/api/webhook/twilio/details'
+                    : 'https://service.winky.com/api/webhook/twilio/details',
                 type: 'peer-to-peer',
                 uniqueName: uniqueId,
             });
@@ -194,36 +190,29 @@ class CallService {
 
             console.log(`Call room created: ${call.sid}`);
 
-            await this.addCall({
-                roomId: call.sid,
-                type: 'outgoing',
-                from: caller,
-                to: callee,
-                date: Date.now(),
-                userName: uniqueId,
-                description: JSON.stringify(call),
-                token: jwt,
-                other: JSON.stringify(token),
-                callType: callType,
-                ipAddress: meta.ipAddress || null,
-                networkInfo: meta.networkInfo || null
+            const { call: callRecord } = await this.addCall({
+                roomId:      call.sid,
+                from:        caller,
+                to:          callee,
+                userName:    uniqueId,
+                callType:    callType,
+                ipAddress:   meta.ipAddress || null,
+                networkInfo: meta.networkInfo || null,
             });
 
-            return { call: call, token: jwt, callType: callType };
+            return { call: call, token: jwt, callType: callType, callHistoryId: callRecord._id.toString() };
         } catch (err) {
             console.error(`Error while creating room: ${err.message}`);
 
             await this.addCall({
-                roomId: 'error',
-                type: 'error',
-                from: caller,
-                to: callee,
-                date: Date.now(),
-                userName: uniqueId,
-                description: err.message,
-                callType: callType,
-                ipAddress: meta.ipAddress || null,
-                networkInfo: meta.networkInfo || null
+                roomId:      'error',
+                from:        caller,
+                to:          callee,
+                userName:    uniqueId,
+                callType:    callType,
+                status:      'error',
+                ipAddress:   meta.ipAddress || null,
+                networkInfo: meta.networkInfo || null,
             });
 
             throw err;
@@ -231,7 +220,8 @@ class CallService {
     }
 
     /**
-     * Invite user to join call room
+     * Invite user to join call room — marks the call as answered.
+     * Returns a Twilio token for the callee to connect with.
      */
     async call(roomId, caller, callee) {
         const call = await client.video.rooms(roomId).fetch();
@@ -243,17 +233,11 @@ class CallService {
         const token = await this.getAccessToken(callee);
         const jwt = token.jwt || token.toJwt();
 
-        await this.addCall({
-            roomId: call.sid,
-            type: 'incoming',
-            from: caller,
-            to: callee,
-            date: Date.now(),
-            userName: call.uniqueName,
-            token: jwt,
-            description: JSON.stringify(call),
-            other: JSON.stringify(token)
-        });
+        // Mark the single call document as answered
+        await CallHistory.findOneAndUpdate(
+            { roomId: call.sid },
+            { $set: { status: 'answered', answered: true, answeredAt: new Date() } }
+        );
 
         return { call: call, token: jwt };
     }
@@ -284,7 +268,7 @@ class CallService {
                 path: "from to",
                 select: '_id id name email phone imageUrl device'
             })
-            .sort({ date: -1 })
+            .sort({ startedAt: -1 })
             .lean()
             .exec();
 
@@ -292,31 +276,28 @@ class CallService {
     }
 
     /**
-     * Add a call to database
+     * Add a call record to history (one per call lifetime).
      */
     async addCall(data) {
-        console.log(`Adding info for call: ${data.type}`);
-
-        const call = new CallHistory();
-        call.roomId = data.roomId;
-        call.date = data.date;
-        call.type = data.type;
-        call.from = data.from;
-        call.to = data.userId || data.to;
-        call.userName = data.userName;
-        call.description = data.description || null;
-        call.other = data.other || null;
-        call.token = data.token;
-        call.callType = data.callType || 'voice';
-        call.ipAddress = data.ipAddress || null;
-        call.networkInfo = data.networkInfo || null;
+        const call = new CallHistory({
+            roomId:          data.roomId,
+            from:            data.from,
+            to:              data.userId || data.to,
+            userName:        data.userName || null,
+            callType:        data.callType || 'voice',
+            status:          data.status || 'ringing',
+            startedAt:       data.startedAt || new Date(),
+            ipAddress:       data.ipAddress || null,
+            networkInfo:     data.networkInfo || null,
+        });
 
         await call.save();
-        return { status: 'Call added to history', call: call };
+        console.log(`Call record created: ${call._id}`);
+        return { status: 'Call added to history', call };
     }
 
     /**
-     * Get call history details by room ID
+     * Get call history details by room ID (Twilio SID)
      */
     async getCall(roomId) {
         console.log(`Get info for call: ${roomId}`);
@@ -334,60 +315,105 @@ class CallService {
     }
 
     /**
-     * Update call status from Twilio webhook
+     * Get call history details by MongoDB document _id.
+     * Preferred over getCall when the server-issued callHistoryId is available.
      */
-    async callStatusUpdate(callDetails) {
-        console.log(`Call status update info for call: ${callDetails.RoomSid}`);
-
-        const roomId = callDetails.RoomSid || callDetails.roomId;
-        let type = 'initiated';
-
-        if (callDetails.RoomStatus) {
-            if (callDetails.RoomStatus === 'completed') {
-                type = 'ended';
-            }
-        }
-
-        const call = await CallHistory.findOneAndUpdate(
-            { roomId: roomId },
-            {
-                type: type,
-                date: callDetails.Timestamp || callDetails.date,
-                duration: callDetails.RoomDuration
-            },
-            { new: true }
-        );
-
-        if (call) {
-            console.log(`Call has been updated: ${type}`);
-            return call;
-        } else {
-            console.log(`No call found for room: ${roomId}`);
-            throw new Error(`No call found for room: ${roomId}`);
-        }
+    async getCallById(callHistoryId) {
+        return CallHistory.findById(callHistoryId)
+            .select('-__v')
+            .populate({
+                path: 'from to',
+                select: '_id id name email phone imageUrl device'
+            })
+            .lean()
+            .exec();
     }
 
     /**
-     * End an active call
+     * Update call from Twilio webhook — updates end time and duration on the existing document.
+     */
+    async callStatusUpdate(callDetails) {
+        const roomId = callDetails.RoomSid || callDetails.roomId;
+        const event  = callDetails.StatusCallbackEvent || callDetails.RoomStatus;
+
+        console.log(`[Twilio webhook] event=${event} roomId=${roomId} RoomStatus=${callDetails.RoomStatus} RoomDuration=${callDetails.RoomDuration}`);
+
+        // Only act on room completion events
+        const isCompleted = callDetails.RoomStatus === 'completed' || event === 'room-ended';
+        if (!isCompleted) {
+            console.log(`[Twilio webhook] ignoring event: ${event}`);
+            return;
+        }
+
+        if (!roomId) {
+            console.warn('[Twilio webhook] no roomId in payload, skipping');
+            return;
+        }
+
+        const now = new Date();
+        const durationSecs = callDetails.RoomDuration ? parseInt(callDetails.RoomDuration, 10) : null;
+
+        const existing = await CallHistory.findOne({ roomId }).lean();
+        if (!existing) {
+            console.warn(`[Twilio webhook] no CallHistory found for room: ${roomId}`);
+            return;
+        }
+
+        const wasAnswered = existing.answered === true;
+        const answeredAt  = existing.answeredAt || null;
+
+        const update = {
+            endedAt: now,
+            status:  wasAnswered ? 'ended' : 'missed',
+            durationSeconds: durationSecs !== null
+                ? durationSecs
+                : (wasAnswered && answeredAt
+                    ? Math.round((now - new Date(answeredAt)) / 1000)
+                    : null),
+        };
+
+        const call = await CallHistory.findOneAndUpdate(
+            { roomId },
+            { $set: update },
+            { new: true }
+        );
+
+        console.log(`[Twilio webhook] CallHistory updated — roomId=${roomId} status=${update.status} duration=${update.durationSeconds}s`);
+        return call;
+    }
+
+    /**
+     * End an active call — updates the single history document with end time and duration.
      */
     async endCall(callId, callee, caller) {
         const call = await client.video.rooms(callId).update({
-            status: "completed"
+            status: 'completed'
         });
 
         console.log(`Call Ended: ${call.sid}`);
 
-        await this.addCall({
-            roomId: call.sid,
-            type: 'ended',
-            from: caller,
-            to: callee,
-            date: Date.now(),
-            userName: call.uniqueName,
-            description: JSON.stringify(call)
-        });
+        const now = new Date();
 
-        return call;
+        // Fetch current record to check whether it was answered
+        const existing = await CallHistory.findOne({ roomId: call.sid }).lean();
+        const wasAnswered = existing?.answered === true;
+        const answeredAt  = existing?.answeredAt || null;
+
+        const update = {
+            endedAt: now,
+            status:  wasAnswered ? 'ended' : 'missed',
+            durationSeconds: (wasAnswered && answeredAt)
+                ? Math.round((now - new Date(answeredAt)) / 1000)
+                : null,
+        };
+
+        const record = await CallHistory.findOneAndUpdate(
+            { roomId: call.sid },
+            { $set: update },
+            { new: true }
+        );
+
+        return record || call;
     }
 
     /**
@@ -397,15 +423,15 @@ class CallService {
      * @param {Object} data - { from, to, callType, ipAddress, networkInfo }
      */
     async recordPendingCall(data) {
-        const call = new CallHistory();
-        call.roomId = null;
-        call.date = Date.now();
-        call.type = 'initiated';
-        call.from = data.from;
-        call.to = data.to;
-        call.callType = data.callType || 'voice';
-        call.ipAddress = data.ipAddress || null;
-        call.networkInfo = data.networkInfo || null;
+        const call = new CallHistory({
+            roomId:      null,
+            from:        data.from,
+            to:          data.to,
+            callType:    data.callType || 'voice',
+            status:      'ringing',
+            ipAddress:   data.ipAddress || null,
+            networkInfo: data.networkInfo || null,
+        });
 
         await call.save();
         console.log(`Pending call recorded: ${call._id}`);
@@ -413,35 +439,259 @@ class CallService {
     }
 
     /**
-     * Update call type by document _id (used for pending calls before a room is created)
-     *
-     * @param {string} callId - CallHistory document _id
-     * @param {string} type - new type value
+     * Update call status by document _id (used for pending calls before a room is created)
      */
-    async updateCallStatusById(callId, type) {
+    async updateCallStatusById(callId, status) {
         const call = await CallHistory.findByIdAndUpdate(
             callId,
-            { type },
+            { status },
             { new: true }
         );
-        if (call) console.log(`Pending call ${callId} updated to: ${type}`);
+        if (call) console.log(`Call ${callId} status updated to: ${status}`);
         return call;
     }
 
     /**
      * Mark call as missed and increment counter
      */
+    /**
+     * Check if a user is currently in an active call (ringing or answered, not yet ended).
+     * @param {string} userId
+     * @returns {Promise<boolean>}
+     */
+    async isUserInActiveCall(userId) {
+        const active = await CallHistory.findOne({
+            $or: [{ from: userId }, { to: userId }],
+            status: { $in: ['ringing', 'answered'] },
+            endedAt: null,
+        }).lean();
+        return !!active;
+    }
+
+    /**
+     * Record a call that was rejected because the callee was busy on another call.
+     * @param {{ from, to, callType, ipAddress, networkInfo }} data
+     * @returns {Promise<CallHistory>}
+     */
+    async recordBusyRejection(data) {
+        const call = new CallHistory({
+            roomId:      null,
+            from:        data.from,
+            to:          data.to,
+            callType:    data.callType || 'voice',
+            status:      'rejected',
+            endedAt:     new Date(),
+            ipAddress:   data.ipAddress || null,
+            networkInfo: data.networkInfo || null,
+        });
+        await call.save();
+        console.log(`Busy rejection recorded: ${call._id}`);
+        return call;
+    }
+
+    /**
+     * Mark call as missed and increment rate-limit counter.
+     */
     async markCallAsMissed(callId) {
-        const call = await CallHistory.findByIdAndUpdate(
+        return CallHistory.findByIdAndUpdate(
             callId,
             {
-                type: 'missed',
-                $inc: { missedCallCount: 1 }
+                status: 'missed',
+                answered: false,
+                $inc: { missedCallCount: 1 },
             },
             { new: true }
         );
+    }
 
-        return call;
+    /**
+     * Persist a new call request in pending state.
+     */
+    async saveCallRequest({ requestId, from, to, chatId, mode, ipAddress, networkInfo }) {
+        const request = await CallRequest.findOneAndUpdate(
+            { requestId },
+            {
+                $set: {
+                    from: new ObjectId(from),
+                    to: new ObjectId(to),
+                    chatId: chatId && ObjectId.isValid(chatId) ? new ObjectId(chatId) : null,
+                    mode: mode === 'video' ? 'video' : 'audio',
+                    response: 'pending',
+                    ipAddress: ipAddress || null,
+                    networkInfo: networkInfo || null,
+                },
+            },
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+        ).lean();
+
+        return request;
+    }
+
+    /**
+     * Find a pending call request by requestId that is still within the 24-hour active window.
+     * Used as a DB fallback when the in-memory pendingRequests Map doesn't have the entry
+     * (e.g. callee was offline when the request was sent, or the server restarted).
+     *
+     * @param {string} requestId
+     * @returns {Promise<Object|null>}
+     */
+    async getPendingCallRequest(requestId) {
+        const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        return CallRequest.findOne({
+            requestId,
+            response: 'pending',
+            createdOn: { $gte: cutoff },
+        }).lean();
+    }
+
+    /**
+     * Update the response on an existing call request (accepted / declined / cancelled).
+     */
+    async recordCallRequestResponse(data) {
+        const request = await CallRequest.findOneAndUpdate(
+            { requestId: data.requestId },
+            {
+                $set: {
+                    response: data.response,
+                    respondedOn: data.respondedOn || new Date(),
+                },
+            },
+            { new: true }
+        ).lean();
+
+        return request;
+    }
+
+    /**
+     * Find an accepted call request for caller->callee that can authorize room creation.
+     */
+    async getAcceptedCallRequest({ requestId, from, to, chatId }) {
+        if (!requestId) {
+            return null;
+        }
+
+        const query = {
+            requestId,
+            $or: [
+                { from: new ObjectId(from), to: new ObjectId(to) },
+                { from: new ObjectId(to), to: new ObjectId(from) },
+            ],
+            response: 'accepted',
+            // consumedOn: null,
+        };
+
+        if (chatId && ObjectId.isValid(chatId)) {
+            query.chatId = new ObjectId(chatId);
+        }
+
+        const request = await CallRequest.findOne(query).sort({ respondedOn: -1 }).lean();
+        
+        return request;
+    }
+
+    /**
+     * Get call requests for a user (as sender or receiver).
+     *
+     * @param {string} userId
+     * @param {string} [response] - optional filter: 'pending' | 'accepted' | 'declined' | 'cancelled' | 'disabled'
+     */
+    async getCallRequests(userId, response) {
+        const query = {
+            $or: [
+                { from: userId },
+                { to: userId },
+            ],
+        };
+
+        if (response) {
+            query.response = response;
+        }
+
+        return CallRequest.find(query)
+            .populate('from to', '_id id name imageUrl')
+            .sort({ createdOn: -1 })
+            .lean();
+    }
+
+    async markCallRequestConsumed(callRequestId) {
+        return CallRequest.findByIdAndUpdate(
+            callRequestId,
+            { consumedOn: new Date() },
+            { new: true }
+        ).lean();
+    }
+
+    /**
+     * Revoke call and video permissions for a user in a chat, and disable their
+     * active call request(s).
+     *
+     * @param {string} chatId
+     * @param {string} targetUserId - whose permissions to revoke
+     * @param {string} [requestId]  - if provided, disables that specific request only
+     */
+    async revokeCallPermission({ chatId, targetUserId, requestId }) {
+        if (!chatId || !ObjectId.isValid(chatId)) {
+            throw new Error('Invalid chatId');
+        }
+
+        const chatUpdate = Chat.updateOne(
+            { _id: new ObjectId(chatId) },
+            {
+                $set: {
+                    'members.$[target].canCall': false,
+                    'members.$[target].canVideo': false,
+                    'members.$[target].updatedOn': new Date(),
+                },
+            },
+            { arrayFilters: [{ 'target.user': new ObjectId(targetUserId) }] }
+        );
+
+        let requestUpdate;
+        if (requestId) {
+            requestUpdate = CallRequest.updateOne(
+                { requestId, response: 'accepted', consumedOn: null },
+                { $set: { response: 'disabled' } }
+            );
+        } else {
+            const query = { to: new ObjectId(targetUserId), response: 'accepted', consumedOn: null };
+            query.chatId = new ObjectId(chatId);
+            requestUpdate = CallRequest.updateMany(query, { $set: { response: 'disabled' } });
+        }
+
+        await Promise.all([chatUpdate, requestUpdate]);
+    }
+
+    /**
+     * Ensure both chat members can call after request acceptance.
+     */
+    async syncChatCallPermissions(chatId, callerId, calleeId, mode = 'audio') {
+        const set = {
+            'members.$[caller].canCall': true,
+            'members.$[caller].updatedOn': new Date(),
+            'members.$[callee].canCall': true,
+            'members.$[callee].updatedOn': new Date(),
+            'members.$[caller].canVideo': true,
+            'members.$[callee].canVideo': true,
+        };
+
+        const filter = chatId && ObjectId.isValid(chatId)
+            ? { _id: new ObjectId(chatId) }
+            : { 'members.user': { $all: [new ObjectId(callerId), new ObjectId(calleeId)] } };
+
+        const result = await Chat.updateOne(
+            filter,
+            { $set: set },
+            {
+                arrayFilters: [
+                    { 'caller.user': new ObjectId(callerId) },
+                    { 'callee.user': new ObjectId(calleeId) },
+                ],
+            }
+        );
+
+        if (!result.matchedCount) {
+            console.warn(`syncChatCallPermissions — no chat found for chatId=${chatId} caller=${callerId} callee=${calleeId}`);
+        }
     }
 }
 

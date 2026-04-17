@@ -19,7 +19,7 @@ const getNearbyUsers = async (req, res) => {
         const currentUserId = req.decodedToken.userId;
         const { radius, unit = 'km', preset } = req.query;
 
-        logger.info(`[getNearbyUsers] Request - userId: ${currentUserId}, preset: ${preset}, radius: ${radius}, unit: ${unit}`);
+        // logger.info(`[getNearbyUsers] Request - userId: ${currentUserId}, preset: ${preset}, radius: ${radius}, unit: ${unit}`);
 
         const currentUser = await nearbyService.getUserById(currentUserId);
         if (!currentUser) {
@@ -47,7 +47,7 @@ const getNearbyUsers = async (req, res) => {
             radiusInKm = DISTANCE_PRESETS['nearby'];
         }
 
-        logger.info(`[getNearbyUsers] Search params - userId: ${currentUserId}, lat: ${searchLat}, lon: ${searchLon}, radiusKm: ${radiusInKm}, interestedIn: ${currentUser.interestedIn}`);
+        // logger.info(`[getNearbyUsers] Search params - userId: ${currentUserId}, lat: ${searchLat}, lon: ${searchLon}, radiusKm: ${radiusInKm}, interestedIn: ${currentUser.interestedIn}`);
 
         const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000);
 
@@ -73,7 +73,7 @@ const getNearbyUsers = async (req, res) => {
             nearbyService.getBlockedUserIds(currentUserId)
         ]);
 
-        logger.info(`[getNearbyUsers] Found ${rawUsers.length} raw users, ${blockedIds.size} blocked - userId: ${currentUserId}`);
+        // logger.info(`[getNearbyUsers] Found ${rawUsers.length} raw users, ${blockedIds.size} blocked - userId: ${currentUserId}`);
 
         const currentGender = currentUser.gender; // 'male' | 'female' | 'other' | null
 
@@ -110,7 +110,7 @@ const getNearbyUsers = async (req, res) => {
             })
             .sort((a, b) => a.distance - b.distance);
 
-        logger.info(`[getNearbyUsers] Returning ${response.length} users after filters - userId: ${currentUserId}`);
+        // logger.info(`[getNearbyUsers] Returning ${response.length} users after filters - userId: ${currentUserId}`);
 
         // await nearbyService.logEncounters(currentUserId, response, searchLat, searchLon);
 

@@ -1,6 +1,7 @@
 const express       = require('express');
+const crypto        = require('crypto');
 const rateLimit     = require('express-rate-limit');
-const { ipKeyGenerator } = rateLimit;
+const { ipKeyGenerator } = require('express-rate-limit');
 const { verifyToken, verifyClientToken } = require('../../middleware/verify');
 
 // Route modules
@@ -15,6 +16,8 @@ const deviceRoutes       = require('./device');
 const supportRoutes      = require('./support');
 const genericRoutes      = require('./generic');
 const e2eeRoutes         = require('./e2ee');
+const moderationRoutes   = require('./moderation');
+const webhookRoutes      = require('./webhook');
 
 // ─── Rate limiters ────────────────────────────────────────────────────────────
 
@@ -32,7 +35,9 @@ const otpLimiter = rateLimit({
     max: 3,
     keyGenerator: (req) => {
         const phone = req.body?.phoneNumber || '';
-        return `${ipKeyGenerator(req)}_${phone}`;
+        if (!phone) return ipKeyGenerator(req);
+        // Hash the phone number to use as rate limit key
+        return crypto.createHash('sha256').update(phone).digest('hex');
     },
     message: { status: 'error', code: 429, message: 'Too many OTP requests, please try again later' },
     standardHeaders: true,
@@ -45,6 +50,8 @@ const router = express.Router();
 
 router.get('/', (req, res) => res.json({ title: 'Winky' }));
 router.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
+
+router.use('/api/webhook', webhookRoutes); // For Twilio status callbacks that don't have client token
 
 // Rate limiters
 router.post('/api/auth/phone/secured', otpLimiter);
@@ -66,5 +73,6 @@ router.use('/api/nearby', verifyClientToken, verifyToken, nearbyRoutes);
 router.use('/api/chat',         verifyClientToken, verifyToken, chatRoutes);
 router.use('/api/support',      verifyClientToken, verifyToken, supportRoutes);
 router.use('/api/e2ee',         verifyClientToken, verifyToken, e2eeRoutes);
+router.use('/api/moderation',   verifyClientToken, verifyToken, moderationRoutes);
 
 module.exports = router;

@@ -2,7 +2,7 @@
 
 ## Base URLs
 - Development: `http://localhost:3001`
-- Production: `https://api.winky.com` (configure as needed)
+- Production: `https://service.winky.com` (configure as needed)
 
 ## Authentication
 

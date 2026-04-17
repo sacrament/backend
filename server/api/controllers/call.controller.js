@@ -137,11 +137,58 @@ const callDetails = async (req, res) => {
     })
 }
 
+const getCallRequests = async (req, res) => {
+    let userId = req.decodedToken.userId;
+    if (typeof userId === 'number') {
+        userId = await userService.getUserIds([userId]);
+    }
+
+    const { response } = req.query;
+
+    try {
+        const requests = await callService.getCallRequests(userId, response);
+        res.status(200).json({ status: 'success', requests });
+    } catch (err) {
+        logger.error('Get call requests error:', err);
+        res.status(500).json({ status: 'error', message: err.message });
+    }
+};
+
 const twilioCallStatusCallbackDetails = async (req, res) => {
     const data = req.body;
 
-    await callService.callStatusUpdate(data);
+    logger.info(`[Twilio webhook] headers: ${JSON.stringify(req.headers)}`);
+    logger.info(`[Twilio webhook] body: ${JSON.stringify(data)}`);
+
+    try {
+        await callService.callStatusUpdate(data);
+        res.status(200).json({ status: 'success' });
+    } catch (err) {
+        logger.error('Twilio status callback error:', err);
+        // Still return 200 so Twilio does not retry
+        res.status(200).json({ status: 'error', message: err.message });
+    }
 }
+
+/**
+ * POST /api/call/deleteByUser
+ * Body: { userId }
+ * Deletes all call history records where from or to matches userId.
+ */
+const deleteCallsByUser = async (req, res) => {
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ status: 'error', message: 'userId is required' });
+
+    try {
+        const mongoose = require('mongoose');
+        const CallHistory = mongoose.model('CallHistory');
+        const result = await CallHistory.deleteMany({ $or: [{ from: userId }, { to: userId }] });
+        return res.status(200).json({ success: true, deletedCount: result.deletedCount });
+    } catch (error) {
+        logger.error('Delete calls by user error:', error);
+        return res.status(500).json({ status: 'error', message: 'Failed to delete calls' });
+    }
+};
 
 module.exports = {
     bindDevice,
@@ -152,5 +199,7 @@ module.exports = {
     callHistory,
     twilioCallStatusCallbackDetails,
     storeCallInfo,
-    callDetails
+    callDetails,
+    deleteCallsByUser,
+    getCallRequests,
 };
