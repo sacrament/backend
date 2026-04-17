@@ -1,14 +1,26 @@
 # ── SNS Topic (alarm notifications → email) ───────────────────────────────────
 
+data "aws_secretsmanager_secret_version" "ops" {
+  secret_id = aws_secretsmanager_secret.ops.id
+
+  depends_on = [aws_secretsmanager_secret_version.ops]
+}
+
+locals {
+  ops_secrets = jsondecode(data.aws_secretsmanager_secret_version.ops.secret_string)
+  alert_email = local.ops_secrets["ALERT_EMAIL"]
+}
+
 resource "aws_sns_topic" "alarms" {
   name = "${var.project}-alarms"
   tags = { Name = "${var.project}-alarms" }
 }
 
 resource "aws_sns_topic_subscription" "email" {
+  count     = var.enable_alert_email ? 1 : 0
   topic_arn = aws_sns_topic.alarms.arn
   protocol  = "email"
-  endpoint  = var.alert_email
+  endpoint  = local.alert_email
 }
 
 # ── ECS CPU ───────────────────────────────────────────────────────────────────

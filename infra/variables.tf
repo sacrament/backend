@@ -83,10 +83,10 @@ variable "ecr_image_tag" {
   default     = "latest"
 }
 
-variable "alert_email" {
-  description = "Email address to receive CloudWatch alarm notifications"
-  type        = string
-  default     = ""
+variable "enable_alert_email" {
+  description = "Set to true once ALERT_EMAIL has been populated in Secrets Manager"
+  type        = bool
+  default     = false
 }
 
 variable "ecs_min_tasks" {
