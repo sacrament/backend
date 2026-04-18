@@ -109,7 +109,7 @@ const setupProfile = async (req, res) => {
     }
 
     if (interestedIn !== undefined) {
-      const validValues = ['women', 'men', 'both', 'non-binary'];
+      const validValues = ['women', 'men', 'everyone', 'non-binary'];
       let normalized = interestedIn;
       if (Array.isArray(interestedIn)) {
         // Filter out any empty/invalid entries the client may have included
@@ -117,15 +117,15 @@ const setupProfile = async (req, res) => {
         const hasMen    = filtered.includes('men');
         const hasWomen  = filtered.includes('women');
         if (hasMen && hasWomen) {
-          normalized = 'both';
+          normalized = 'everyone';
         } else if (filtered.length >= 1) {
           normalized = filtered[0];
         } else {
-          return res.status(400).json({ status: 'error', message: 'interestedIn must be women, men, both, or non-binary' });
+          return res.status(400).json({ status: 'error', message: 'interestedIn must be women, men, everyone, or non-binary' });
         }
       }
       if (!validValues.includes(normalized)) {
-        return res.status(400).json({ status: 'error', message: 'interestedIn must be women, men, both, or non-binary' });
+        return res.status(400).json({ status: 'error', message: 'interestedIn must be women, men, everyone, or non-binary' });
       }
       profileUpdates.interestedIn = normalized;
     }
@@ -178,7 +178,7 @@ const updateCurrentUserProfile = async (req, res) => {
       return res.status(400).json({ status: 'error', message: 'gender must be male, female, other, non-binary, prefer-not-to-say, or none' });
     }
 
-    const validInterestedIn = ['women', 'men', 'both', 'non-binary'];
+    const validInterestedIn = ['women', 'men', 'everyone', 'non-binary'];
     let normalizedInterestedIn = interestedIn;
     if (interestedIn !== undefined) {
       if (Array.isArray(interestedIn)) {
@@ -186,15 +186,15 @@ const updateCurrentUserProfile = async (req, res) => {
         const hasMen   = filtered.includes('men');
         const hasWomen = filtered.includes('women');
         if (hasMen && hasWomen) {
-          normalizedInterestedIn = 'both';
+          normalizedInterestedIn = 'everyone';
         } else if (filtered.length >= 1) {
           normalizedInterestedIn = filtered[0];
         } else {
-          return res.status(400).json({ status: 'error', message: 'interestedIn must be women, men, both, or non-binary' });
+          return res.status(400).json({ status: 'error', message: 'interestedIn must be women, men, everyone, or non-binary' });
         }
       }
       if (!validInterestedIn.includes(normalizedInterestedIn)) {
-        return res.status(400).json({ status: 'error', message: 'interestedIn must be women, men, both, or non-binary' });
+        return res.status(400).json({ status: 'error', message: 'interestedIn must be women, men, everyone, or non-binary' });
       }
     }
 
