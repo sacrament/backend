@@ -36,9 +36,9 @@ module.exports = {
 }
 
 const chatColumnsToShow = "_id uniqueId members lastMessage active publicKey summary createdOn";
-const messageColumnsToShow = "_id content status from chatId kind sentOn deleted reactions media replyTo encrypted";
+const messageColumnsToShow = "_id content status from chatId kind sentOn deleted reactions media replyTo encrypted senderCopy";
 const userColumnsToShow = "_id name email phone imageUrl device";
-const lastMessageColumnsToShow = "_id content status reply from chatId kind sentOn deleted reactions media replyTo encrypted";
+const lastMessageColumnsToShow = "_id content status reply from chatId kind sentOn deleted reactions media replyTo encrypted senderCopy";
 const replyMessageColumnsToShow = "_id content from chatId kind sentOn deleted reactions media encrypted";
 
 const mediaColumnsToShow = "_id type date name url editedOn thumbnail";

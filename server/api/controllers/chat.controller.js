@@ -483,7 +483,7 @@ const updateMessageSeen = async (messageById, from, date) => {
 const sendMessage = async (req, res) => {
     try {
         logger.info(`API: Send message: ${Date()}`)
-        const { content, chatId, type, messageId, date } = req.body;
+        const { content, chatId, type, messageId, date, senderCopy } = req.body;
 
         var from = req.decodedToken.userId;
 
@@ -494,7 +494,8 @@ const sendMessage = async (req, res) => {
         const data = {
             content: content,
             chatId: chatId,
-            type: type
+            type: type,
+            senderCopy: senderCopy ?? null
         }
 
         // Get the chat
