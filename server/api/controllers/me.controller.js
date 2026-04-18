@@ -110,13 +110,18 @@ const setupProfile = async (req, res) => {
 
     if (interestedIn !== undefined) {
       const validValues = ['women', 'men', 'both', 'non-binary'];
-      // Normalise array → single value (e.g. ['women','men'] → 'both')
       let normalized = interestedIn;
       if (Array.isArray(interestedIn)) {
-        if (interestedIn.length > 1) {
+        // Filter out any empty/invalid entries the client may have included
+        const filtered = interestedIn.filter(v => v && typeof v === 'string' && validValues.includes(v));
+        const hasMen    = filtered.includes('men');
+        const hasWomen  = filtered.includes('women');
+        if (hasMen && hasWomen) {
           normalized = 'both';
+        } else if (filtered.length >= 1) {
+          normalized = filtered[0];
         } else {
-          normalized = interestedIn[0];
+          return res.status(400).json({ status: 'error', message: 'interestedIn must be women, men, both, or non-binary' });
         }
       }
       if (!validValues.includes(normalized)) {
@@ -173,12 +178,22 @@ const updateCurrentUserProfile = async (req, res) => {
       return res.status(400).json({ status: 'error', message: 'gender must be male, female, other, non-binary, prefer-not-to-say, or none' });
     }
 
+    const validInterestedIn = ['women', 'men', 'both', 'non-binary'];
     let normalizedInterestedIn = interestedIn;
     if (interestedIn !== undefined) {
       if (Array.isArray(interestedIn)) {
-        normalizedInterestedIn = interestedIn.length > 1 ? 'both' : interestedIn[0];
+        const filtered = interestedIn.filter(v => v && typeof v === 'string' && validInterestedIn.includes(v));
+        const hasMen   = filtered.includes('men');
+        const hasWomen = filtered.includes('women');
+        if (hasMen && hasWomen) {
+          normalizedInterestedIn = 'both';
+        } else if (filtered.length >= 1) {
+          normalizedInterestedIn = filtered[0];
+        } else {
+          return res.status(400).json({ status: 'error', message: 'interestedIn must be women, men, both, or non-binary' });
+        }
       }
-      if (!['women', 'men', 'both', 'non-binary'].includes(normalizedInterestedIn)) {
+      if (!validInterestedIn.includes(normalizedInterestedIn)) {
         return res.status(400).json({ status: 'error', message: 'interestedIn must be women, men, both, or non-binary' });
       }
     }
