@@ -73,10 +73,15 @@ const sendCallRequest = async function(data, ack) {
         pendingRequests.set(requestId, { callerId, calleeId, chatId, mode, ipAddress, networkInfo: networkType || null, callRequestId: callRequest._id.toString() });
 
         const isCalleeOnline = await chatSocketService.isUserConnected(calleeId);
+        const isCalleeBackgrounded = calleeObject.device?.state === 'background';
 
         if (isCalleeOnline) {
             this.to(calleeId).emit('call request', { requestId, from: callerObject, chatId, mode });
-        } else {
+        }
+
+        // Send push when callee is offline, or when online but app is backgrounded
+        // (backgrounded apps may not surface socket events on iOS)
+        if (!isCalleeOnline || isCalleeBackgrounded) {
             await pushNotificationService.callRequest({
                 requestId,
                 chatId,
@@ -533,9 +538,13 @@ async function resolveUserByAnyId(userService, rawId) {
 
     const idStr = rawId.toString();
 
-    let user = await userService.getUserById(idStr, true);
-    if (user) {
-        return user;
+    // Only attempt ObjectId lookup when the string is a valid 24-char hex ObjectId;
+    // otherwise Mongoose throws a CastError and the integer-ID fallback is never reached.
+    if (mongoose.Types.ObjectId.isValid(idStr)) {
+        const user = await userService.getUserById(idStr, true);
+        if (user) {
+            return user;
+        }
     }
 
     const numericId = Number(idStr);
@@ -548,6 +557,6 @@ async function resolveUserByAnyId(userService, rawId) {
         return null;
     }
 
-    user = await userService.getUserById(legacyUser._id.toString(), true);
+    const user = await userService.getUserById(legacyUser._id.toString(), true);
     return user || legacyUser;
 }

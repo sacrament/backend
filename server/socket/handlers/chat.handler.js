@@ -690,13 +690,17 @@ async function distributeMessage(socket, tempMessage, savedMessage, updatedChat,
 
             if (notifiableReceivers.length > 0) {
                 const senderUser = await userService.getUserById(sender.id);
-                pushNotificationService.newMessage({
-                    message: savedMessage,
-                    chat: updatedChat,
-                    offlineReceivers: notifiableReceivers,
-                    from: senderUser,
-                    timestamp: Date.now()
-                });
+                if (!senderUser) {
+                    logger.warn(`push:newMessage — sender ${sender.id} not found, skipping push`);
+                } else {
+                    pushNotificationService.newMessage({
+                        message: savedMessage,
+                        chat: updatedChat,
+                        offlineReceivers: notifiableReceivers,
+                        from: senderUser,
+                        timestamp: Date.now()
+                    });
+                }
 
                 logger.info(`Push notifications queued for ${notifiableReceivers.length} users`);
             }

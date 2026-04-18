@@ -32,7 +32,7 @@ class PushNotificationService {
     async newMessage(content) {
         try {
             const { offlineReceivers, chat, from } = content;
-            const message = content.message._doc;
+            const message = content.message._doc || content.message;
 
             delete from.token;
             delete from.device;
@@ -61,6 +61,7 @@ class PushNotificationService {
             await this.#send({
                 title: chat.name,
                 body: 'New members were added',
+                pref: 'newMessages',
                 custom: { chat: chatRef(chat), message, fromUser: from, save: 1, newMembers, newMember: true },
             }, offlineReceivers);
         } catch (ex) {
@@ -76,6 +77,7 @@ class PushNotificationService {
             await this.#send({
                 title: chat.name,
                 body: 'Members were removed from chat',
+                pref: 'newMessages',
                 custom: { chat: chatRef(chat), message, fromUser: from, save: 1, removedMembers, memberRemoved: true },
             }, offlineReceivers);
         } catch (ex) {
@@ -90,6 +92,7 @@ class PushNotificationService {
             await this.#send({
                 title: from.name,
                 body: 'Deleted',
+                pref: 'newMessages',
                 custom: { chat: chatRef(chat), fromUser: from, deleted: true },
             }, offlineReceivers);
         } catch (ex) {
@@ -110,6 +113,7 @@ class PushNotificationService {
             await this.#send({
                 title: from.name,
                 body: `${userLeft.name} left the chat`,
+                pref: 'newMessages',
                 custom: { chat: chatRef(chat), message, fromUser: from, save: 1, memberLeftChat: true },
             }, offlineReceivers);
         } catch (ex) {
@@ -143,6 +147,7 @@ class PushNotificationService {
                 title,
                 body: 'Deleted a message',
                 silent: true,
+                pref: 'newMessages',
                 custom: { chat: chatRef(chat), message, fromUser: from, deleted: true },
             }, offlineReceivers);
         } catch (ex) {
@@ -157,7 +162,7 @@ class PushNotificationService {
             stripMessageFields(message);
 
             const senderName = typeof from === 'string'
-                ? (await getUserDetails(from.id)).name
+                ? (await getUserDetails(from)).name
                 : from.name;
 
             const title = senderName;
@@ -165,6 +170,7 @@ class PushNotificationService {
             await this.#send({
                 title,
                 body: 'Reacted on a message',
+                pref: 'newMessages',
                 custom: { chat: chatRef(chat), messageId: message._id, reaction, fromUser: from, save: 1, isReact: true },
             }, offlineReceivers);
         } catch (ex) {
@@ -184,6 +190,7 @@ class PushNotificationService {
                 title: senderName,
                 body: message.content || 'Edited a message',
                 category: 'EditMessage',
+                pref: 'newMessages',
                 custom: { chat: chatRef(chat), message, fromUser: from, save: 1, messageEdited: true },
             }, offlineReceivers);
         } catch (ex) {
@@ -363,6 +370,7 @@ class PushNotificationService {
                 title: from.name,
                 body: response === 'accepted' ? 'Accepted your request' : 'Declined your request',
                 category: 'RespondConnectionRequest',
+                pref: 'connectionRequests',
                 custom: { request, fromUser: from, save: 1, respondConnetionRequest: true, response },
             }, recipients);
         } catch (ex) {
@@ -414,10 +422,11 @@ class PushNotificationService {
             return [];
         }
 
-        const { iOSContent, androidContent } = preparePayload(data);
-
         const promises = users.map(async (member) => {
             try {
+                // Create per-user payload copies to prevent shared-state mutation across
+                // concurrent promises (badge, sound, muted-state deletions must be isolated).
+                const { iOSContent, androidContent } = preparePayload(data);
                 // Handle both embedded user objects and references
                 let user = member.user || member;
                 
@@ -448,7 +457,7 @@ class PushNotificationService {
                     console.warn(`push:_send — User ${user._id?.toString()} has invalid device data`);
                     // fetch the device details to confirm if it's a valid device or just an ObjectId placeholder
                     const userDetails = await getUserDetails(user._id.toString());
-                    if (!userDetails?.device || typeof userDetails.device === 'object' && userDetails.device.constructor.name === 'ObjectID') {
+                    if (!userDetails?.device || (typeof userDetails.device === 'object' && userDetails.device.constructor.name === 'ObjectId')) {
                         console.warn(`push:_send — User ${user._id?.toString()} has no valid device after fetching details`);
                         return { skipped: true };
                     }
