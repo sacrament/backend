@@ -20,13 +20,13 @@ const User = new Schema({
     status: { type: String, enum: ['active', 'blocked', 'inactive', null], default: null },
     gender: {
         type: String,
-        enum: ['male', 'female', 'other', null],
+        enum: ['male', 'female', 'other', 'non-binary', 'prefer-not-to-say', null],
         default: null,
         index: true
     },
     age: { type: Number, default: null },
     dateOfBirth: { type: Date, default: null },
-    interestedIn: { type: String, enum: ['women', 'men', 'both', null], default: null },
+    interestedIn: { type: String, enum: ['women', 'men', 'both', 'non-binary', null], default: null },
     // Reference to the latest Location document (full history in Location collection)
     location: { type: Schema.Types.ObjectId, ref: 'Location', default: null },
     // Active device for push notifications (one per account)

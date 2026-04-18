@@ -66,6 +66,8 @@ const getNearbyUsers = async (req, res) => {
             filters.gender = 'male';
         } else if (currentUser.interestedIn === 'both') {
             filters.gender = { $in: ['male', 'female'] };
+        } else if (currentUser.interestedIn === 'non-binary') {
+            filters.gender = 'non-binary';
         }
 
         const [rawUsers, blockedIds] = await Promise.all([

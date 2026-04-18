@@ -102,8 +102,8 @@ const setupProfile = async (req, res) => {
     }
 
     if (gender !== undefined) {
-      if (!['male', 'female', 'other'].includes(gender)) {
-        return res.status(400).json({ status: 'error', message: 'gender must be male, female, or other' });
+      if (!['male', 'female', 'other', 'non-binary', 'prefer-not-to-say'].includes(gender)) {
+        return res.status(400).json({ status: 'error', message: 'gender must be male, female, other, non-binary, or prefer-not-to-say' });
       }
       profileUpdates.gender = gender;
     }
@@ -152,11 +152,11 @@ const updateCurrentUserProfile = async (req, res) => {
     if (email !== undefined && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ status: 'error', message: 'Invalid email format' });
     }
-    if (gender !== undefined && !['male', 'female', 'other', 'none'].includes(gender)) {
-      return res.status(400).json({ status: 'error', message: 'gender must be male, female, other, or none' });
+    if (gender !== undefined && !['male', 'female', 'other', 'non-binary', 'prefer-not-to-say', 'none'].includes(gender)) {
+      return res.status(400).json({ status: 'error', message: 'gender must be male, female, other, non-binary, prefer-not-to-say, or none' });
     }
-    if (interestedIn !== undefined && !['women', 'men', 'both'].includes(interestedIn)) {
-      return res.status(400).json({ status: 'error', message: 'interestedIn must be women, men, or both' });
+    if (interestedIn !== undefined && !['women', 'men', 'both', 'non-binary'].includes(interestedIn)) {
+      return res.status(400).json({ status: 'error', message: 'interestedIn must be women, men, both, or non-binary' });
     }
 
     const fields = {};
@@ -701,6 +701,59 @@ function formatUserResponse(user) {
   };
 }
 
+// ─── Action Logs ──────────────────────────────────────────────────────────────
+
+/**
+ * POST /me/action-logs
+ * Bulk-upsert client-side action logs. The client sends an array of ActionLog
+ * objects. Each entry is inserted only if the (_clientId, performedBy) pair has
+ * not been stored before, so the endpoint is safely idempotent — re-uploading
+ * the same batch never creates duplicates.
+ *
+ * Body: { logs: ActionLog[] }
+ * Response: { saved: number, duplicates: number }
+ */
+async function syncActionLogs(req, res) {
+  try {
+    const userId = req.userId;
+    const { logs } = req.body;
+
+    if (!Array.isArray(logs) || logs.length === 0) {
+      return res.status(400).json({ status: 'error', message: 'logs must be a non-empty array' });
+    }
+
+    const UserActionLog = mongoose.model('UserActionLog');
+
+    const ops = logs.map((entry) => ({
+      updateOne: {
+        filter: { id: entry.id, performedBy: userId },
+        update: {
+          $setOnInsert: {
+            id:                entry.id,
+            actionType:        entry.actionType,
+            performedBy:       userId,
+            targetUserId:      entry.targetUserId,
+            reason:            entry.reason            ?? null,
+            actionDescription: entry.description       ?? null,
+            timestamp:         entry.timestamp ? new Date(entry.timestamp) : new Date(),
+            metadata:          entry.metadata          ?? null,
+          },
+        },
+        upsert: true,
+      },
+    }));
+
+    const result = await UserActionLog.bulkWrite(ops, { ordered: false });
+    const saved      = result.upsertedCount  ?? 0;
+    const duplicates = logs.length - saved;
+
+    return res.status(200).json({ status: 'ok', saved, duplicates });
+  } catch (err) {
+    logger.error(`syncActionLogs — ${err.message}`);
+    return res.status(500).json({ status: 'error', message: 'Failed to sync action logs' });
+  }
+}
+
 module.exports = {
   getCurrentUserProfile,
   setupProfile,
@@ -725,4 +778,5 @@ module.exports = {
   storeKeyBackup,
   fetchKeyBackup,
   deleteKeyBackup,
+  syncActionLogs,
 };
