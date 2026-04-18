@@ -86,7 +86,7 @@ const getCurrentUserProfile = async (req, res) => {
 const setupProfile = async (req, res) => {
   try {
     const userId = req.decodedToken.userId;
-    const { name, dateOfBirth, gender, imageUrl, latitude, longitude, deviceId } = req.body;
+    const { name, dateOfBirth, gender, interestedIn, imageUrl, latitude, longitude, deviceId } = req.body;
 
     const profileUpdates = {};
 
@@ -106,6 +106,23 @@ const setupProfile = async (req, res) => {
         return res.status(400).json({ status: 'error', message: 'gender must be male, female, other, non-binary, or prefer-not-to-say' });
       }
       profileUpdates.gender = gender;
+    }
+
+    if (interestedIn !== undefined) {
+      const validValues = ['women', 'men', 'both', 'non-binary'];
+      // Normalise array → single value (e.g. ['women','men'] → 'both')
+      let normalized = interestedIn;
+      if (Array.isArray(interestedIn)) {
+        if (interestedIn.length > 1) {
+          normalized = 'both';
+        } else {
+          normalized = interestedIn[0];
+        }
+      }
+      if (!validValues.includes(normalized)) {
+        return res.status(400).json({ status: 'error', message: 'interestedIn must be women, men, both, or non-binary' });
+      }
+      profileUpdates.interestedIn = normalized;
     }
 
     if (Object.keys(profileUpdates).length > 0) {
@@ -155,8 +172,15 @@ const updateCurrentUserProfile = async (req, res) => {
     if (gender !== undefined && !['male', 'female', 'other', 'non-binary', 'prefer-not-to-say', 'none'].includes(gender)) {
       return res.status(400).json({ status: 'error', message: 'gender must be male, female, other, non-binary, prefer-not-to-say, or none' });
     }
-    if (interestedIn !== undefined && !['women', 'men', 'both', 'non-binary'].includes(interestedIn)) {
-      return res.status(400).json({ status: 'error', message: 'interestedIn must be women, men, both, or non-binary' });
+
+    let normalizedInterestedIn = interestedIn;
+    if (interestedIn !== undefined) {
+      if (Array.isArray(interestedIn)) {
+        normalizedInterestedIn = interestedIn.length > 1 ? 'both' : interestedIn[0];
+      }
+      if (!['women', 'men', 'both', 'non-binary'].includes(normalizedInterestedIn)) {
+        return res.status(400).json({ status: 'error', message: 'interestedIn must be women, men, both, or non-binary' });
+      }
     }
 
     const fields = {};
@@ -164,7 +188,7 @@ const updateCurrentUserProfile = async (req, res) => {
     if (bio          !== undefined) fields.bio         = bio;
     if (email        !== undefined) fields.email       = email;
     if (isPublic     !== undefined) fields.isPublic    = isPublic;
-    if (interestedIn !== undefined) fields.interestedIn = interestedIn;
+    if (interestedIn !== undefined) fields.interestedIn = normalizedInterestedIn;
     if (gender       !== undefined) fields.gender      = gender;
     if (age          !== undefined) fields.age         = age;
     // pictureUrl / imageUrl are interchangeable
