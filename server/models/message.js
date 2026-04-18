@@ -30,7 +30,8 @@ const Message = new Schema({
     summary: { type: String, default: null },
     replyTo: { type: Schema.Types.ObjectId, ref: 'Message' }, 
     visible: { type: Boolean, default: true },
-    encrypted: { type: Boolean, default: false }
+    encrypted: { type: Boolean, default: false },
+    senderCopy: { type: String, default: null }
 });
 
 Message.plugin(mongoosePaginate);

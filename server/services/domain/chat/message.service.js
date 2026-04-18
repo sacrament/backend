@@ -89,6 +89,10 @@ class MessageService {
             read: null
         };
 
+        if (data.senderCopy !== undefined) {
+            message.senderCopy = data.senderCopy ?? null;
+        }
+
         return message;
     }
 
