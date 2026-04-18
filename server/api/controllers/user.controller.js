@@ -5,6 +5,8 @@ const userService = new UserService();
 const chatService = new ChatService();
 const reportService = new ReportService();
 const logger = require('../../utils/logger');
+const { getChatService } = require('../../socket/services');
+const { getAgenda } = require('../../startup/agenda');
 
 /**
  * Search Users by Name
@@ -200,6 +202,12 @@ const sendConnectionRequest = async (req, res) => {
         if (!to) return res.status(400).json({ status: 'error', message: 'to is required' });
 
         const result = await userService.sendConnectionRequest(req.decodedToken.userId, to);
+
+        const recipientIsOnline = await getChatService().isUserConnected(to);
+        if (!recipientIsOnline) {
+            await getAgenda().now('push:connection-request', { request: result.request });
+        }
+
         return res.status(201).json({ status: 'success', request: result.request });
     } catch (error) {
         logger.error('Send connection request error:', error);
