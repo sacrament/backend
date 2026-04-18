@@ -26,7 +26,7 @@ const User = new Schema({
     },
     age: { type: Number, default: null },
     dateOfBirth: { type: Date, default: null },
-    interestedIn: { type: String, enum: ['women', 'men', 'both', 'non-binary', null], default: null },
+    interestedIn: { type: String, enum: ['women', 'men', 'everyone', 'non-binary', null], default: null },
     // Reference to the latest Location document (full history in Location collection)
     location: { type: Schema.Types.ObjectId, ref: 'Location', default: null },
     // Active device for push notifications (one per account)

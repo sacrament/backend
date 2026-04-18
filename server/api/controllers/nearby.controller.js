@@ -64,7 +64,7 @@ const getNearbyUsers = async (req, res) => {
             filters.gender = 'female';
         } else if (currentUser.interestedIn === 'men') {
             filters.gender = 'male';
-        } else if (currentUser.interestedIn === 'both') {
+        } else if (currentUser.interestedIn === 'everyone') {
             filters.gender = { $in: ['male', 'female'] };
         } else if (currentUser.interestedIn === 'non-binary') {
             filters.gender = 'non-binary';
