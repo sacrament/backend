@@ -27,6 +27,7 @@ module.exports = {
     require('../models/key.backup');
     require('../models/moderation.log');
     require('../models/user.ban');
+    require('../models/user.action.log');
   },
 
   async connectDatabase() {
