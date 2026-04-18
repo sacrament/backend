@@ -102,8 +102,8 @@ const setupProfile = async (req, res) => {
     }
 
     if (gender !== undefined) {
-      if (!['male', 'female', 'other'].includes(gender)) {
-        return res.status(400).json({ status: 'error', message: 'gender must be male, female, or other' });
+      if (!['male', 'female', 'other', 'non-binary', 'prefer-not-to-say'].includes(gender)) {
+        return res.status(400).json({ status: 'error', message: 'gender must be male, female, other, non-binary, or prefer-not-to-say' });
       }
       profileUpdates.gender = gender;
     }
@@ -152,11 +152,11 @@ const updateCurrentUserProfile = async (req, res) => {
     if (email !== undefined && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ status: 'error', message: 'Invalid email format' });
     }
-    if (gender !== undefined && !['male', 'female', 'other', 'none'].includes(gender)) {
-      return res.status(400).json({ status: 'error', message: 'gender must be male, female, other, or none' });
+    if (gender !== undefined && !['male', 'female', 'other', 'non-binary', 'prefer-not-to-say', 'none'].includes(gender)) {
+      return res.status(400).json({ status: 'error', message: 'gender must be male, female, other, non-binary, prefer-not-to-say, or none' });
     }
-    if (interestedIn !== undefined && !['women', 'men', 'both'].includes(interestedIn)) {
-      return res.status(400).json({ status: 'error', message: 'interestedIn must be women, men, or both' });
+    if (interestedIn !== undefined && !['women', 'men', 'both', 'non-binary'].includes(interestedIn)) {
+      return res.status(400).json({ status: 'error', message: 'interestedIn must be women, men, both, or non-binary' });
     }
 
     const fields = {};

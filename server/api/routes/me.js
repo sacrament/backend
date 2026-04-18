@@ -74,7 +74,7 @@ router.post('/hidden/connections', meController.hideConnection);
 router.delete('/hidden/connections/:userId', meController.unhideConnection);
 
 // ── Action Logs ───────────────────────────────────────────────────────────────
-// POST /me/action-logs — bulk upsert client-side action logs
-router.post('/action-logs', meController.syncActionLogs);
+// POST /me/actions/batch — bulk upsert client-side action logs
+router.post('/actions/batch', meController.syncActionLogs);
 
 module.exports = router;
