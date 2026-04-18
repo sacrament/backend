@@ -127,10 +127,26 @@ const respondCallRequest = async function(data, ack) {
         pendingRequests.delete(requestId);
 
         const callService = new CallService();
+        const isCallerOnline = await chatSocketService.isUserConnected(callerId);
 
         if (status === 'declined') {
             await callService.recordCallRequestResponse({ requestId, response: 'declined' });
-            this.to(callerId).emit('call request response', { requestId, chatId: request.chatId, status: 'declined' });
+
+            if (isCallerOnline) {
+                this.to(callerId).emit('call request response', { requestId, chatId: request.chatId, status: 'declined' });
+            } else {
+                const callerObject = await resolveUserByAnyId(userService, callerId);
+                if (callerObject) {
+                    await pushNotificationService.callRequestResponse({
+                        requestId,
+                        chatId: request.chatId,
+                        from: calleeObject,
+                        to: callerObject,
+                        mode,
+                        status: 'declined',
+                    });
+                }
+            }
             return ack({ success: true });
         }
 
@@ -138,12 +154,26 @@ const respondCallRequest = async function(data, ack) {
 
         await callService.syncChatCallPermissions(request.chatId, callerId, calleeId, mode);
 
-        this.to(callerId).emit('call request response', {
-            requestId,
-            chatId: request.chatId,
-            status: 'accepted',
-            mode,
-        });
+        if (isCallerOnline) {
+            this.to(callerId).emit('call request response', {
+                requestId,
+                chatId: request.chatId,
+                status: 'accepted',
+                mode,
+            });
+        } else {
+            const callerObject = await resolveUserByAnyId(userService, callerId);
+            if (callerObject) {
+                await pushNotificationService.callRequestResponse({
+                    requestId,
+                    chatId: request.chatId,
+                    from: calleeObject,
+                    to: callerObject,
+                    mode,
+                    status: 'accepted',
+                });
+            }
+        }
 
         ack({
             success: true,

@@ -31,8 +31,8 @@ const authLimiter = rateLimit({
 });
 
 const otpLimiter = rateLimit({
-    windowMs: 10 * 60 * 1000,
-    max: 10,
+    windowMs: 15 * 60 * 1000,
+    max: 20,
     keyGenerator: (req) => {
         const phone = req.body?.phoneNumber || '';
         if (!phone) return ipKeyGenerator(req);

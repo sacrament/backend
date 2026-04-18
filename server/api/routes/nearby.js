@@ -2,13 +2,14 @@
 const express = require('express');
 const router = express.Router();
 const rateLimit = require('express-rate-limit');
+const { ipKeyGenerator } = require('express-rate-limit');
 const { verifyToken } = require('../../middleware/verify');
 
 // Per-user limiter for the polling endpoint (~1 req/min expected → 30/15 min gives 2× headroom)
 const nearbyUsersLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 30,
-    keyGenerator: (req) => req.decodedToken?.userId?.toString() || req.ip,
+    keyGenerator: (req) => req.decodedToken?.userId?.toString() || ipKeyGenerator(req),
     message: { status: 'error', code: 429, message: 'Too many nearby requests, please try again later' },
     standardHeaders: true,
     legacyHeaders: false,

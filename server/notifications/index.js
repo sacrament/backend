@@ -273,6 +273,35 @@ class PushNotificationService {
         }
     }
 
+    async callRequestResponse(content) {
+        try {
+            const from = { ...content.from };
+            delete from.device;
+
+            const isAccepted = content.status === 'accepted';
+            const modeLabel = content.mode === 'video' ? 'video' : 'audio';
+
+            await this.#send({
+                title: isAccepted ? 'Call request accepted' : 'Call request declined',
+                body: isAccepted
+                    ? `${from.name} accepted your ${modeLabel} call request`
+                    : `${from.name} declined your ${modeLabel} call request`,
+                category: isAccepted ? 'CallRequestAccepted' : 'CallRequestDeclined',
+                pref: 'chatRequests',
+                custom: {
+                    requestId: content.requestId,
+                    chatId: content.chatId,
+                    fromUser: from,
+                    mode: content.mode,
+                    status: content.status,
+                    isCallRequestResponse: true,
+                },
+            }, [content.to]);
+        } catch (ex) {
+            logger.error(`push:callRequestResponse — ${ex.message}`);
+        }
+    }
+
     async missedCall(content) {
         try {
             const from = { ...content.from };
