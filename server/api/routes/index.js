@@ -23,7 +23,7 @@ const webhookRoutes      = require('./webhook');
 
 const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 5,
+    max: 10,
     skipSuccessfulRequests: true,
     message: { status: 'error', code: 429, message: 'Too many login attempts, please try again later' },
     standardHeaders: true,
@@ -32,7 +32,7 @@ const authLimiter = rateLimit({
 
 const otpLimiter = rateLimit({
     windowMs: 10 * 60 * 1000,
-    max: 3,
+    max: 10,
     keyGenerator: (req) => {
         const phone = req.body?.phoneNumber || '';
         if (!phone) return ipKeyGenerator(req);
