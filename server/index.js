@@ -27,8 +27,25 @@ app.set('trust proxy', 1);
 
 // ─── Request logging ──────────────────────────────────────────────────────────
 
-const morganFormat = process.env.ENV_NAME === 'production' ? 'combined' : 'dev';
-app.use(morgan(morganFormat, { stream: logger.stream, skip: (req) => req.path === '/health' || req.path === '/' }));
+const SKIP_LOG_PATHS  = new Set(['/', '/health']);
+const SKIP_LOG_AGENTS = /ELB-HealthChecker/i;
+const skipLogging     = (req) =>
+    SKIP_LOG_PATHS.has(req.path) || SKIP_LOG_AGENTS.test(req.headers['user-agent'] || '');
+
+morgan.token('client-ip', (req) =>
+    (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress
+);
+
+app.use(morgan(
+    (tokens, req, res) => JSON.stringify({
+        method:       tokens.method(req, res),
+        path:         tokens.url(req, res),
+        status:       Number(tokens.status(req, res)),
+        responseTime: `${tokens['response-time'](req, res)}ms`,
+        ip:           tokens['client-ip'](req, res),
+    }),
+    { stream: logger.stream, skip: skipLogging }
+));
 
 // ─── Security middleware ───────────────────────────────────────────────────────
 
