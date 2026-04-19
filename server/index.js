@@ -28,7 +28,7 @@ app.set('trust proxy', 1);
 // ─── Request logging ──────────────────────────────────────────────────────────
 
 const morganFormat = process.env.ENV_NAME === 'production' ? 'combined' : 'dev';
-app.use(morgan(morganFormat, { stream: logger.stream }));
+app.use(morgan(morganFormat, { stream: logger.stream, skip: (req) => req.path === '/health' || req.path === '/' }));
 
 // ─── Security middleware ───────────────────────────────────────────────────────
 
