@@ -418,6 +418,19 @@ class PushNotificationService {
         }
     }
 
+    /**
+     * Send a silent (background) push to one or more user IDs.
+     * @param {object} data  - { custom, category }
+     * @param {string[]} userIds
+     */
+    async sendSilentToUser(data, userIds) {
+        try {
+            await this.#sendSilent(data, userIds);
+        } catch (ex) {
+            logger.error(`push:sendSilentToUser — ${ex.message}`);
+        }
+    }
+
     async undoConnectionFriendship(from, request, to) {
         try {
             await this.#sendSilent({

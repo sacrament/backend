@@ -1,5 +1,6 @@
 // Nearby Users Controller
 
+const mongoose = require('mongoose');
 const NearbyService = require('../../services/domain/nearby/nearby.service');
 const nearbyService = new NearbyService();
 const logger = require('../../utils/logger');
@@ -19,7 +20,7 @@ const getNearbyUsers = async (req, res) => {
         const currentUserId = req.decodedToken.userId;
         const { radius, unit = 'km', preset } = req.query;
 
-        logger.info(`[getNearbyUsers] Request - userId: ${currentUserId}, preset: ${preset}, radius: ${radius}, unit: ${unit}`);
+        // logger.info(`[getNearbyUsers] Request - userId: ${currentUserId}, preset: ${preset}, radius: ${radius}, unit: ${unit}`);
 
         const currentUser = await nearbyService.getUserById(currentUserId);
         if (!currentUser) {
@@ -47,7 +48,7 @@ const getNearbyUsers = async (req, res) => {
             radiusInKm = DISTANCE_PRESETS['nearby'];
         }
 
-        logger.info(`[getNearbyUsers] Search params - userId: ${currentUserId}, lat: ${searchLat}, lon: ${searchLon}, radiusKm: ${radiusInKm}, interestedIn: ${currentUser.interestedIn}`);
+        // logger.info(`[getNearbyUsers] Search params - userId: ${currentUserId}, lat: ${searchLat}, lon: ${searchLon}, radiusKm: ${radiusInKm}, interestedIn: ${currentUser.interestedIn}`);
 
         const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000);
 
@@ -65,22 +66,27 @@ const getNearbyUsers = async (req, res) => {
         } else if (currentUser.interestedIn === 'men') {
             filters.gender = 'male';
         } else if (currentUser.interestedIn === 'everyone') {
-            filters.gender = { $in: ['male', 'female'] };
+            filters.gender = { $in: ['male', 'female', 'non-binary'] };
         } else if (currentUser.interestedIn === 'non-binary') {
             filters.gender = 'non-binary';
         }
 
-        const [rawUsers, blockedIds] = await Promise.all([
+        const DisappearedUser = mongoose.model('DisappearedUser');
+        const [rawUsers, blockedIds, disappearedRecords] = await Promise.all([
             nearbyService.findUsersNear(searchLon, searchLat, radiusInKm, filters),
-            nearbyService.getBlockedUserIds(currentUserId)
+            nearbyService.getBlockedUserIds(currentUserId),
+            DisappearedUser.find({ target: currentUserId }).select('user').lean(),
         ]);
 
-        logger.info(`[getNearbyUsers] Found ${rawUsers.length} raw users, ${blockedIds.size} blocked - userId: ${currentUserId}`);
+        const disappearedIds = new Set(disappearedRecords.map(r => r.user.toString()));
 
-        const currentGender = currentUser.gender; // 'male' | 'female' | 'other' | null
+        logger.info(`[getNearbyUsers] Found ${rawUsers.length} raw users, ${blockedIds.size} blocked, ${disappearedIds.size} disappeared - userId: ${currentUserId}`);
+
+        const currentGender = currentUser.gender; // 'male' | 'female' | 'non-binary' | null
 
         const response = rawUsers
             .filter(u => !blockedIds.has(u._id.toString()))
+            .filter(u => !disappearedIds.has(u._id.toString()))
             // Respect each user's visibility preferences:
             // womenOnly=true  → only female viewers can see this user
             // menOnly=true    → only male viewers can see this user
@@ -88,6 +94,7 @@ const getNearbyUsers = async (req, res) => {
                 const prefs = u.visibilityPreferences || {};
                 if (prefs.womenOnly && currentGender !== 'female') return false;
                 if (prefs.menOnly   && currentGender !== 'male')   return false;
+                if (prefs.nonBinaryOnly && currentGender !== 'non-binary') return false; 
                 return true;
             })
             .map(u => {
@@ -107,7 +114,8 @@ const getNearbyUsers = async (req, res) => {
                     distance: privacy.showLocation !== false ? parseFloat(distanceKm.toFixed(3)) : null,
                     distanceUnit: 'km',
                     visibilityRemaining,
-                    locationUpdatedAt: privacy.showLocation !== false ? u.updatedOn : null
+                    locationUpdatedAt: privacy.showLocation !== false ? u.updatedOn : null,
+                    interestedIn: u.showInterestedIn !== false ? u.interestedIn : null,
                 };
             })
             .sort((a, b) => a.distance - b.distance);
@@ -144,7 +152,7 @@ const getNearbyUsersHistory = async (req, res) => {
 
         res.status(200).json({
             status: 'success',
-            data: users.map(u => ({ id: u._id, name: u.name, imageUrl: u.imageUrl, bio: u.bio, gender: u.gender }))
+            data: users.map(u => ({ id: u._id, name: u.name, imageUrl: u.imageUrl, bio: u.bio, gender: u.gender, interestedIn: u.interestedIn || 'everyone' }))
         });
 
     } catch (error) {

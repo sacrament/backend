@@ -29,9 +29,16 @@ const logger = winston.createLogger({
     ],
 });
 
-// Morgan-compatible stream
+// Morgan-compatible stream — parses structured JSON emitted by the custom morgan format
 logger.stream = {
-    write: (message) => logger.http(message.trimEnd()),
+    write: (message) => {
+        try {
+            const data = JSON.parse(message.trimEnd());
+            logger.http(`${data.method} ${data.path} ${data.status} ${data.responseTime}`, data);
+        } catch {
+            logger.http(message.trimEnd());
+        }
+    },
 };
 
 module.exports = logger;
