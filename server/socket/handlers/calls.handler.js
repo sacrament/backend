@@ -118,15 +118,28 @@ const respondCallRequest = async function(data, ack) {
         }
         const calleeId = calleeObject._id.toString();
 
-        const request = pendingRequests.get(requestId);
+        const callService = new CallService();
+
+        let request = pendingRequests.get(requestId);
         if (!request) {
-            return ack({ error: 'Call request not found or expired' });
+            // In-memory map missed — this socket landed on a different instance or the
+            // server restarted. Fall back to the persisted DB record.
+            const dbRecord = await callService.getPendingCallRequest(requestId);
+            if (!dbRecord) {
+                return ack({ error: 'Call request not found or expired' });
+            }
+            request = {
+                callerId:      dbRecord.from.toString(),
+                calleeId:      dbRecord.to.toString(),
+                chatId:        dbRecord.chatId?.toString() ?? null,
+                mode:          dbRecord.mode,
+                callRequestId: dbRecord._id.toString(),
+            };
+        } else {
+            pendingRequests.delete(requestId);
         }
 
         const { callerId, mode } = request;
-        pendingRequests.delete(requestId);
-
-        const callService = new CallService();
         const isCallerOnline = await chatSocketService.isUserConnected(callerId);
 
         if (status === 'declined') {
@@ -209,12 +222,23 @@ const cancelCallRequest = async function(data, ack) {
             return;
         }
 
-        const request = pendingRequests.get(requestId);
+        let request = pendingRequests.get(requestId);
+        if (!request) {
+            // Fall back to DB in case this instance never saw the original send
+            const callService = new CallService();
+            const dbRecord = await callService.getPendingCallRequest(requestId);
+            if (dbRecord) {
+                request = {
+                    calleeId: dbRecord.to.toString(),
+                    chatId:   dbRecord.chatId?.toString() ?? null,
+                };
+            }
+        } else {
+            pendingRequests.delete(requestId);
+        }
 
         if (request) {
             this.to(request.calleeId).emit('call request cancelled', { requestId, chatId: request.chatId });
-            pendingRequests.delete(requestId);
-
             const callService = new CallService();
             await callService.recordCallRequestResponse({ requestId, response: 'cancelled' }).catch(() => {});
         }

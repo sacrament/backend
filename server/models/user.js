@@ -45,6 +45,7 @@ const User = new Schema({
     visibilityPreferences: {
         womenOnly: { type: Boolean, default: false },
         menOnly: { type: Boolean, default: false },
+        nonBinaryOnly: { type: Boolean, default: false },
         photoBlur: { type: Boolean, default: false }
     },
     // Notification preferences (Section 7.1)
@@ -63,7 +64,8 @@ const User = new Schema({
         showAge: { type: Boolean, default: true },
         showGender: { type: Boolean, default: true },
         showLocation: { type: Boolean, default: true },
-        showContact: { type: Boolean, default: true }
+        showContact: { type: Boolean, default: true },
+        showInterestedIn: { type: Boolean, default: true },
     },
     // Users hidden from radar (won't appear in this user's nearby results)
     hiddenUsers: [{ type: Schema.Types.ObjectId, ref: 'User' }],

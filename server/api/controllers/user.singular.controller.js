@@ -8,6 +8,8 @@ const mongoose = require('mongoose');
 const UserService = require('../../services/domain/user/user.service');
 const ReportService = require('../../services/domain/report/report.service');
 const logger = require('../../utils/logger');
+const { getIO } = require('../../socket/io');
+const pushNotifications = require('../../notifications/index');
 
 const userService = new UserService();
 const reportService = new ReportService();
@@ -73,6 +75,27 @@ const getMutedUsers = async (req, res) => {
     }
 };
 
+// ─── Disappear helpers ───────────────────────────────────────────────────────
+
+async function notifyDisappear(actorUserId, targetUserId, event, userData = null) {
+    try {
+        const io = getIO();
+        const payload = { userId: actorUserId };
+        if (userData) payload.user = userData;
+        const sockets = await io.in(targetUserId).fetchSockets();
+        if (sockets.length > 0) {
+            io.to(targetUserId).emit(event, payload);
+        } else {
+            await pushNotifications.sendSilentToUser({
+                custom: { type: event, ...payload, save: 0 },
+                category: event,
+            }, [targetUserId]);
+        }
+    } catch (err) {
+        logger.warn(`notifyDisappear(${event}) failed:`, err);
+    }
+}
+
 // ─── Disappear ────────────────────────────────────────────────────────────────
 
 /**
@@ -91,6 +114,7 @@ const disappearFromUser = async (req, res) => {
             { user: req.decodedToken.userId, target: userId },
             { upsert: true, new: true }
         );
+        notifyDisappear(req.decodedToken.userId, userId, 'user disappeared');
         return res.status(200).json({ success: true, disappearedAt: new Date().toISOString() });
     } catch (error) {
         logger.error('Disappear from user error:', error);
@@ -107,6 +131,19 @@ const undisappearFromUser = async (req, res) => {
     try {
         const DisappearedUser = mongoose.model('DisappearedUser');
         await DisappearedUser.findOneAndDelete({ user: req.decodedToken.userId, target: userId });
+        const User = mongoose.model('User');
+        const actor = await User.findById(req.decodedToken.userId)
+            .select('name imageUrl bio age gender')
+            .lean();
+        const userData = actor ? {
+            id:       actor._id.toString(),
+            name:     actor.name     ?? null,
+            imageUrl: actor.imageUrl ?? null,
+            bio:      actor.bio      ?? null,
+            age:      actor.age      ?? null,
+            gender:   actor.gender   ?? null,
+        } : null;
+        notifyDisappear(req.decodedToken.userId, userId, 'user reappeared', userData);
         return res.status(200).json({ success: true });
     } catch (error) {
         logger.error('Undisappear from user error:', error);

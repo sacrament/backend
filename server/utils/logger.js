@@ -34,7 +34,7 @@ logger.stream = {
     write: (message) => {
         try {
             const data = JSON.parse(message.trimEnd());
-            logger.http(data.path, data);
+            logger.http(`${data.method} ${data.path} ${data.status} ${data.responseTime}`, data);
         } catch {
             logger.http(message.trimEnd());
         }

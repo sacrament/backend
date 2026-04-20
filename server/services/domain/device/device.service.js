@@ -81,7 +81,7 @@ class DeviceService {
      * @returns {Promise<Object>}
      */
     async updateDevice(deviceId, userId, data) {
-        const allowed = ['version', 'appVersion', 'info', 'token', 'voipToken', 'status', 'uniqueId', 'model'];
+        const allowed = ['version', 'appVersion', 'info', 'token', 'voipToken', 'status', 'uniqueId', 'model', 'os', 'platform'];
         const updates = {};
 
         for (const key of allowed) {
@@ -91,11 +91,12 @@ class DeviceService {
         }
 
         updates.updatedOn = new Date();
+        updates.user = userId;
 
         const device = await DeviceModel.findOneAndUpdate(
-            { _id: deviceId, user: userId },
+            { _id: deviceId, $or: [{ user: userId }, { user: null }] },
             { $set: updates },
-            { new: true }
+            { new: true, upsert: true }
         );
 
         if (!device) throw new Error('Device not found');

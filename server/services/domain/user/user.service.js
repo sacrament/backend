@@ -926,6 +926,7 @@ class UserService {
         const update = {};
         if (typeof prefs.womenOnly === 'boolean') update['visibilityPreferences.womenOnly'] = prefs.womenOnly;
         if (typeof prefs.menOnly   === 'boolean') update['visibilityPreferences.menOnly']   = prefs.menOnly;
+        if (typeof prefs.nonBinaryOnly === 'boolean') update['visibilityPreferences.nonBinaryOnly'] = prefs.nonBinaryOnly;
         if (typeof prefs.photoBlur === 'boolean') update['visibilityPreferences.photoBlur'] = prefs.photoBlur;
 
         const user = await UserModel.findByIdAndUpdate(userId, { $set: update }, { new: true });
@@ -946,7 +947,7 @@ class UserService {
     }
 
     async updateProfilePrivacy(userId, prefs) {
-        const fields = ['showBio', 'showAge', 'showGender', 'showLocation', 'showContact'];
+        const fields = ['showBio', 'showAge', 'showGender', 'showLocation', 'showContact', 'showInterestedIn'];
         const update = {};
         for (const key of fields) {
             if (typeof prefs[key] === 'boolean') update[`privacySettings.${key}`] = prefs[key];

@@ -19,36 +19,54 @@ const nearbyNotifications = new NearbyNotificationService();
 const logger        = require('../../utils/logger');
 
 /**
+ * Resolve all connected user IDs for a given user.
+ * @param {string|ObjectId} userId
+ * @returns {Promise<string[]>}
+ */
+async function getConnectionIds(userId) {
+  const records = await UserConnectStatus.find({
+    users: userId,
+    status: 'connected',
+  }).select('users').lean();
+
+  const userIdStr = userId.toString();
+  const ids = new Set();
+  for (const r of records) {
+    for (const u of r.users || []) {
+      const id = u.toString();
+      if (id !== userIdStr) ids.add(id);
+    }
+  }
+  return [...ids];
+}
+
+/**
+ * Emit an event to every connected (friend) user of userId.
+ * @param {string|ObjectId} userId - The user who changed something
+ * @param {string} event - Socket.IO event name
+ * @param {Object} payload - Data to emit
+ */
+async function emitToConnections(userId, event, payload) {
+  try {
+    const connectionIds = await getConnectionIds(userId);
+    if (connectionIds.length === 0) return;
+    const io = getIO();
+    for (const id of connectionIds) {
+      io.to(id).emit(event, payload);
+    }
+  } catch (err) {
+    logger.error(`Failed to emit '${event}' to connections of ${userId}:`, err);
+  }
+}
+
+/**
  * Emit a profile-image-updated event to every connected (friend) user.
  * Each user joins a Socket.IO room named after their own userId on connect,
  * so we emit to those rooms directly.
  */
 async function emitProfileImageUpdatedToConnections(userId, imageUrl) {
-  try {
-    const records = await UserConnectStatus.find({
-      users: userId,
-      status: 'connected',
-    }).select('users').lean();
-
-    const userIdStr = userId.toString();
-    const connectionIds = new Set();
-    for (const r of records) {
-      for (const u of r.users || []) {
-        const id = u.toString();
-        if (id !== userIdStr) connectionIds.add(id);
-      }
-    }
-
-    if (connectionIds.size === 0) return;
-
-    const io = getIO();
-    const payload = { userId: userIdStr, imageUrl, pictureUrl: imageUrl };
-    for (const id of connectionIds) {
-      io.to(id).emit('profile image updated', payload);
-    }
-  } catch (err) {
-    logger.error('Failed to emit profile image updated:', err);
-  }
+  const userIdStr = userId.toString();
+  await emitToConnections(userId, 'profile image updated', { userId: userIdStr, imageUrl, pictureUrl: imageUrl });
 }
 
 /**
@@ -165,18 +183,16 @@ const updateCurrentUserProfile = async (req, res) => {
   try {
     // Accept both field name variants from the spec
     const {
-      name, bio, email, isPublic, interestedIn, gender,
-      imageUrl, pictureUrl,           // either alias accepted
-      dateOfBirth, birthday,          // either alias accepted
-      age,
+      name, bio, email, isPublic, interestedIn,
+      imageUrl, pictureUrl           // either alias accepted 
     } = req.body;
 
     if (email !== undefined && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ status: 'error', message: 'Invalid email format' });
     }
-    if (gender !== undefined && !['male', 'female', 'other', 'non-binary', 'prefer-not-to-say', 'none'].includes(gender)) {
-      return res.status(400).json({ status: 'error', message: 'gender must be male, female, other, non-binary, prefer-not-to-say, or none' });
-    }
+    // if (gender !== undefined && !['male', 'female', 'other', 'non-binary', 'prefer-not-to-say', 'none'].includes(gender)) {
+    //   return res.status(400).json({ status: 'error', message: 'gender must be male, female, other, non-binary, prefer-not-to-say, or none' });
+    // }
 
     const validInterestedIn = ['women', 'men', 'everyone', 'non-binary'];
     let normalizedInterestedIn = interestedIn;
@@ -204,23 +220,34 @@ const updateCurrentUserProfile = async (req, res) => {
     if (email        !== undefined) fields.email       = email;
     if (isPublic     !== undefined) fields.isPublic    = isPublic;
     if (interestedIn !== undefined) fields.interestedIn = normalizedInterestedIn;
-    if (gender       !== undefined) fields.gender      = gender;
-    if (age          !== undefined) fields.age         = age;
+    // if (gender       !== undefined) fields.gender      = gender;
+    // if (age          !== undefined) fields.age         = age;
     // pictureUrl / imageUrl are interchangeable
     const photo = pictureUrl ?? imageUrl;
     if (photo !== undefined) fields.imageUrl = photo;
     // birthday / dateOfBirth are interchangeable
-    const dob = birthday ?? dateOfBirth;
-    if (dob !== undefined) fields.dateOfBirth = dob;
+    // const dob = birthday ?? dateOfBirth;
+    // if (dob !== undefined) fields.dateOfBirth = dob;
 
     if (Object.keys(fields).length === 0) {
       return res.status(400).json({ status: 'error', message: 'No fields provided to update' });
     }
 
-    const user = await userService.updateProfile(req.decodedToken.userId, fields);
-    if (fields.imageUrl !== undefined) {
-      emitProfileImageUpdatedToConnections(req.decodedToken.userId, fields.imageUrl);
+    const userId = req.decodedToken.userId;
+    const user = await userService.updateProfile(userId, fields);
+
+    // Broadcast profile changes to connections in real time
+    const publicFields = ['name', 'bio', 'isPublic', 'imageUrl', 'interestedIn'];
+    const changedPublic = publicFields.filter(f => fields[f] !== undefined);
+    if (changedPublic.length > 0) {
+      const updatePayload = { userId: userId.toString() };
+      for (const f of changedPublic) updatePayload[f] = fields[f];
+      emitToConnections(userId, 'user updated', updatePayload);
     }
+    if (fields.imageUrl !== undefined) {
+      emitProfileImageUpdatedToConnections(userId, fields.imageUrl);
+    }
+
     return res.status(200).json({ status: 'success', user: formatUserResponse(user) });
   } catch (error) {
     if (error.message === 'User not found') return res.status(404).json({ status: 'error', message: 'User not found' });
@@ -324,8 +351,14 @@ const updateRadarInvisible = async (req, res) => {
     if (typeof invisible !== 'boolean') {
       return res.status(400).json({ status: 'error', message: 'invisible must be a boolean' });
     }
-    const user = await userService.updateRadarInvisible(req.decodedToken.userId, invisible);
+    const userId = req.decodedToken.userId;
+    const user = await userService.updateRadarInvisible(userId, invisible);
     if (!user) return res.status(404).json({ status: 'error', message: 'User not found' });
+
+    // Notify connections so they can update radar/nearby lists in real time
+    const event = invisible ? 'user went invisible' : 'user became visible';
+    emitToConnections(userId, event, { userId: userId.toString(), invisible });
+
     return res.status(200).json({ status: 'success', user: formatUserResponse(user) });
   } catch (error) {
     logger.error('Update radar invisible error:', error);
@@ -352,7 +385,9 @@ const updateNotificationPreferences = async (req, res) => {
  */
 const updateVisibilityPreferences = async (req, res) => {
   try {
-    const visibilityPreferences = await userService.updateVisibilityPreferences(req.decodedToken.userId, req.body);
+    const userId = req.decodedToken.userId;
+    const visibilityPreferences = await userService.updateVisibilityPreferences(userId, req.body);
+    emitToConnections(userId, 'user updated', { userId: userId.toString(), visibilityPreferences });
     return res.status(200).json({ status: 'success', visibilityPreferences });
   } catch (error) {
     logger.error('Update visibility preferences error:', error);
@@ -366,7 +401,9 @@ const updateVisibilityPreferences = async (req, res) => {
  */
 const updateProfilePrivacy = async (req, res) => {
   try {
-    const privacySettings = await userService.updateProfilePrivacy(req.decodedToken.userId, req.body);
+    const userId = req.decodedToken.userId;
+    const privacySettings = await userService.updateProfilePrivacy(userId, req.body);
+    emitToConnections(userId, 'user updated', { userId: userId.toString(), privacySettings });
     return res.status(200).json({ status: 'success', privacySettings });
   } catch (error) {
     logger.error('Update profile privacy error:', error);

@@ -539,8 +539,8 @@ class CallService {
         const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
         return CallRequest.findOne({
             requestId,
-            response: 'pending',
-            createdOn: { $gte: cutoff },
+            response: 'pending'
+            // createdOn: { $gte: cutoff },
         }).lean();
     }
 
