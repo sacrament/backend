@@ -108,7 +108,7 @@ const blockUser = async (req, res) => {
 
     try {
         const result = await userService.blockUser(userId, req.decodedToken, reason, description);
-        return res.status(200).json({ status: 'success', result: { blocked: true, ...result } });
+        return res.status(200).json({ status: 'success', blocked: result.blocked, blockedUser: result.blockedUser });
     } catch (error) {
         logger.error('Block user error:', error);
         return res.status(500).json({ status: 'error', message: error.message });

@@ -22,8 +22,8 @@ const webhookRoutes      = require('./webhook');
 // ─── Rate limiters ────────────────────────────────────────────────────────────
 
 const authLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 10,
+    windowMs: 60 * 60 * 1000,
+    max: 1000,
     skipSuccessfulRequests: true,
     message: { status: 'error', code: 429, message: 'Too many login attempts, please try again later' },
     standardHeaders: true,
@@ -31,8 +31,8 @@ const authLimiter = rateLimit({
 });
 
 const otpLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 20,
+    windowMs: 60 * 60 * 1000,
+    max: 1000,
     keyGenerator: (req) => {
         const phone = req.body?.phoneNumber || '';
         if (!phone) return ipKeyGenerator(req);

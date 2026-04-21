@@ -60,8 +60,8 @@ app.use(cors({
 
 // Global API rate limit
 app.use('/api', rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 100,
+    windowMs: 60 * 60 * 1000,
+    max: 10000,
     // Exclude the nearby-users polling endpoint — it has its own limiter
     skip: (req) => req.path.startsWith('/nearby/users') && req.method === 'GET',
     message: { status: 'error', code: 429, message: 'Too many requests, please try again later' },
