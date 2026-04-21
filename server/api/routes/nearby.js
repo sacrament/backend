@@ -7,8 +7,8 @@ const { verifyToken } = require('../../middleware/verify');
 
 // Per-user limiter for the polling endpoint (~1 req/min expected → 30/15 min gives 2× headroom)
 const nearbyUsersLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 30,
+    windowMs: 60 * 60 * 1000,
+    max: 10000,
     keyGenerator: (req) => req.decodedToken?.userId?.toString() || ipKeyGenerator(req),
     message: { status: 'error', code: 429, message: 'Too many nearby requests, please try again later' },
     standardHeaders: true,

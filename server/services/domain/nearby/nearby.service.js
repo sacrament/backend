@@ -47,12 +47,16 @@ class NearbyService {
             },
             { $unwind: '$user' },
             { $match: userMatch },
-            {
+            { 
                 $replaceRoot: {
                     newRoot: {
                         $mergeObjects: [
                             '$user',
-                            { location: { point: '$point', recordedAt: '$recordedAt' }, distanceKm: { $divide: ['$dist', 1000] } }
+                            {
+                                latitude: { $arrayElemAt: ['$point.coordinates', 1] },
+                                longitude: { $arrayElemAt: ['$point.coordinates', 0] },
+                                distanceKm: { $divide: ['$dist', 1000] }
+                            }
                         ]
                     }
                 }

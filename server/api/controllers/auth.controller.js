@@ -17,7 +17,7 @@ const rateLimitStore = new Map();
 
 // Global SMS budget: max OTPs per hour across all IPs/phones
 const globalOtpBudget = { count: 0, resetAt: Date.now() + 60 * 60 * 1000 };
-const GLOBAL_OTP_MAX_PER_HOUR = parseInt(process.env.OTP_GLOBAL_HOURLY_LIMIT) || 500;
+const GLOBAL_OTP_MAX_PER_HOUR = parseInt(process.env.OTP_GLOBAL_HOURLY_LIMIT) || 100000;
 
 /**
  * Apple Authentication
@@ -173,7 +173,7 @@ const requestPhoneOtp = async (req, res) => {
       return res.status(429).json({ status: 'error', code: 3132, message: 'Service temporarily unavailable, please try again later' });
     }
 
-    if (!checkRateLimit(rateLimitKey, 3, 10 * 60).allowed) {
+    if (!checkRateLimit(rateLimitKey, 1000, 10 * 60).allowed) {
       logger.warn(`[requestPhoneOtp] Rejected: phone rate limit exceeded - phone: ${phoneNumber}`);
       return res.status(429).json({ status: 'error', code: 3129, message: 'Rate limit exceeded for phone number' });
     }

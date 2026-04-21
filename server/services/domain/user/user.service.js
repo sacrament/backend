@@ -349,7 +349,6 @@ class UserService {
             const block = new this.model({
                 blocker: from,
                 blocked: member._id,
-                blockedOriginalId: member.id,
                 reason: reason || 'NO_REASON',
                 description: description || 'Blocked via chat',
                 status: 'active'
@@ -442,7 +441,6 @@ class UserService {
                 const block = new this.model({
                     blocker: myId,
                     blocked: userIDString,
-                    blockedOriginalId: userId,
                     reason: reason || 'NO_REASON',
                     description: description || 'Misbehaving',
                     status: 'active'
