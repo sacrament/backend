@@ -453,11 +453,33 @@ const newMessage = async function(data, ack) {
             throw new Error('Chat not found or access denied');
         }
 
-        const members = chat.members;
+        let members = chat.members;
         const senderMember = members.find(m => m.user._id.toString() === from.id);
         
         if (!senderMember || !senderMember.canChat) {
             throw new Error('Sender is not authorized to send messages in this chat');
+        }
+
+        // If receiver had previously left this private chat, re-enable them automatically.
+        const receiverMember = members.find(m => m.user._id.toString() !== from.id);
+        if (receiverMember && !receiverMember.canChat) {
+            const receiverId = receiverMember.user._id.toString();
+            try {
+                const reactivated = await chatService.clearChat(chatId, receiverId);
+                if (reactivated?.chat?.members) {
+                    chat = reactivated.chat;
+                    members = chat.members;
+                }
+
+                const receiverIsOnline = await chatSocketService.isUserConnected(receiverId);
+                if (receiverIsOnline) {
+                    this.to(receiverId).emit('new chat created', { chat });
+                }
+
+                logger.info(`Re-enabled receiver ${receiverId} in chat ${chatId} on new message`);
+            } catch (reactivateErr) {
+                logger.error(`Failed to re-enable receiver in chat ${chatId}: ${reactivateErr.message}`);
+            }
         }
 
         // Validate minimal members for sending
@@ -503,6 +525,12 @@ const newMessage = async function(data, ack) {
             chat: updatedChat,
             tempId: messageData.tempId 
         });
+
+        // Store public key to chat (fire-and-forget)
+        if (data.publicKey) {
+            chatService.updateChatWithPublicKey({ chatId, publicKey: data.publicKey })
+                .catch(err => logger.warn(`Failed to store publicKey to chat: ${err.message}`));
+        }
 
         // === ASYNC DELIVERY HANDLING (non-blocking) ===
         // Schedule delivery without blocking the ACK
