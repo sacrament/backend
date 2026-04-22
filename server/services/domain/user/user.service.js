@@ -178,6 +178,27 @@ class UserService {
     }
 
     /**
+     * Check whether a user is currently logged in.
+     * A user is considered logged in if they have a non-null refreshToken
+     * and an active device with push notifications enabled.
+     *
+     * @param {string} userId - MongoDB ObjectId
+     * @returns {Promise<boolean>} true if the user is logged in
+     */
+    async isUserLoggedIn(userId) {
+        const user = await this.model
+            .findOne({ _id: userId })
+            .select('refreshToken device')
+            .populate('device', 'status')
+            .lean()
+            .exec();
+
+        if (!user || !user.refreshToken) return false;
+        if (user.device && user.device.status === 'disabled') return false;
+        return true;
+    }
+
+    /**
      * Get user by integer ID
      *
      * @param {number} userId - User integer ID
