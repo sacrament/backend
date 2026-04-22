@@ -1057,9 +1057,7 @@ class ChatService {
 
         const filter = { 'members.user': forUser, _id: chatId };
         const noActiveMembers = chat.members.filter(member => member.canChat === true);
-        const update = noActiveMembers.length === 1
-            ? { $set: { 'members.$.canChat': false, 'members.$.leftOn': date, 'members.$.updatedOn': date, 'lastMessage': null } }
-            : { $set: { 'members.$.canChat': false, 'members.$.leftOn': date, 'members.$.updatedOn': date } };
+        const update = { $set: { 'members.$.canChat': false, 'members.$.leftOn': date, 'members.$.updatedOn': date } };
 
         const updatedChat = await this.chatModel.findOneAndUpdate(filter, update, { new: true })
             .populate({
@@ -1266,7 +1264,7 @@ class ChatService {
         const date = Date.now();
 
         const filter = { 'members.user': forUser, _id: chatId };
-        const update = { $set: { 'members.$.canChat': true, 'members.$.joinedOn': date, 'members.$.updatedOn': date } };
+        const update = { $set: { 'members.$.canChat': true, 'members.$.leftOn': null, 'members.$.joinedOn': date, 'members.$.updatedOn': date } };
 
         const chat = await this.chatModel.findOneAndUpdate(filter, update, { new: true })
             .populate({
