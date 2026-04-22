@@ -460,9 +460,9 @@ const newMessage = async function(data, ack) {
             throw new Error('Sender is not authorized to send messages in this chat');
         }
 
-        // If receiver had previously left this private chat, re-enable them automatically.
+        // If receiver had previously deleted/left this private chat (canChat=false + leftOn set), re-enable them.
         const receiverMember = members.find(m => m.user._id.toString() !== from.id);
-        if (receiverMember && !receiverMember.canChat) {
+        if (receiverMember && !receiverMember.canChat && receiverMember.leftOn) {
             const receiverId = receiverMember.user._id.toString();
             try {
                 const reactivated = await chatService.clearChat(chatId, receiverId);
