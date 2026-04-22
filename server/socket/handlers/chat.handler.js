@@ -453,11 +453,33 @@ const newMessage = async function(data, ack) {
             throw new Error('Chat not found or access denied');
         }
 
-        const members = chat.members;
+        let members = chat.members;
         const senderMember = members.find(m => m.user._id.toString() === from.id);
         
         if (!senderMember || !senderMember.canChat) {
             throw new Error('Sender is not authorized to send messages in this chat');
+        }
+
+        // If receiver had previously left this private chat, re-enable them automatically.
+        const receiverMember = members.find(m => m.user._id.toString() !== from.id);
+        if (receiverMember && !receiverMember.canChat) {
+            const receiverId = receiverMember.user._id.toString();
+            try {
+                const reactivated = await chatService.clearChat(chatId, receiverId);
+                if (reactivated?.chat?.members) {
+                    chat = reactivated.chat;
+                    members = chat.members;
+                }
+
+                const receiverIsOnline = await chatSocketService.isUserConnected(receiverId);
+                if (receiverIsOnline) {
+                    this.to(receiverId).emit('new chat created', { chat });
+                }
+
+                logger.info(`Re-enabled receiver ${receiverId} in chat ${chatId} on new message`);
+            } catch (reactivateErr) {
+                logger.error(`Failed to re-enable receiver in chat ${chatId}: ${reactivateErr.message}`);
+            }
         }
 
         // Validate minimal members for sending
@@ -503,6 +525,12 @@ const newMessage = async function(data, ack) {
             chat: updatedChat,
             tempId: messageData.tempId 
         });
+
+        // Store public key to chat (fire-and-forget)
+        if (data.publicKey) {
+            chatService.updateChatWithPublicKey({ chatId, publicKey: data.publicKey })
+                .catch(err => logger.warn(`Failed to store publicKey to chat: ${err.message}`));
+        }
 
         // === ASYNC DELIVERY HANDLING (non-blocking) ===
         // Schedule delivery without blocking the ACK
@@ -689,17 +717,31 @@ async function distributeMessage(socket, tempMessage, savedMessage, updatedChat,
             );
 
             if (notifiableReceivers.length > 0) {
-                const senderUser = await userService.getUserById(sender.id);
-                if (!senderUser) {
-                    logger.warn(`push:newMessage — sender ${sender.id} not found, skipping push`);
-                } else {
-                    pushNotificationService.newMessage({
-                        message: savedMessage,
-                        chat: updatedChat,
-                        offlineReceivers: notifiableReceivers,
-                        from: senderUser,
-                        timestamp: Date.now()
-                    });
+                // Fetch receiver login state and filter out logged-out users
+                const loginChecks = await Promise.all(
+                    notifiableReceivers.map(m => userService.isUserLoggedIn(m.user._id.toString()))
+                );
+                const loggedInReceivers = notifiableReceivers.filter((m, i) => {
+                    if (!loginChecks[i]) {
+                        logger.debug(`push:newMessage — receiver ${m.user._id} is not logged in, skipping push`);
+                        return false;
+                    }
+                    return true;
+                });
+
+                if (loggedInReceivers.length > 0) {
+                    const senderUser = await userService.getUserById(sender.id);
+                    if (!senderUser) {
+                        logger.warn(`push:newMessage — sender ${sender.id} not found, skipping push`);
+                    } else {
+                        pushNotificationService.newMessage({
+                            message: savedMessage,
+                            chat: updatedChat,
+                            offlineReceivers: loggedInReceivers,
+                            from: senderUser,
+                            timestamp: Date.now()
+                        });
+                    }
                 }
 
                 logger.info(`Push notifications queued for ${notifiableReceivers.length} users`);

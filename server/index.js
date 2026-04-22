@@ -13,12 +13,14 @@ const compression  = require('compression');
 const cookieParser = require('cookie-parser');
 const helmet       = require('helmet');
 const cors         = require('cors');
+const hpp          = require('hpp');
 const rateLimit    = require('express-rate-limit');
 const mongoSanitize = require('express-mongo-sanitize');
 const path         = require('path');
 const routes       = require('./api/routes/index');
 const morgan       = require('morgan');
 const logger       = require('./utils/logger');
+const security     = require('./middleware/security');
 
 const app = express();
 
@@ -79,6 +81,20 @@ app.use(mongoSanitize({
     replaceWith: '_',
     onSanitize: ({ key }) => console.warn(`Sanitized potentially malicious input: ${key}`),
 }));
+
+// ─── Anti-hack / anti-spam guards ────────────────────────────────────────────
+
+// HTTP Parameter Pollution – deduplicate array query params
+app.use(hpp());
+
+// Payload inspection: RCE, SSTI, path traversal, prototype pollution, SSRF
+app.use('/api', ...security.globalGuards);
+
+// Tighter rate limits on authentication and sensitive action endpoints
+app.use('/api/auth/phone', security.authRateLimiter);
+app.use('/api/auth/apple', security.registrationRateLimiter);
+app.use('/api/auth/google', security.registrationRateLimiter);
+
 app.use(express.static(path.join(__dirname, 'public'), { maxAge: '1d' }));
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
