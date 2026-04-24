@@ -13,10 +13,51 @@ const KeyBackup     = require('../../models/key.backup');
 const { UserConnectStatus } = require('../../models/user.connect');
 const { getIO }     = require('../../socket/io');
 const NearbyNotificationService = require('../../services/domain/nearby/nearby.notification.service');
+const PendingSocketEventService = require('../../services/domain/socket/pending.socket.event.service');
 const userService   = new UserService();
 const deviceService = new DeviceService();
 const nearbyNotifications = new NearbyNotificationService();
+const pendingSocketEventService = new PendingSocketEventService();
 const logger        = require('../../utils/logger');
+
+function normalizeInterestedInInput(interestedIn) {
+  const validValues = ['women', 'men', 'everyone', 'non-binary'];
+  const aliasMap = { both: 'everyone' };
+
+  if (interestedIn === undefined) {
+    return { ok: true, value: undefined };
+  }
+
+  let normalized = interestedIn;
+
+  if (Array.isArray(interestedIn)) {
+    const filtered = interestedIn
+      .filter(v => v && typeof v === 'string')
+      .map(v => v.trim().toLowerCase())
+      .map(v => aliasMap[v] || v)
+      .filter(v => validValues.includes(v));
+
+    const hasMen = filtered.includes('men');
+    const hasWomen = filtered.includes('women');
+
+    if (hasMen && hasWomen) {
+      normalized = 'everyone';
+    } else if (filtered.length >= 1) {
+      normalized = filtered[0];
+    } else {
+      return { ok: false };
+    }
+  } else if (typeof interestedIn === 'string') {
+    const key = interestedIn.trim().toLowerCase();
+    normalized = aliasMap[key] || key;
+  }
+
+  if (!validValues.includes(normalized)) {
+    return { ok: false };
+  }
+
+  return { ok: true, value: normalized };
+}
 
 /**
  * Resolve all connected user IDs for a given user.
@@ -51,10 +92,27 @@ async function emitToConnections(userId, event, payload) {
     const connectionIds = await getConnectionIds(userId);
     logger.info(`[emitToConnections] event='${event}' userId=${userId} connectionCount=${connectionIds.length}`);
     if (connectionIds.length === 0) return;
+
     const io = getIO();
+    const offlineConnectionIds = [];
+
     for (const id of connectionIds) {
+      const sockets = await io.in(id).fetchSockets();
+      if (sockets.length === 0) {
+        offlineConnectionIds.push(id);
+        continue;
+      }
+
       io.to(id).emit(event, payload);
     }
+
+    if (offlineConnectionIds.length > 0) {
+      await pendingSocketEventService.queueMany(offlineConnectionIds, event, payload);
+      logger.info(
+        `[emitToConnections] queued fallback event='${event}' for ${offlineConnectionIds.length} offline connection(s) of userId=${userId}`
+      );
+    }
+
     logger.info(`[emitToConnections] emitted event='${event}' to ${connectionIds.length} connection(s) of userId=${userId}`);
   } catch (err) {
     logger.error(`Failed to emit '${event}' to connections of ${userId}:`, err);
@@ -130,33 +188,11 @@ const setupProfile = async (req, res) => {
     }
 
     if (interestedIn !== undefined) {
-      const validValues = ['women', 'men', 'everyone', 'non-binary'];
-      const aliasMap = { both: 'everyone' };
-      let normalized = interestedIn;
-      if (Array.isArray(interestedIn)) {
-        // Filter out any empty/invalid entries the client may have included
-        const filtered = interestedIn
-          .filter(v => v && typeof v === 'string')
-          .map(v => v.trim().toLowerCase())
-          .map(v => aliasMap[v] || v)
-          .filter(v => validValues.includes(v));
-        const hasMen    = filtered.includes('men');
-        const hasWomen  = filtered.includes('women');
-        if (hasMen && hasWomen) {
-          normalized = 'everyone';
-        } else if (filtered.length >= 1) {
-          normalized = filtered[0];
-        } else {
-          return res.status(400).json({ status: 'error', message: 'interestedIn must be women, men, everyone, or non-binary' });
-        }
-      } else if (typeof interestedIn === 'string') {
-        const key = interestedIn.trim().toLowerCase();
-        normalized = aliasMap[key] || key;
-      }
-      if (!validValues.includes(normalized)) {
+      const normalizedInterestedIn = normalizeInterestedInInput(interestedIn);
+      if (!normalizedInterestedIn.ok) {
         return res.status(400).json({ status: 'error', message: 'interestedIn must be women, men, everyone, or non-binary' });
       }
-      profileUpdates.interestedIn = normalized;
+      profileUpdates.interestedIn = normalizedInterestedIn.value;
     }
 
     if (Object.keys(profileUpdates).length > 0) {
@@ -192,10 +228,15 @@ const setupProfile = async (req, res) => {
  */
 const updateCurrentUserProfile = async (req, res) => {
   try {
+    const userId = req.decodedToken.userId;
     // Accept both field name variants from the spec
     const {
-      name, bio, email, isPublic, interestedIn, pictureUrl           // either alias accepted 
+      name, bio, email, isPublic, interestedIn, pictureUrl
     } = req.body;
+
+    logger.info(
+      `[updateCurrentUserProfile] userId=${userId} requestedFields=${Object.keys(req.body || {}).join(',') || 'none'} interestedIn=${JSON.stringify(interestedIn ?? null)}`
+    );
 
     if (email !== undefined && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ status: 'error', message: 'Invalid email format' });
@@ -204,32 +245,12 @@ const updateCurrentUserProfile = async (req, res) => {
     //   return res.status(400).json({ status: 'error', message: 'gender must be male, female, other, non-binary, prefer-not-to-say, or none' });
     // }
 
-    const validInterestedIn = ['women', 'men', 'everyone', 'non-binary'];
-    const interestedInAliasMap = { both: 'everyone' };
-    let normalizedInterestedIn = interestedIn;
-    if (interestedIn !== undefined) {
-      if (Array.isArray(interestedIn)) {
-        const filtered = interestedIn
-          .filter(v => v && typeof v === 'string')
-          .map(v => v.trim().toLowerCase())
-          .map(v => interestedInAliasMap[v] || v)
-          .filter(v => validInterestedIn.includes(v));
-        const hasMen   = filtered.includes('men');
-        const hasWomen = filtered.includes('women');
-        if (hasMen && hasWomen) {
-          normalizedInterestedIn = 'everyone';
-        } else if (filtered.length >= 1) {
-          normalizedInterestedIn = filtered[0];
-        } else {
-          return res.status(400).json({ status: 'error', message: 'interestedIn must be women, men, everyone, or non-binary' });
-        }
-      } else if (typeof interestedIn === 'string') {
-        const key = interestedIn.trim().toLowerCase();
-        normalizedInterestedIn = interestedInAliasMap[key] || key;
-      }
-      if (!validInterestedIn.includes(normalizedInterestedIn)) {
-        return res.status(400).json({ status: 'error', message: 'interestedIn must be women, men, everyone, or non-binary' });
-      }
+    const normalizedInterestedIn = normalizeInterestedInInput(interestedIn);
+    if (!normalizedInterestedIn.ok) {
+      logger.info(
+        `[updateCurrentUserProfile] userId=${userId} rejected invalid interestedIn=${JSON.stringify(interestedIn ?? null)}`
+      );
+      return res.status(400).json({ status: 'error', message: 'interestedIn must be women, men, everyone, or non-binary' });
     }
 
     const fields = {};
@@ -237,7 +258,7 @@ const updateCurrentUserProfile = async (req, res) => {
     if (bio          !== undefined) fields.bio         = bio;
     if (email        !== undefined) fields.email       = email;
     if (isPublic     !== undefined) fields.isPublic    = isPublic;
-    if (interestedIn !== undefined) fields.interestedIn = normalizedInterestedIn;
+    if (interestedIn !== undefined) fields.interestedIn = normalizedInterestedIn.value;
     // if (gender       !== undefined) fields.gender      = gender;
     // if (age          !== undefined) fields.age         = age;
     // pictureUrl / imageUrl are interchangeable
@@ -251,7 +272,10 @@ const updateCurrentUserProfile = async (req, res) => {
       return res.status(400).json({ status: 'error', message: 'No fields provided to update' });
     }
 
-    const userId = req.decodedToken.userId;
+    logger.info(
+      `[updateCurrentUserProfile] userId=${userId} normalizedInterestedIn=${JSON.stringify(normalizedInterestedIn.value ?? null)} updateFields=${Object.keys(fields).join(',')}`
+    );
+
     const user = await userService.updateProfile(userId, fields);
 
     // Broadcast profile changes to connections in real time
@@ -265,6 +289,10 @@ const updateCurrentUserProfile = async (req, res) => {
     if (fields.imageUrl !== undefined) {
       emitProfileImageUpdatedToConnections(userId, fields.imageUrl);
     }
+
+    logger.info(
+      `[updateCurrentUserProfile] userId=${userId} update succeeded updatedFields=${Object.keys(fields).join(',')}`
+    );
 
     return res.status(200).json({ status: 'success', user: formatUserResponse(user) });
   } catch (error) {

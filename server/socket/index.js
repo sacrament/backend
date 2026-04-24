@@ -13,6 +13,7 @@ const mongoose = require('mongoose');
 const socketAuth = require('../middleware/socket.auth');
 const { UserService } = require('../services');
 const MessageService = require('../services/domain/chat/message.service');
+const PendingSocketEventService = require('../services/domain/socket/pending.socket.event.service');
 
 // Import event handlers
 const { ChatHandler, CallsHandler, UserHandler } = require('./handlers');
@@ -26,6 +27,7 @@ const userSessions = new Map();
 let eventHandlers = null;
 let handlersInitialized = false;
 const messageService = new MessageService();
+const pendingSocketEventService = new PendingSocketEventService();
 
 // Reconnection grace period: keep session data for 30 seconds
 const RECONNECTION_GRACE_PERIOD = 30 * 1000;
@@ -215,6 +217,18 @@ const onConnected = async (socket, io) => {
 
         // Join user-specific room
         socket.join(userId);
+
+        try {
+            const pendingEvents = await pendingSocketEventService.consumeForUser(userId);
+            if (pendingEvents.length > 0) {
+                for (const pendingEvent of pendingEvents) {
+                    socket.emit(pendingEvent.event, pendingEvent.payload);
+                }
+                console.log(`Replayed ${pendingEvents.length} pending socket event(s) for user: ${userId}`);
+            }
+        } catch (error) {
+            console.error(`Error replaying pending socket events for ${userId}: ${error.message}`);
+        }
 
         // Mark all pending messages as delivered for this user (was offline, now back online)
         try {
