@@ -69,6 +69,22 @@ class PushNotificationService {
         }
     }
 
+    async newChatCreated(content) {
+        try {
+            const { offlineReceivers, chat, from } = content;
+
+            await this.#send({
+                title: from?.name || chat?.name || 'New chat',
+                body: 'New chat created',
+                category: 'NewChatCreated',
+                pref: 'newMessages',
+                custom: { chat: chatRef(chat), fromUser: from, save: 1, newChatCreated: true },
+            }, offlineReceivers);
+        } catch (ex) {
+            logger.error(`push:newChatCreated — ${ex.message}`);
+        }
+    }
+
     async membersRemovedFromChat(content) {
         try {
             const { offlineReceivers, genericMessage: message, chat, from, removedMembers } = content;

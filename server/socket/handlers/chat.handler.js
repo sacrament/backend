@@ -54,6 +54,7 @@ const newChat = async function(data, ack) {
         console.log(`New Chat: ${JSON.stringify(data)}`)
 
         const from = this.user.id;
+        const fromUser = this.user;
         data.userId = from; 
 
         chatService.create(data).then(async (result) => {
@@ -71,6 +72,12 @@ const newChat = async function(data, ack) {
                     const memberIsOnline = await chatSocketService.isUserConnected(to);
                     if (memberIsOnline) {
                         this.to(to).emit('new chat created', { chat: result.chat });
+                    } else {
+                        pushNotificationService.newChatCreated({
+                            chat: result.chat,
+                            from: fromUser,
+                            offlineReceivers: [member]
+                        });
                     }
                 }
             }
@@ -418,7 +425,7 @@ const newMessage = async function(data, ack) {
         }
 
         // Validate message type
-        const validKinds = ['text', 'image', 'video', 'audio', 'document', 'GIF', 'generic', 'share contact'];
+        const validKinds = ['text', 'image', 'video'];
         if (kind && !validKinds.includes(kind)) {
             throw new Error(`Invalid message kind: ${kind}`);
         }
@@ -474,6 +481,12 @@ const newMessage = async function(data, ack) {
                 const receiverIsOnline = await chatSocketService.isUserConnected(receiverId);
                 if (receiverIsOnline) {
                     this.to(receiverId).emit('new chat created', { chat });
+                } else {
+                    pushNotificationService.newChatCreated({
+                        chat,
+                        from,
+                        offlineReceivers: [receiverMember]
+                    });
                 }
 
                 logger.info(`Re-enabled receiver ${receiverId} in chat ${chatId} on new message`);
@@ -663,10 +676,15 @@ async function distributeMessage(socket, tempMessage, savedMessage, updatedChat,
 
                 if (isOnline) {
                     try {
+                        const chatPayload = updatedChat || {
+                            _id: tempMessage.chatId,
+                            members: members
+                        };
+
                         // Emit to online recipient
                         socket.to(recipientId).emit('new message received', {
-                            message: tempMessage,
-                            chat: updatedChat,
+                            message: savedMessage,
+                            chat: chatPayload,
                             publicKey: originalData.publicKey,
                             bytes: originalData.bytes,
                             sentAt: Date.now()
