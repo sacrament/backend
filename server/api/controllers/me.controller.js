@@ -49,11 +49,13 @@ async function getConnectionIds(userId) {
 async function emitToConnections(userId, event, payload) {
   try {
     const connectionIds = await getConnectionIds(userId);
+    logger.info(`[emitToConnections] event='${event}' userId=${userId} connectionCount=${connectionIds.length}`);
     if (connectionIds.length === 0) return;
     const io = getIO();
     for (const id of connectionIds) {
       io.to(id).emit(event, payload);
     }
+    logger.info(`[emitToConnections] emitted event='${event}' to ${connectionIds.length} connection(s) of userId=${userId}`);
   } catch (err) {
     logger.error(`Failed to emit '${event}' to connections of ${userId}:`, err);
   }
@@ -66,6 +68,7 @@ async function emitToConnections(userId, event, payload) {
  */
 async function emitProfileImageUpdatedToConnections(userId, imageUrl) {
   const userIdStr = userId.toString();
+  logger.info(`[emitProfileImageUpdatedToConnections] userId=${userIdStr} imageUrl=${imageUrl}`);
   await emitToConnections(userId, 'profile image updated', { userId: userIdStr, imageUrl, pictureUrl: imageUrl });
 }
 
@@ -128,10 +131,15 @@ const setupProfile = async (req, res) => {
 
     if (interestedIn !== undefined) {
       const validValues = ['women', 'men', 'everyone', 'non-binary'];
+      const aliasMap = { both: 'everyone' };
       let normalized = interestedIn;
       if (Array.isArray(interestedIn)) {
         // Filter out any empty/invalid entries the client may have included
-        const filtered = interestedIn.filter(v => v && typeof v === 'string' && validValues.includes(v));
+        const filtered = interestedIn
+          .filter(v => v && typeof v === 'string')
+          .map(v => v.trim().toLowerCase())
+          .map(v => aliasMap[v] || v)
+          .filter(v => validValues.includes(v));
         const hasMen    = filtered.includes('men');
         const hasWomen  = filtered.includes('women');
         if (hasMen && hasWomen) {
@@ -141,6 +149,9 @@ const setupProfile = async (req, res) => {
         } else {
           return res.status(400).json({ status: 'error', message: 'interestedIn must be women, men, everyone, or non-binary' });
         }
+      } else if (typeof interestedIn === 'string') {
+        const key = interestedIn.trim().toLowerCase();
+        normalized = aliasMap[key] || key;
       }
       if (!validValues.includes(normalized)) {
         return res.status(400).json({ status: 'error', message: 'interestedIn must be women, men, everyone, or non-binary' });
@@ -183,8 +194,7 @@ const updateCurrentUserProfile = async (req, res) => {
   try {
     // Accept both field name variants from the spec
     const {
-      name, bio, email, isPublic, interestedIn,
-      imageUrl, pictureUrl           // either alias accepted 
+      name, bio, email, isPublic, interestedIn, pictureUrl           // either alias accepted 
     } = req.body;
 
     if (email !== undefined && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -195,10 +205,15 @@ const updateCurrentUserProfile = async (req, res) => {
     // }
 
     const validInterestedIn = ['women', 'men', 'everyone', 'non-binary'];
+    const interestedInAliasMap = { both: 'everyone' };
     let normalizedInterestedIn = interestedIn;
     if (interestedIn !== undefined) {
       if (Array.isArray(interestedIn)) {
-        const filtered = interestedIn.filter(v => v && typeof v === 'string' && validInterestedIn.includes(v));
+        const filtered = interestedIn
+          .filter(v => v && typeof v === 'string')
+          .map(v => v.trim().toLowerCase())
+          .map(v => interestedInAliasMap[v] || v)
+          .filter(v => validInterestedIn.includes(v));
         const hasMen   = filtered.includes('men');
         const hasWomen = filtered.includes('women');
         if (hasMen && hasWomen) {
@@ -208,6 +223,9 @@ const updateCurrentUserProfile = async (req, res) => {
         } else {
           return res.status(400).json({ status: 'error', message: 'interestedIn must be women, men, everyone, or non-binary' });
         }
+      } else if (typeof interestedIn === 'string') {
+        const key = interestedIn.trim().toLowerCase();
+        normalizedInterestedIn = interestedInAliasMap[key] || key;
       }
       if (!validInterestedIn.includes(normalizedInterestedIn)) {
         return res.status(400).json({ status: 'error', message: 'interestedIn must be women, men, everyone, or non-binary' });
@@ -223,7 +241,7 @@ const updateCurrentUserProfile = async (req, res) => {
     // if (gender       !== undefined) fields.gender      = gender;
     // if (age          !== undefined) fields.age         = age;
     // pictureUrl / imageUrl are interchangeable
-    const photo = pictureUrl ?? imageUrl;
+    const photo = pictureUrl;
     if (photo !== undefined) fields.imageUrl = photo;
     // birthday / dateOfBirth are interchangeable
     // const dob = birthday ?? dateOfBirth;

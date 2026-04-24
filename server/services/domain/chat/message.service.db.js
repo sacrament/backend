@@ -123,14 +123,28 @@ class MessageService {
                     {
                         path: 'replyTo',
                         select: '-isImported -importedOn -summary -replyTo -__v -uniqueId',
-                        populate: {
-                            path: 'media reactions from',
-                            select: '_id id name email phone imageUrl status kind date from thumbnail url type',
-                            populate: {
+                        populate: [
+                            {
+                                path: 'media',
+                                select: utils.mediaColumnsToShow(),
+                                populate: {
+                                    path: 'from',
+                                    select: utils.userColumnsToShow()
+                                }
+                            },
+                            {
+                                path: 'reactions',
+                                select: utils.reactionColumnsToShow(),
+                                populate: {
+                                    path: 'from',
+                                    select: utils.userColumnsToShow()
+                                }
+                            },
+                            {
                                 path: 'from',
                                 select: utils.userColumnsToShow()
                             }
-                        }
+                        ]
                     },
                     {
                         path: 'media',
@@ -530,14 +544,28 @@ class MessageService {
                 {
                     path: 'replyTo',
                     select: utils.replyMessageColumnsToShow(),
-                    populate: {
-                        path: 'media reactions from',
-                        select: utils.reactionColumnsToShow() + utils.mediaColumnsToShow() + utils.userColumnsToShow(),
-                        populate: {
+                    populate: [
+                        {
+                            path: 'media',
+                            select: utils.mediaColumnsToShow(),
+                            populate: {
+                                path: 'from',
+                                select: utils.userColumnsToShow()
+                            }
+                        },
+                        {
+                            path: 'reactions',
+                            select: utils.reactionColumnsToShow(),
+                            populate: {
+                                path: 'from',
+                                select: utils.userColumnsToShow()
+                            }
+                        },
+                        {
                             path: 'from',
                             select: utils.userColumnsToShow()
                         }
-                    }
+                    ]
                 }
             ])
             .sort({ sentOn: -1 })
@@ -607,14 +635,28 @@ class MessageService {
                 {
                     path: 'replyTo',
                     select: '-isImported -importedOn -summary -replyTo -__v -uniqueId',
-                    populate: {
-                        path: 'media reactions from',
-                        select: '_id id name email phone imageUrl status kind date from thumbnail url type',
-                        populate: {
+                    populate: [
+                        {
+                            path: 'media',
+                            select: utils.mediaColumnsToShow(),
+                            populate: {
+                                path: 'from',
+                                select: utils.userColumnsToShow()
+                            }
+                        },
+                        {
+                            path: 'reactions',
+                            select: utils.reactionColumnsToShow(),
+                            populate: {
+                                path: 'from',
+                                select: utils.userColumnsToShow()
+                            }
+                        },
+                        {
                             path: 'from',
                             select: utils.userColumnsToShow()
                         }
-                    }
+                    ]
                 }
             ]);
 

@@ -1086,7 +1086,14 @@ class UserService {
         if (bio !== undefined)         user.bio         = bio;
         if (isPublic !== undefined)    user.isPublic    = isPublic;
         if (gender !== undefined)      user.gender      = gender;
-        if (interestedIn !== undefined) user.interestedIn = interestedIn;
+        if (interestedIn !== undefined) {
+            const aliasMap = { both: 'everyone' };
+            if (typeof interestedIn === 'string') {
+                user.interestedIn = aliasMap[interestedIn.trim().toLowerCase()] || interestedIn.trim().toLowerCase();
+            } else {
+                user.interestedIn = interestedIn;
+            }
+        }
         if (dateOfBirth !== undefined) {
             user.dateOfBirth = new Date(dateOfBirth);
             // keep age in sync
