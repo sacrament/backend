@@ -17,6 +17,38 @@ class UserService {
         this.model = UserModel;
     }
 
+    #normalizeInterestedIn(interestedIn) {
+        const aliasMap = { both: 'everyone' };
+        const validValues = new Set(['women', 'men', 'everyone', 'non-binary']);
+
+        if (interestedIn === undefined || interestedIn === null) {
+            return interestedIn;
+        }
+
+        const normalizeValue = (value) => {
+            if (typeof value !== 'string') {
+                return null;
+            }
+
+            const normalized = aliasMap[value.trim().toLowerCase()] || value.trim().toLowerCase();
+            return validValues.has(normalized) ? normalized : null;
+        };
+
+        if (Array.isArray(interestedIn)) {
+            const normalizedValues = interestedIn
+                .map(normalizeValue)
+                .filter(Boolean);
+
+            if (normalizedValues.includes('women') && normalizedValues.includes('men')) {
+                return 'everyone';
+            }
+
+            return normalizedValues[0] ?? interestedIn;
+        }
+
+        return normalizeValue(interestedIn) ?? interestedIn;
+    }
+
     /**
      * Derive a consistent, non-reversible hash for a phone number.
      * Used for indexed lookups — same input always produces the same key.
@@ -1087,12 +1119,7 @@ class UserService {
         if (isPublic !== undefined)    user.isPublic    = isPublic;
         if (gender !== undefined)      user.gender      = gender;
         if (interestedIn !== undefined) {
-            const aliasMap = { both: 'everyone' };
-            if (typeof interestedIn === 'string') {
-                user.interestedIn = aliasMap[interestedIn.trim().toLowerCase()] || interestedIn.trim().toLowerCase();
-            } else {
-                user.interestedIn = interestedIn;
-            }
+            user.interestedIn = this.#normalizeInterestedIn(interestedIn);
         }
         if (dateOfBirth !== undefined) {
             user.dateOfBirth = new Date(dateOfBirth);
