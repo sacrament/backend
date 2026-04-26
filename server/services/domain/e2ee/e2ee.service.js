@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const { normalizeUserId } = require('../../../utils/user.utils');
+const logger = require('../../../utils/logger');
 
 class E2EEService {
 
@@ -173,9 +174,9 @@ class E2EEService {
 
         const backup = await E2EEKeyBackup.findOne({ user: userId }).lean();
         if (!backup) {
-            const error = new Error('No key backup found');
-            error.status = 404;
-            throw error;
+            // throw error;
+            logger.warn(`E2EE key backup not found for user ${userId}`);
+            return null;
         }
 
         return {
