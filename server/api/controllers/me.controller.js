@@ -330,19 +330,23 @@ const updateCurrentUserPicture = async (req, res) => {
  */
 const updateCurrentUserLocation = async (req, res) => {
   try {
-    const { latitude, longitude } = req.body;
+    const { latitude, longitude, lat: latitudeAlias, lon: longitudeAlias } = req.body;
+    const inputLatitude = latitude ?? latitudeAlias;
+    const inputLongitude = longitude ?? longitudeAlias;
 
-    if (latitude === undefined || latitude === null)  return res.status(400).json({ status: 'error', message: 'Latitude is required' });
-    if (longitude === undefined || longitude === null) return res.status(400).json({ status: 'error', message: 'Longitude is required' });
+    if (inputLatitude === undefined || inputLatitude === null)  return res.status(400).json({ status: 'error', message: 'Latitude is required' });
+    if (inputLongitude === undefined || inputLongitude === null) return res.status(400).json({ status: 'error', message: 'Longitude is required' });
 
-    const lat = parseFloat(latitude);
-    const lon = parseFloat(longitude);
+    const lat = parseFloat(inputLatitude);
+    const lon = parseFloat(inputLongitude);
 
     if (isNaN(lat) || lat < -90  || lat > 90)  return res.status(400).json({ status: 'error', message: 'Invalid latitude. Must be between -90 and 90' });
     if (isNaN(lon) || lon < -180 || lon > 180) return res.status(400).json({ status: 'error', message: 'Invalid longitude. Must be between -180 and 180' });
 
     const userId = req.decodedToken.userId;
     await userService.updateLocation(userId, lat, lon);
+
+    logger.info(`[updateCurrentUserLocation] userId=${userId} lat=${lat} lon=${lon} locationSaved=true`);
 
     // Fire-and-forget: notify nearby users without blocking the response
     nearbyNotifications.onLocationUpdate(userId, lon, lat).catch(() => {});

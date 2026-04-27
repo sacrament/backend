@@ -18,7 +18,7 @@ const UserService = require('../user/user.service');
 const userService = new UserService();
 const { newToken, newClientToken } = require('../../../middleware/verify');
 
-const OTP_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const OTP_TTL_MS = 15 * 60 * 1000; // 15 minutes
 
 class AuthService {
 
@@ -91,7 +91,7 @@ class AuthService {
 
     /**
      * Verify an OTP for a phone number.
-     * Increments attempt counter on failure. Locks after 5 bad attempts.
+     * Increments attempt counter on failure. Locks after 3 bad attempts.
      *
      * @param {string} phoneNumber
      * @param {string} otp
@@ -104,13 +104,13 @@ class AuthService {
             return { valid: false, reason: 'expired' };
         }
 
-        if (session.attempts >= 5) {
+        if (session.attempts >= 3) {
             return { valid: false, reason: 'locked' };
         }
 
         if (session.otp !== otp) {
             await this.PhoneAuthCollection.updateOne({ partition }, { $inc: { attempts: 1 } });
-            return { valid: false, reason: 'invalid', attemptsLeft: 5 - (session.attempts + 1) };
+            return { valid: false, reason: 'invalid', attemptsLeft: 3 - (session.attempts + 1) };
         }
 
         return { valid: true };
@@ -261,7 +261,7 @@ class AuthService {
         const client = twilio(config.TWILIO.ACCOUNTSID, config.TWILIO.AUTHTOKEN);
         try {
             await client.messages.create({
-                body: `Your Winky code is ${otp}. Valid for 5 minutes. Never share this code.`,
+                body: `Your Winky code is ${otp}. Valid for 15 minutes. Never share this code.`,
                 from: process.env.TWILIO_PHONE_NUMBER,
                 to: phoneNumber,
             });

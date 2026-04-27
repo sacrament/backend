@@ -28,7 +28,22 @@ const getNearbyUsers = async (req, res) => {
             return res.status(404).json({ status: 'error', message: 'User not found', code: 4001 });
         }
 
-        const coords = currentUser.location?.point?.coordinates;
+        let coords = currentUser.location?.point?.coordinates;
+
+        // Fallback for legacy/inconsistent users where location ref is missing
+        // but a current Location document still exists.
+        if (!coords || coords.length < 2) {
+            const Location = mongoose.model('Location');
+            const latestCurrentLocation = await Location.findOne({
+                user: currentUserId,
+                isCurrent: true,
+            })
+                .select('point')
+                .sort({ recordedAt: -1 })
+                .lean();
+
+            coords = latestCurrentLocation?.point?.coordinates;
+        }
 
         if (!coords || coords.length < 2) {
             logger.warn(`[getNearbyUsers] No location data for userId: ${currentUserId}`);
