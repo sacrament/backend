@@ -588,7 +588,19 @@ class PushNotificationService {
                         mediaUrl: msg.media?.length ? msg.media[0].url : '',
                         kind: msg.kind,
                         chatId: msg.chatId,
+                        sentOnTimestamp: msg.sentOnTimestamp,
                     };
+
+                    // If still too large after trimming, tell the client to fetch via GET /message/:id
+                    const trimmedSize = JSON.stringify(payload).length;
+                    if (trimmedSize > 3900) {
+                        payload.payload.save = 1;
+                        payload.payload.message = {
+                            messageId: msg._id,
+                            chatId: msg.chatId,
+                            fromId: msg.from?._id ?? msg.from,
+                        };
+                    }
                 }
 
                 console.log(`push:_send — Sending to ${user._id} (${isAndroid ? 'Android' : 'iOS'}) token: ${user.device.token.substring(0,16)}...`);
