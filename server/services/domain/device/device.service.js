@@ -96,7 +96,7 @@ class DeviceService {
         const device = await DeviceModel.findOneAndUpdate(
             { _id: deviceId, $or: [{ user: userId }, { user: null }] },
             { $set: updates },
-            { new: true, upsert: true }
+            { new: true }
         );
 
         if (!device) throw new Error('Device not found');
