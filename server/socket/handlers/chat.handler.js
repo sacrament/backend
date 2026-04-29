@@ -866,63 +866,117 @@ const messages = async function(data, ack) {
  * * TODO: Need  to finish the push notifiation
  */
 const reactOnMessage = async function(data, ack) {
+    const startTime = Date.now();
+
     try {
-        console.log(`React on Message`)
-        var offlineReceivers = [];
-        const from = this.user; 
-        //Save the reaction
-        messageService.reactOnMessage(data.messageId, data.reaction, from.id, data.date).then(async (result) => { 
-            const message = result.message;
-            const userFrom = await userService.getUserById(from.id, true);
-        // ~Get chat members
-            const chat = await chatService.getChatById(message.chatId);
-            const members = chat.members;
+        if (!data || typeof data !== 'object') {
+            throw new Error('Invalid reaction payload');
+        }
 
-            for (const member of members) {
-                const canChat = member.canChat; 
-                if (!canChat) continue;
+        const { messageId, reaction, date } = data;
 
-                const to = member.user._id.toString();
-                if (to == from.id) continue;
-                 
-                const memberIsOnline = await chatSocketService.isUserConnected(to); 
+        if (!messageId) {
+            throw new Error('messageId is required');
+        }
+
+        if (!reaction) {
+            throw new Error('reaction is required');
+        }
+
+        const from = this.user;
+        if (!from || !from.id) {
+            throw new Error('Sender identification failed');
+        }
+
+        logger.debug(`React on Message: messageId=${messageId}`);
+
+        // Save the reaction first.
+        const result = await messageService.reactOnMessage(messageId, reaction, from.id, date);
+        if (!result || !result.message) {
+            throw new Error('Failed to save reaction');
+        }
+
+        const message = result.message;
+        const userFrom = await userService.getUserById(from.id, true);
+
+        // Get chat members and distribute reaction updates.
+        const rawChatId = message?.chatId;
+        const normalizedChatId = (typeof rawChatId === 'string')
+            ? rawChatId
+            : (rawChatId?._id?.toString?.() || rawChatId?.toString?.());
+
+        if (!normalizedChatId || !mongoose.Types.ObjectId.isValid(normalizedChatId)) {
+            throw new Error('Invalid chatId in reaction message');
+        }
+
+        const chat = await chatService.getChatById(normalizedChatId);
+        if (!chat || !Array.isArray(chat.members)) {
+            throw new Error('Chat not found for reaction message');
+        }
+
+        const offlineReceivers = [];
+        const onlineReceivers = [];
+
+        const notifyPromises = chat.members
+            .filter(member => member.canChat)
+            .map(async (member) => {
+                const to = member.user?._id?.toString();
+                if (!to || to === from.id) {
+                    return;
+                }
+
+                const memberIsOnline = await chatSocketService.isUserConnected(to);
                 if (memberIsOnline) {
-                    // Send the message to online users
                     this.to(to).emit('message reaction', {
                         reaction: {
                             message: { id: message._id },
                             kind: result.reaction
-                        }
+                        },
+                        chat: { id: chat._id },
+                        by: from.id,
+                        date: Date.now()
                     });
-                } else {
-                    /// Offline people. Send a push notification
-                    // if (!member.options.muted) {
+                    onlineReceivers.push(to);
+                } else if (!member.options?.muted) {
                     offlineReceivers.push(member);
-                    // }
                 }
-            }
-            const obj = {message: message._doc, chat: chat, reaction: result.reaction, offlineReceivers: offlineReceivers, title: 'Message reaction is stored', from: userFrom};
-            ack(obj);
+            });
 
-            return new Promise((resolve) => {
-                resolve(obj)
-            }); 
-            // console.log("Label: " + result.title);
-        }).then(result => {
-            if (result.offlineReceivers.length) {
-                // Send the push notifications 
-                // result.from = fromUser;
-                pushNotificationService.reactOnMessage(result);
-            } else {
-                console.log(`No offline users`)
-            }
-        }).catch((err) => {
-            console.error(`Error on message react: ${err}`)
-            ack(err);
-        }) 
+        await Promise.allSettled(notifyPromises);
+
+        const payload = {
+            message: message._doc || message,
+            chat,
+            reaction: result.reaction,
+            offlineReceivers,
+            title: 'Message reaction is stored',
+            from: userFrom
+        };
+
+        if (typeof ack === 'function') {
+            ack(payload);
+        }
+
+        if (offlineReceivers.length > 0) {
+            pushNotificationService.reactOnMessage(payload);
+        }
+
+        logger.info(
+            `Reaction processed: messageId=${messageId}, online=${onlineReceivers.length}, offline=${offlineReceivers.length}, duration=${Date.now() - startTime}ms`
+        );
     } catch (ex) {
-        console.err(`General error on message react: ${err}`)
-        ack(ex);
+        logger.error(`Error in reactOnMessage handler: ${ex.message}`, {
+            messageId: data?.messageId,
+            userId: this.user?.id,
+            duration: Date.now() - startTime
+        });
+
+        if (typeof ack === 'function') {
+            ack({
+                error: ex.message,
+                code: ex.code || 'REACTION_ERROR'
+            });
+        }
     }
 }
 
@@ -935,78 +989,124 @@ const reactOnMessage = async function(data, ack) {
  * TODO: Need  to finish the push notifiation
  */
 const deleteMessage = async function(data, ack) {
+    const startTime = Date.now();
+
     try {
-        console.log(`Delete message: ${data.messageId}`)
-        var offlineReceivers = [];
+        if (!data || typeof data !== 'object') {
+            throw new Error('Invalid delete message payload');
+        }
+
+        const { messageId, forEveryone = false } = data;
+        if (!messageId) {
+            throw new Error('messageId is required');
+        }
+
         const from = this.user;
+        if (!from || !from.id) {
+            throw new Error('Sender identification failed');
+        }
 
-        messageService.deleteMessage(data.messageId, from.id, data.forEveryone).then(async (result) => {
-            const message = result.message; 
-            const res = await chatService.updateChatWithLastMessage(message.chatId);
-            const chat = res.chat;
+        logger.debug(`Delete message: ${messageId}, forEveryone=${Boolean(forEveryone)}`);
 
-            chat.unreadMessages = 0; 
+        const result = await messageService.deleteMessage(messageId, from.id, Boolean(forEveryone));
+        if (!result || !result.message) {
+            throw new Error('Failed to delete message');
+        }
 
-            let sender;
-            if (data.forEveryone) {
-                sender = await userService.getUserById(from.id, true); 
+        const message = result.message;
 
-                const members = chat.members
+        const rawChatId = message?.chatId;
+        const normalizedChatId = (typeof rawChatId === 'string')
+            ? rawChatId
+            : (rawChatId?._id?.toString?.() || rawChatId?.toString?.());
 
-                for (const member of members) {
-                    const canChat = member.canChat;
-                    if (!canChat) continue;
+        if (!normalizedChatId || !mongoose.Types.ObjectId.isValid(normalizedChatId)) {
+            throw new Error('Invalid chatId in deleted message');
+        }
 
-                    const to = member.user._id.toString();
-                    if (to == from.id) continue;
+        let chat;
+        try {
+            const res = await chatService.updateChatWithLastMessage(normalizedChatId);
+            chat = res.chat;
+        } catch (updateErr) {
+            logger.warn(`deleteMessage: failed to update chat last message (${normalizedChatId}): ${updateErr.message}`);
+            // Fallback to fetching chat details so delivery can continue.
+            chat = await chatService.getChatById(normalizedChatId);
+        }
+
+        if (chat) {
+            chat.unreadMessages = 0;
+        }
+
+        const offlineReceivers = [];
+        const onlineReceivers = [];
+        let senderUser = null;
+
+        if (Boolean(forEveryone) && chat?.members?.length) {
+            senderUser = await userService.getUserById(from.id, true);
+
+            const notifyPromises = chat.members
+                .filter(member => member.canChat)
+                .map(async (member) => {
+                    const to = member.user?._id?.toString();
+                    if (!to || to === from.id) {
+                        return;
+                    }
 
                     const memberIsOnline = await chatSocketService.isUserConnected(to);
                     if (memberIsOnline) {
-                        // Send the message to online users
                         this.to(to).emit('message deleted', {
                             id: message._id,
                             forEveryone: true,
                             dateDeleted: message.deleted?.date,
                             chat: { id: chat._id }
                         });
+                        onlineReceivers.push(to);
                     } else {
-                        /// Offline people. Send a push notification
-                        // if (!member.options.muted) {
-                            offlineReceivers.push(member);
-                            await userService.setContentStorageFor(member.user, from, 'delete', {message: message})
-                        // }
+                        offlineReceivers.push(member);
+                        await userService.setContentStorageFor(member.user, from, 'delete', { message });
                     }
-                }
-            }
+                });
 
-            let obj = { message: message, chat: chat, offlineReceivers: offlineReceivers, deleted: true, title: 'Message marked as deleted' };
-            ack(obj); 
+            await Promise.allSettled(notifyPromises);
+        }
 
-            return new Promise((resolve) => {
-                // const modified = obj;
-                if (sender) { 
-                    obj.from = sender;
-                } else {
-                    obj.from = from;
-                }
-                
-                resolve(obj)
-            });
-            //MARK: Check theu sers and send a push if not muted
-        }).then(result => {
-            if (result.offlineReceivers.length) {
-                
-                pushNotificationService.messageDeleted(result);
-            } else {
-                console.log(`No offline users`)
-            }
-        }).catch((err) => {
-            console.error(`Error while deleting message: ${err.message}`)
-            ack({ error: err.message, deleted: false });
-        }) 
+        const payload = {
+            message,
+            chat,
+            offlineReceivers,
+            deleted: true,
+            title: result.title || 'Message marked as deleted',
+            from: senderUser || from
+        };
+
+        if (typeof ack === 'function') {
+            ack(payload);
+        }
+
+        if (Boolean(forEveryone) && offlineReceivers.length > 0) {
+            pushNotificationService.messageDeleted(payload);
+        }
+
+        logger.info(
+            `Delete processed: messageId=${messageId}, forEveryone=${Boolean(forEveryone)}, ` +
+            `online=${onlineReceivers.length}, offline=${offlineReceivers.length}, duration=${Date.now() - startTime}ms`
+        );
     } catch (ex) {
-        console.error(`Error deleting message: ${ex.message}`)
-        ack({ error: ex.message, deleted: false });
+        logger.error(`Error in deleteMessage handler: ${ex.message}`, {
+            messageId: data?.messageId,
+            forEveryone: data?.forEveryone,
+            userId: this.user?.id,
+            duration: Date.now() - startTime
+        });
+
+        if (typeof ack === 'function') {
+            ack({
+                error: ex.message,
+                deleted: false,
+                code: ex.code || 'DELETE_MESSAGE_ERROR'
+            });
+        }
     } 
 }
 
@@ -1017,52 +1117,84 @@ const deleteMessage = async function(data, ack) {
  * @param {*} ack
  */
 const messageSeen = async function(data, ack) {
+    const startTime = Date.now();
+
     try {
-        console.log(`Marking Message seen/read`)
-        const offlineReceivers = []; 
+        if (!data || typeof data !== 'object') {
+            throw new Error('Invalid message seen payload');
+        }
+
         const from = this.user.id;
         const messageId = data.messageId;
         const messageDate = data.date;
 
-        messageService.messageSeen(from, messageId, messageDate).then( async (message) => {  
-            const creator = message.from.toString();
-            // Get the creator of the message
-            const memberIsOnline = await chatSocketService.isUserConnected(creator);
+        if (!from) {
+            throw new Error('User ID is missing from socket context');
+        }
 
-            if (memberIsOnline) {
-                // Send the message to online users
-                this.to(creator).emit('message seen by', {
-                    messageId: messageId,
-                    by: from,
-                    date: messageDate
-                });
-            } else {
-                /// Offline people. Send a push notification
-                offlineReceivers.push(creator);
-            }
- 
+        if (!messageId) {
+            throw new Error('messageId is required');
+        }
+
+        if (!messageDate) {
+            throw new Error('date is required');
+        }
+
+        const offlineReceivers = [];
+
+        const message = await messageService.messageSeen(from, messageId, messageDate);
+        if (!message || !message.from) {
+            throw new Error('Invalid message seen response');
+        }
+
+        const creator = message.from.toString();
+        const memberIsOnline = await chatSocketService.isUserConnected(creator);
+
+        if (memberIsOnline) {
+            this.to(creator).emit('message seen by', {
+                messageId,
+                by: from,
+                date: messageDate
+            });
+        } else {
+            offlineReceivers.push(creator);
+        }
+
+        if (typeof ack === 'function') {
             ack({
-                messageId: messageId,
+                messageId,
                 to: creator,
                 title: 'Message seen ack sent'
             });
+        }
 
-            if (offlineReceivers.length > 0) {
-                pushNotificationService.markMessageSeen({
-                    messageId: messageId,
-                    by: from,
-                    date: messageDate,
-                    offlineReceivers: offlineReceivers,
-                    title: 'Mark message seen'
-                })
-            }
-        }).catch((err) => {
-            ack(err.message);
-        }) 
+        if (offlineReceivers.length > 0) {
+            pushNotificationService.markMessageSeen({
+                messageId,
+                by: from,
+                date: messageDate,
+                offlineReceivers,
+                title: 'Mark message seen'
+            });
+        }
+
+        logger.info(
+            `Message seen processed: messageId=${messageId}, by=${from}, notifiedOnline=${memberIsOnline}, duration=${Date.now() - startTime}ms`
+        );
     } catch (ex) {
-        console.error(`Error on message seen: ${ex.message}`)
-        ack(ex.message);
-    };
+        logger.error(`Error in messageSeen handler: ${ex.message}`, {
+            messageId: data?.messageId,
+            by: this.user?.id,
+            duration: Date.now() - startTime
+        });
+
+        if (typeof ack === 'function') {
+            ack({
+                error: ex.message,
+                code: ex.code || 'MESSAGE_SEEN_ERROR'
+            });
+        }
+    }
 };
 
 /**
@@ -1072,52 +1204,84 @@ const messageSeen = async function(data, ack) {
  * @param {*} ack
  */
 const messageDelivered = async function(data, ack) {
+    const startTime = Date.now();
+
     try { 
-        console.log(`Marking Message Delivered`)
-        var offlineReceivers = []; 
+        if (!data || typeof data !== 'object') {
+            throw new Error('Invalid message delivered payload');
+        }
+
         const from = data.from;
         const messageId = data.messageId;
         const messageDate = data.date;
 
-        messageService.messageDelivered(from, messageId, messageDate).then( async (message) => {  
-            const creator = message.from.toString();
-            // Get the creator of the message
-            const memberIsOnline = await chatSocketService.isUserConnected(creator);
+        if (!from) {
+            throw new Error('from is required');
+        }
 
-            if (memberIsOnline) {
-                // Send the message to online users
-                this.to(creator).emit('message received by', {
-                    messageId: messageId,
-                    by: from,
-                    date: messageDate
-                });
-            } else {
-                /// Offline people. Send a push notification
-                offlineReceivers.push(creator);
-            }
+        if (!messageId) {
+            throw new Error('messageId is required');
+        }
 
+        if (!messageDate) {
+            throw new Error('date is required');
+        }
+
+        const offlineReceivers = [];
+
+        const message = await messageService.messageDelivered(from, messageId, messageDate);
+        if (!message || !message.from) {
+            throw new Error('Invalid message delivered response');
+        }
+
+        const creator = message.from.toString();
+        const memberIsOnline = await chatSocketService.isUserConnected(creator);
+
+        if (memberIsOnline) {
+            this.to(creator).emit('message received by', {
+                messageId,
+                by: from,
+                date: messageDate
+            });
+        } else {
+            offlineReceivers.push(creator);
+        }
+
+        if (typeof ack === 'function') {
             ack({
-                messageId: messageId,
+                messageId,
                 to: creator,
                 title: 'Message delivered ack sent'
             });
+        }
 
-            if (offlineReceivers.length > 0) { 
-                pushNotificationService.markMessageReceived({
-                    messageId: messageId,
-                    by: from,
-                    date: messageDate,
-                    offlineReceivers: offlineReceivers,
-                    title: 'Mark message delivered'
-                })
-            }
-        }).catch((err) => {
-            ack(err.message);
-        });
+        if (offlineReceivers.length > 0) {
+            pushNotificationService.markMessageReceived({
+                messageId,
+                by: from,
+                date: messageDate,
+                offlineReceivers,
+                title: 'Mark message delivered'
+            });
+        }
+
+        logger.info(
+            `Message delivered processed: messageId=${messageId}, by=${from}, notifiedOnline=${memberIsOnline}, duration=${Date.now() - startTime}ms`
+        );
     } catch (ex) {
-        console.error(`Error on message delivered: ${ex.message}`)
-        ack(ex.message);
-    };
+        logger.error(`Error in messageDelivered handler: ${ex.message}`, {
+            messageId: data?.messageId,
+            by: data?.from,
+            duration: Date.now() - startTime
+        });
+
+        if (typeof ack === 'function') {
+            ack({
+                error: ex.message,
+                code: ex.code || 'MESSAGE_DELIVERED_ERROR'
+            });
+        }
+    }
 }; 
 
 /**

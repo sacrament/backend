@@ -673,14 +673,20 @@ class ChatService {
             .populate({
                 path: 'lastMessage',
                 select: utils.messageColumnsToShow(),
-                populate: {
-                    path: 'from reactions',
-                    select: utils.userColumnsToShow() + utils.reactionColumnsToShow(),
-                    populate: {
+                populate: [
+                    {
                         path: 'from',
                         select: utils.userColumnsToShow()
+                    },
+                    {
+                        path: 'reactions',
+                        select: utils.reactionColumnsToShow(),
+                        populate: {
+                            path: 'from',
+                            select: utils.userColumnsToShow()
+                        }
                     }
-                }
+                ]
             })
             .lean()
             .exec();

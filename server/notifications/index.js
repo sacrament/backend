@@ -108,6 +108,7 @@ class PushNotificationService {
             await this.#send({
                 title: from.name,
                 body: 'Deleted',
+                category: 'ChatDeleted',
                 pref: 'newMessages',
                 custom: { chat: chatRef(chat), fromUser: from, deleted: true },
             }, offlineReceivers);
@@ -162,6 +163,7 @@ class PushNotificationService {
             await this.#send({
                 title,
                 body: 'Deleted a message',
+                category: 'MessageDeleted',
                 silent: true,
                 pref: 'newMessages',
                 custom: { chat: chatRef(chat), message, fromUser: from, deleted: true },
@@ -186,6 +188,7 @@ class PushNotificationService {
             await this.#send({
                 title,
                 body: 'Reacted on a message',
+                category: 'MessageReaction',
                 pref: 'newMessages',
                 custom: { chat: chatRef(chat), messageId: message._id, reaction, fromUser: from, save: 1, isReact: true },
             }, offlineReceivers);
@@ -480,11 +483,13 @@ class PushNotificationService {
             return [];
         }
 
+        const normalizedData = withActionType(data);
+
         const promises = users.map(async (member) => {
             try {
                 // Create per-user payload copies to prevent shared-state mutation across
                 // concurrent promises (badge, sound, muted-state deletions must be isolated).
-                const { iOSContent, androidContent } = preparePayload(data);
+                const { iOSContent, androidContent } = preparePayload(normalizedData);
                 // Handle both embedded user objects and references
                 let user = member.user || member;
                 
@@ -531,7 +536,7 @@ class PushNotificationService {
                 const muted = member.options?.muted || false;
 
                 const totalUnread = await getUnreadMessagesForUser(user._id.toString());
-                const badge = totalUnread + (data.custom.isReact || data.custom.isConnectionRequest || data.custom.respondConnetionRequest ? 1 : 0);
+                const badge = totalUnread + (normalizedData.custom.isReact || normalizedData.custom.isConnectionRequest || normalizedData.custom.respondConnetionRequest ? 1 : 0);
 
                 iOSContent.badge = badge;
                 iOSContent.aps.badge = badge;
@@ -570,7 +575,7 @@ class PushNotificationService {
                 const isAndroid  = deviceType === 'ANDROID';
                 const payload    = isAndroid ? androidContent : iOSContent;
 
-                if (data.custom.message?.kind === 'image' || data.custom.message?.kind === 'video') {
+                if (normalizedData.custom.message?.kind === 'image' || normalizedData.custom.message?.kind === 'video') {
                     if (!isAndroid) {
                         payload.payload.message.media[0].thumbnail = '';
                     } else {
@@ -623,7 +628,8 @@ class PushNotificationService {
             return [];
         }
 
-        const { iOSContent, androidContent } = preparePayload(data);
+        const normalizedData = withActionType(data);
+        const { iOSContent, androidContent } = preparePayload(normalizedData);
 
         const promises = users.map(async (id) => {
             try {
@@ -753,6 +759,54 @@ const stripMessageFields = (message) => {
     delete message.uniqueId;
     delete message.editedOn;
     delete message.summary;
+};
+
+const withActionType = (data) => {
+    const custom = { ...(data?.custom || {}) };
+
+    if (!custom.actionType) {
+        custom.actionType = deriveActionType(custom, data?.category);
+    }
+
+    return {
+        ...data,
+        custom,
+    };
+};
+
+const deriveActionType = (custom, category) => {
+    if (custom.newMessage) return 'new_message';
+    if (custom.isReact) return 'message_reaction';
+    if (custom.deleted) return 'message_deleted';
+    if (custom.messageEdited) return 'message_edited';
+    if (custom.newChatCreated) return 'chat_created';
+    if (custom.newMember) return 'chat_members_added';
+    if (custom.memberRemoved) return 'chat_members_removed';
+    if (custom.memberLeftChat) return 'chat_member_left';
+    if (custom.blockChat) return custom.blockStatus ? 'chat_blocked' : 'chat_unblocked';
+    if (custom.messageDelivered) return 'message_delivered';
+    if (custom.messageSeen) return 'message_seen';
+    if (custom.markConversationSeen) return 'conversation_seen';
+    if (custom.isCallRequest) return 'call_request';
+    if (custom.isCallRequestResponse) return 'call_request_response';
+    if (custom.missedCall) return 'missed_call';
+    if (custom.end) return 'call_ended';
+    if (custom.newUsersNearby) return 'new_users_nearby';
+    if (custom.connectionNearby) return 'connection_nearby';
+    if (custom.isConnectionRequest) return 'connection_request';
+    if (custom.respondConnetionRequest) return 'connection_request_response';
+    if (custom.cancelConnetionRequest) return 'connection_request_cancelled';
+    if (custom.undoConnectionFriendship) return 'connection_friendship_undone';
+    if (custom.isConnectionRequestReminder) return 'connection_request_reminder';
+
+    if (category) {
+        return String(category)
+            .replace(/([a-z])([A-Z])/g, '$1_$2')
+            .replace(/\s+/g, '_')
+            .toLowerCase();
+    }
+
+    return 'generic';
 };
 
 const preparePayload = (content) => {

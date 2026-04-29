@@ -50,7 +50,13 @@ const getPreKeyBundle = async (req, res) => {
         const bundle = await e2eeService.getPreKeyBundle(userId, deviceId);
         res.status(200).json({ bundle });
     } catch (err) {
-        logger.error('E2EE get pre-key bundle error:', err);
+        if (err.status === 404 && err.message === 'E2EE device not registered for user') {
+            logger.info(`E2EE pre-key bundle unavailable (user not registered): userId=${userId}, deviceId=${deviceId}`);
+        } else if (err.status === 404) {
+            logger.warn(`E2EE pre-key bundle not found: userId=${userId}, deviceId=${deviceId}, message=${err.message}`);
+        } else {
+            logger.error('E2EE get pre-key bundle error:', err);
+        }
         res.status(err.status || 500).json({ status: 'error', message: err.message });
     }
 };
