@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const SMSService = require('../../external/twilio/sms.service');
 const mongoose = require('mongoose');
 const UserModel = mongoose.model('User');
+const DeviceModel = mongoose.model('Device');
 const ContentStorage = mongoose.model('ContentStorage');
 const APIGateway = require('../../external/aws/api.gateway');
 
@@ -201,12 +202,35 @@ class UserService {
      * @returns {Promise<Object|null>} User object or null
      */
     async getUserById(userId) {
-        return this.model
+        const user = await this.model
             .findOne({ _id: userId })
             .populate('location', 'point recordedAt')
-            .populate('device')
             .lean()
             .exec();
+
+        if (!user) return null;
+
+        let resolvedDevice = null;
+
+        if (user.device) {
+            resolvedDevice = await DeviceModel.findById(user.device).lean().exec();
+        }
+
+        if (!resolvedDevice) {
+            resolvedDevice = await DeviceModel.findOne({ user: user._id, status: 'active' })
+                .sort({ updatedAt: -1, createdAt: -1 })
+                .lean()
+                .exec();
+
+            if (resolvedDevice) {
+                await this.model.updateOne({ _id: user._id }, { $set: { device: resolvedDevice._id } });
+            } else if (user.device) {
+                await this.model.updateOne({ _id: user._id }, { $set: { device: null } });
+            }
+        }
+
+        user.device = resolvedDevice;
+        return user;
     }
 
     /**
@@ -221,12 +245,33 @@ class UserService {
         const user = await this.model
             .findOne({ _id: userId })
             .select('refreshToken device')
-            .populate('device', 'status')
             .lean()
             .exec();
 
         if (!user || !user.refreshToken) return false;
-        if (user.device && user.device.status === 'disabled') return false;
+
+        let resolvedDevice = null;
+
+        if (user.device) {
+            resolvedDevice = await DeviceModel.findById(user.device).select('status token').lean().exec();
+        }
+
+        if (!resolvedDevice) {
+            resolvedDevice = await DeviceModel.findOne({ user: userId, status: 'active' })
+                .sort({ updatedAt: -1, createdAt: -1 })
+                .select('status token')
+                .lean()
+                .exec();
+
+            if (resolvedDevice) {
+                await this.model.updateOne({ _id: userId }, { $set: { device: resolvedDevice._id } });
+            } else if (user.device) {
+                await this.model.updateOne({ _id: userId }, { $set: { device: null } });
+            }
+        }
+
+        if (!resolvedDevice || resolvedDevice.status === 'disabled') return false;
+        if (!resolvedDevice.token) return false;
         return true;
     }
 
@@ -1144,24 +1189,34 @@ class UserService {
     }
 
     async updateDeviceWithHistory(userId, deviceToken, platform = 'IOS') {
+        const now = new Date();
+        const normalizedPlatform = platform === 'IOS' ? 'iOS' : platform;
+
+        const device = await DeviceModel.findOneAndUpdate(
+            { user: userId },
+            {
+                $set: {
+                    token: deviceToken,
+                    platform: normalizedPlatform,
+                    status: 'active',
+                    updatedOn: now
+                }
+            },
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+        );
+
+        await DeviceModel.updateMany(
+            { user: userId, status: 'active', _id: { $ne: device._id } },
+            { $set: { status: 'disabled', token: null, voipToken: null } }
+        );
+
         const user = await UserModel.findByIdAndUpdate(
             userId,
-            { $set: { device: { token: deviceToken, type: platform, updatedOn: new Date() } } },
+            { $set: { device: device._id } },
             { new: true }
         );
+
         if (!user) throw new Error('User not found');
-
-        try {
-            const DeviceModel = mongoose.model('Device');
-            await DeviceModel.findOneAndUpdate(
-                { user: userId },
-                { token: deviceToken, type: platform, updatedOn: new Date(), isActive: true },
-                { upsert: true, new: true }
-            );
-        } catch (err) {
-            console.error('Device collection update error:', err);
-        }
-
         return user;
     }
 
@@ -1202,16 +1257,59 @@ class UserService {
         return user;
     }
 
-    // ─── Device (embedded-only, no Device collection) ──────────────────────────
+    // ─── Device ────────────────────────────────────────────────────────────────
 
-    async updateDevice(userId, deviceToken, platform = 'IOS') {
+    async updateDevice(userId, deviceToken, platform = 'iOS') {
+        const now = new Date();
+        const normalizedPlatform = platform === 'IOS' ? 'iOS' : platform;
+
+        const device = await DeviceModel.findOneAndUpdate(
+            { user: userId },
+            {
+                $set: {
+                    token: deviceToken,
+                    platform: normalizedPlatform,
+                    status: 'active',
+                    updatedOn: now
+                }
+            },
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+        );
+
+        await DeviceModel.updateMany(
+            { user: userId, status: 'active', _id: { $ne: device._id } },
+            { $set: { status: 'disabled', token: null, voipToken: null } }
+        );
+
         const user = await UserModel.findByIdAndUpdate(
             userId,
-            { $set: { device: { token: deviceToken, type: platform, updatedOn: new Date() } } },
+            { $set: { device: device._id } },
             { new: true }
         );
+
         if (!user) throw new Error('User not found');
         return user;
+    }
+
+    async updateVoipDeviceToken(userId, voipToken) {
+        const device = await DeviceModel.findOneAndUpdate(
+            { user: userId, status: 'active' },
+            { $set: { voipToken, updatedOn: new Date() } },
+            { new: true }
+        );
+        return device;
+    }
+
+    async disableUserDeviceFor(userId) {
+        const device = await DeviceModel.findOneAndUpdate(
+            { user: userId, status: 'active' },
+            { $set: { status: 'disabled', token: null, voipToken: null, updatedOn: new Date() } },
+            { new: true }
+        );
+        if (device) {
+            await this.model.updateOne({ _id: userId }, { $set: { device: null } });
+        }
+        return device;
     }
 
     // ─── Search / phone verification ───────────────────────────────────────────

@@ -21,6 +21,7 @@ module.exports = class Chat {
             'new chat': newChat,
             'new message': newMessage,
             'react on message': reactOnMessage,
+            'message reactions': messageReactions,
             'delete message': deleteMessage,
             'delete chat': deleteChat,
             'favorite chat': favoriteChat,
@@ -410,6 +411,7 @@ const stopTyping = async function(data, ack) {
 const newMessage = async function(data, ack) {
     let tempMessage = null;
     let result = null;
+    let resolvedChatId = null;
     const startTime = Date.now();
 
     try {
@@ -418,19 +420,38 @@ const newMessage = async function(data, ack) {
             throw new Error('Invalid message data');
         }
 
-        const { chatId, tempId, content, kind } = data;
-        
-        if (!chatId || !content) {
-            throw new Error('chatId and content are required');
+        const chatPayload = data.chat;
+        const resolvedInputChatId = (data.chatId || chatPayload?._id || chatPayload?.id)?.toString();
+
+        // Flat payload contract from iOS.
+        const content = data.content;
+        const mediaUrl = data.mediaUrl;
+        const mediaName = data.mediaName;
+        const thumbnail = data.thumbnail;
+        const type = data.type ?? data.kind;
+        const tempId = data.tempId;
+        const replyTo = data.replyTo;
+        const encrypted = data.encrypted;
+        const e2ee = data.e2ee;
+        const publicKey = data.publicKey;
+        const bytes = data.bytes;
+
+        if (!resolvedInputChatId && (!chatPayload || typeof chatPayload !== 'object' || Array.isArray(chatPayload))) {
+            throw new Error('chatId or chat is required');
+        }
+
+        if (!content && !mediaUrl) {
+            throw new Error('content is required');
         }
 
         // Validate message type
-        const validKinds = ['text', 'image', 'video'];
-        if (kind && !validKinds.includes(kind)) {
-            throw new Error(`Invalid message kind: ${kind}`);
+        const validKinds = ['text', 'image', 'video', 'audio', 'document', 'share contact'];
+        const resolvedType = type || (mediaUrl ? 'image' : 'text');
+        if (!validKinds.includes(resolvedType)) {
+            throw new Error(`Invalid message kind: ${resolvedType}`);
         }
 
-        logger.debug(`New message: ${chatId}`);
+        logger.debug(`New message: ${resolvedInputChatId || 'inline-chat-resolution'}`);
 
         const from = this.user;
         
@@ -439,25 +460,68 @@ const newMessage = async function(data, ack) {
             throw new Error('Sender identification failed');
         }
 
-        // Check for duplicate message (idempotency)
-        if (tempId) {
-            const isDuplicate = await messageService.isDuplicate(tempId, chatId);
-            if (isDuplicate) {
-                logger.warn(`Duplicate message detected: tempId=${tempId}`);
-                return ack({ warning: 'Duplicate message', isDuplicate: true });
-            }
-        }
-
-        // Get chat and verify sender is member with permissions
+        // Resolve chat: use chatId if provided, otherwise find-or-create from chat payload.
         let chat;
-        try {
-            chat = await chatService.getById(chatId, from.id);
-        } catch (err) {
-            throw new Error(`Unable to verify chat membership: ${err.message}`);
+        if (resolvedInputChatId) {
+            resolvedChatId = resolvedInputChatId;
+            try {
+                chat = await chatService.getById(resolvedInputChatId, from.id);
+            } catch (err) {
+                throw new Error(`Unable to verify chat membership: ${err.message}`);
+            }
+        } else {
+            const payloadUsers = Array.isArray(chatPayload?.users) ? chatPayload.users : [];
+            if (payloadUsers.length === 0) {
+                throw new Error('chat.users is required when chatId is not provided');
+            }
+
+            const uniqueUsers = [...new Set([from.id, ...payloadUsers.map(userId => userId?.toString())])];
+            if (uniqueUsers.length !== 2) {
+                throw new Error('chat.users must define exactly one other participant for 1:1 chat');
+            }
+
+            try {
+                const createdChatResult = await chatService.create({
+                    userId: from.id,
+                    chat: {
+                        users: uniqueUsers
+                    }
+                });
+
+                chat = createdChatResult.chat;
+                resolvedChatId = chat?._id?.toString();
+            } catch (err) {
+                // In a creation race, uniqueId can conflict. Retry via create() to load existing chat.
+                if (err?.code === 11000 || /duplicate key/i.test(err?.message || '')) {
+                    const retryChatResult = await chatService.create({
+                        userId: from.id,
+                        chat: {
+                            users: uniqueUsers
+                        }
+                    });
+                    chat = retryChatResult.chat;
+                    resolvedChatId = chat?._id?.toString();
+                } else {
+                    throw new Error(`Unable to resolve chat from payload: ${err.message}`);
+                }
+            }
         }
 
         if (!chat) {
             throw new Error('Chat not found or access denied');
+        }
+
+        if (!resolvedChatId) {
+            resolvedChatId = chat._id.toString();
+        }
+
+        // Check for duplicate message (idempotency) after chat resolution
+        if (tempId) {
+            const isDuplicate = await messageService.isDuplicate(tempId, resolvedChatId);
+            if (isDuplicate) {
+                logger.warn(`Duplicate message detected: tempId=${tempId}`);
+                return ack({ warning: 'Duplicate message', isDuplicate: true, chat });
+            }
         }
 
         let members = chat.members;
@@ -472,26 +536,15 @@ const newMessage = async function(data, ack) {
         if (receiverMember && !receiverMember.canChat && receiverMember.leftOn) {
             const receiverId = receiverMember.user._id.toString();
             try {
-                const reactivated = await chatService.clearChat(chatId, receiverId);
+                const reactivated = await chatService.clearChat(resolvedChatId, receiverId);
                 if (reactivated?.chat?.members) {
                     chat = reactivated.chat;
                     members = chat.members;
                 }
 
-                const receiverIsOnline = await chatSocketService.isUserConnected(receiverId);
-                if (receiverIsOnline) {
-                    this.to(receiverId).emit('new chat created', { chat });
-                } else {
-                    pushNotificationService.newChatCreated({
-                        chat,
-                        from,
-                        offlineReceivers: [receiverMember]
-                    });
-                }
-
-                logger.info(`Re-enabled receiver ${receiverId} in chat ${chatId} on new message`);
+                logger.info(`Re-enabled receiver ${receiverId} in chat ${resolvedChatId} on new message`);
             } catch (reactivateErr) {
-                logger.error(`Failed to re-enable receiver in chat ${chatId}: ${reactivateErr.message}`);
+                logger.error(`Failed to re-enable receiver in chat ${resolvedChatId}: ${reactivateErr.message}`);
             }
         }
 
@@ -502,12 +555,20 @@ const newMessage = async function(data, ack) {
 
         // Prepare message data
         const messageData = {
-            ...data,
+            chatId: resolvedChatId,
+            from: from.id,
+            tempId: tempId || new mongoose.Types.ObjectId().toString(),
+            content,
+            type: resolvedType,
+            replyTo,
+            encrypted,
+            e2ee,
+            mediaUrl,
+            mediaName,
+            thumbnail,
             sentOn: Date.now(),
             sentOnTimestamp: Math.floor(Date.now() / 1000), // For backwards compatibility
-            members: members,
-            from: from.id,
-            tempId: tempId || new mongoose.Types.ObjectId().toString()
+            members: members
         };
 
         // Create message object (in-memory)
@@ -525,7 +586,7 @@ const newMessage = async function(data, ack) {
         // Update chat's last message reference
         let updatedChat;
         try {
-            const update = await chatService.setLatestMessage(chatId, tempMessage._id, from.id);
+            const update = await chatService.setLatestMessage(resolvedChatId, tempMessage._id, from.id);
             updatedChat = update.chat;
         } catch (err) {
             logger.error(`Failed to update last message: ${err.message}`);
@@ -540,8 +601,8 @@ const newMessage = async function(data, ack) {
         });
 
         // Store public key to chat (fire-and-forget)
-        if (data.publicKey) {
-            chatService.updateChatWithPublicKey({ chatId, publicKey: data.publicKey })
+        if (publicKey) {
+            chatService.updateChatWithPublicKey({ chatId: resolvedChatId, publicKey })
                 .catch(err => logger.warn(`Failed to store publicKey to chat: ${err.message}`));
         }
 
@@ -557,7 +618,7 @@ const newMessage = async function(data, ack) {
                     updatedChat,
                     members,
                     from,
-                    data
+                    { publicKey, bytes }
                 );
                 
                 logger.info(
@@ -572,7 +633,7 @@ const newMessage = async function(data, ack) {
 
     } catch (error) {
         logger.error(`Error in newMessage handler: ${error.message}`, { 
-            chatId: data?.chatId,
+            chatId: resolvedChatId || data?.chatId,
             userId: this.user?.id,
             duration: Date.now() - startTime 
         });
@@ -622,7 +683,7 @@ const editMessage = async function(data, ack) {
                     editedOn: message.editedOn,
                     chatId: message.chatId,
                 });
-            } else if (!member.options?.muted) {
+            } else {
                 offlineReceivers.push(member);
             }
         }
@@ -729,10 +790,9 @@ async function distributeMessage(socket, tempMessage, savedMessage, updatedChat,
     if (offlineReceivers.length > 0) {
         try { 
             
-            // Filter offline users who haven't muted notifications
-            const notifiableReceivers = offlineReceivers.filter(
-                m => !m.options?.muted
-            );
+            // Keep muted recipients in the list: notification service downgrades
+            // muted chats to silent/background pushes.
+            const notifiableReceivers = offlineReceivers;
 
             if (notifiableReceivers.length > 0) {
                 // Fetch receiver login state and filter out logged-out users
@@ -785,76 +845,136 @@ async function distributeMessage(socket, tempMessage, savedMessage, updatedChat,
  * @param {*} ack
  */
 const messages = async function(data, ack) {
+    const startTime = Date.now();
+
     try {
-        const chatId = data.chatId;
-        console.log(`Getting conversation: ${chatId}`);  
+        if (!data || typeof data !== 'object' || Array.isArray(data)) {
+            throw new Error('Invalid chat messages payload');
+        }
+
+        const callback = typeof ack === 'function' ? ack : null;
+        const userId = this.user?.id;
+        if (!userId) {
+            throw new Error('Sender identification failed');
+        }
+
+        const rawChatId = data.chatId || data.chat?._id || data.chat?.id;
+        const chatId = rawChatId?.toString();
+        if (!chatId) {
+            throw new Error('chatId is required');
+        }
+
+        if (!mongoose.Types.ObjectId.isValid(chatId)) {
+            throw new Error('Invalid chatId');
+        }
+
         const toMessageDate = data.toMessageDate;
-        const userId = this.user.id;
-        let howMany = data.howMany;
-        const isInitial = data.isInitial;
+        const parsedHowMany = Number.parseInt(data.howMany, 10);
+        const howMany = Number.isFinite(parsedHowMany) && parsedHowMany > 0
+            ? Math.min(parsedHowMany, 100)
+            : 20;
+        const isInitial = !(data.isInitial === false || data.isInitial === 'false');
         const startValue = data.startValue;
 
-        if (howMany == undefined) {
-            howMany = -1
-        } 
+        logger.debug(
+            `Get conversation: chatId=${chatId}, howMany=${howMany}, isInitial=${isInitial}, toMessageDate=${toMessageDate}, startValue=${startValue}`
+        );
 
-        /// ~Check the call from API
-        const callback = async (inform, senders, chatId, userId) => {
-            if (!inform) {  
-                console.log("Senders are informed already");
-
-                return;
+        if (!isInitial) {
+            if (toMessageDate === undefined || toMessageDate === null || toMessageDate === '') {
+                throw new Error('toMessageDate is required when isInitial is false');
             }
 
-            console.log("Inform senders about conversaation read");
-            let offlineReceivers = [];
-
-            if (senders.length) {
-                const promises = senders.map(async member => {
-                    const socket = await chatSocketService.isUserConnected(member);
-
-                    if (socket) {
-                        this.to(member).emit('conversation read', { chatId: chatId, date: Date.now(), by: userId });
-                    } else {
-                        offlineReceivers.push(member)
-                    }
-
-                    return member;
-                });
-
-                const result = await Promise.all(promises);
-                console.log(`Informed total: ${result.length} people`);
-
-                if (offlineReceivers.length > 0) { 
-
-                    console.log(`Offline receivers: ${offlineReceivers.length}`);
-                    // send a Silent push 
-                    pushNotificationService.markConversationSeen({
-                        chat: chatId,
-                        by: userId,
-                        date: Date.now(),
-                        offlineReceivers: offlineReceivers,
-                        title: 'Mark conversation seen'
-                    }) 
-                }
+            if (!startValue) {
+                throw new Error('startValue is required when isInitial is false');
             }
         }
 
-        messageService.getMessages(chatId, userId, toMessageDate, howMany, startValue, isInitial, callback)
-        .then(async (result) => { 
-            const messages = result.messages;
-            ack({
-                total: messages.length,
-                messages: messages
-            });  
-            //TODO: Probably need to mark all the messages for the user as read.
-        }).catch(err => { 
-            console.error('Error first degree: ' + err.message);
-            ack(err.message);
-        });
+        // Inform message senders that their conversation was read (non-blocking from primary response path).
+        const notifyConversationRead = async (inform, senders, targetChatId, readerId) => {
+            try {
+                if (!inform || !Array.isArray(senders) || senders.length === 0) {
+                    return;
+                }
+
+                const normalizedSenders = [...new Set(
+                    senders
+                        .map((member) => member?._id?.toString?.() || member?.toString?.())
+                        .filter(Boolean)
+                        .filter((senderId) => senderId !== readerId)
+                )];
+
+                if (normalizedSenders.length === 0) {
+                    return;
+                }
+
+                const offlineReceivers = [];
+                const eventDate = Date.now();
+
+                await Promise.allSettled(
+                    normalizedSenders.map(async (memberId) => {
+                        const isOnline = await chatSocketService.isUserConnected(memberId);
+                        if (isOnline) {
+                            this.to(memberId).emit('conversation read', {
+                                chatId: targetChatId,
+                                date: eventDate,
+                                by: readerId
+                            });
+                        } else {
+                            offlineReceivers.push(memberId);
+                        }
+                    })
+                );
+
+                if (offlineReceivers.length > 0) {
+                    pushNotificationService.markConversationSeen({
+                        chat: targetChatId,
+                        by: readerId,
+                        date: eventDate,
+                        offlineReceivers,
+                        title: 'Mark conversation seen'
+                    });
+                }
+            } catch (notifyError) {
+                logger.warn(`messages: failed to notify conversation read: ${notifyError.message}`);
+            }
+        };
+
+        const result = await messageService.getMessages(
+            chatId,
+            userId,
+            toMessageDate,
+            howMany,
+            startValue,
+            isInitial,
+            notifyConversationRead
+        );
+
+        const conversationMessages = Array.isArray(result?.messages) ? result.messages : [];
+
+        if (callback) {
+            callback({
+                total: conversationMessages.length,
+                messages: conversationMessages
+            });
+        }
+
+        logger.info(
+            `Conversation fetched: chatId=${chatId}, total=${conversationMessages.length}, userId=${userId}, duration=${Date.now() - startTime}ms`
+        );
     } catch (ex) {
-        console.error('Error second degree: ' + ex.message);
-        ack(ex.message)
+        logger.error(`Error getting conversation: ${ex.message}`, {
+            chatId: data?.chatId,
+            userId: this.user?.id,
+            duration: Date.now() - startTime
+        });
+
+        if (typeof ack === 'function') {
+            ack({
+                error: ex.message,
+                code: ex.code || 'CHAT_MESSAGES_ERROR'
+            });
+        }
     }
 }
 
@@ -937,7 +1057,7 @@ const reactOnMessage = async function(data, ack) {
                         date: Date.now()
                     });
                     onlineReceivers.push(to);
-                } else if (!member.options?.muted) {
+                } else {
                     offlineReceivers.push(member);
                 }
             });
@@ -953,9 +1073,70 @@ const reactOnMessage = async function(data, ack) {
             from: userFrom
         };
 
+        const reactionList = Array.isArray(message?.reactions) ? message.reactions : [];
+        const summary = reactionList.reduce((acc, reactionItem) => {
+            const kind = reactionItem?.kind;
+            if (!kind) return acc;
+            acc[kind] = (acc[kind] || 0) + 1;
+            return acc;
+        }, {});
+
+        const getUserReactionKind = (userId) => {
+            const found = reactionList.find((reactionItem) => {
+                const fromUserId = reactionItem?.from?._id?.toString?.() || reactionItem?.from?.toString?.();
+                return fromUserId === userId;
+            });
+            return found?.kind || null;
+        };
+
         if (typeof ack === 'function') {
             ack(payload);
         }
+
+        const summaryForSender = {
+            messageId: message._id,
+            chat: { id: chat._id },
+            total: reactionList.length,
+            summary,
+            lastReaction: {
+                kind: result.reaction?.kind || result.reaction,
+                by: from.id,
+                date: Date.now()
+            },
+            mine: getUserReactionKind(from.id)
+        };
+
+        // Real-time UI refresh event for reaction chips/counts (ActionSheet opener can use this too).
+        this.emit('message reaction summary', summaryForSender);
+
+        const summaryNotifyPromises = chat.members
+            .filter(member => member.canChat)
+            .map(async (member) => {
+                const to = member.user?._id?.toString();
+                if (!to || to === from.id) {
+                    return;
+                }
+
+                const memberIsOnline = await chatSocketService.isUserConnected(to);
+                if (!memberIsOnline) {
+                    return;
+                }
+
+                this.to(to).emit('message reaction summary', {
+                    messageId: message._id,
+                    chat: { id: chat._id },
+                    total: reactionList.length,
+                    summary,
+                    lastReaction: {
+                        kind: result.reaction?.kind || result.reaction,
+                        by: from.id,
+                        date: Date.now()
+                    },
+                    mine: getUserReactionKind(to)
+                });
+            });
+
+        await Promise.allSettled(summaryNotifyPromises);
 
         if (offlineReceivers.length > 0) {
             pushNotificationService.reactOnMessage(payload);
@@ -975,6 +1156,90 @@ const reactOnMessage = async function(data, ack) {
             ack({
                 error: ex.message,
                 code: ex.code || 'REACTION_ERROR'
+            });
+        }
+    }
+}
+
+/**
+ * Fetch all reactions for a message.
+ * Intended for ActionSheet-style UI when user taps on reactions.
+ */
+const messageReactions = async function(data, ack) {
+    const startTime = Date.now();
+
+    try {
+        if (!data || typeof data !== 'object') {
+            throw new Error('Invalid message reactions payload');
+        }
+
+        const { messageId } = data;
+        if (!messageId) {
+            throw new Error('messageId is required');
+        }
+
+        const requester = this.user;
+        if (!requester || !requester.id) {
+            throw new Error('Sender identification failed');
+        }
+
+        const message = await messageService.getById(messageId);
+        if (!message) {
+            throw new Error('Message not found');
+        }
+
+        const rawChatId = message.chatId;
+        const chatId = (typeof rawChatId === 'string')
+            ? rawChatId
+            : (rawChatId?._id?.toString?.() || rawChatId?.toString?.());
+
+        if (!chatId || !mongoose.Types.ObjectId.isValid(chatId)) {
+            throw new Error('Invalid chatId in message');
+        }
+
+        // Authorization check: requester must be an active member of this chat.
+        await chatService.getById(chatId, requester.id, false);
+
+        const reactions = (message.reactions || []).map((reaction) => ({
+            id: reaction._id,
+            kind: reaction.kind,
+            date: reaction.date,
+            editedOn: reaction.editedOn,
+            by: reaction.from,
+            mine: reaction.from?._id?.toString?.() === requester.id
+        }));
+
+        const summary = reactions.reduce((acc, reaction) => {
+            const key = reaction.kind || 'unknown';
+            acc[key] = (acc[key] || 0) + 1;
+            return acc;
+        }, {});
+
+        if (typeof ack === 'function') {
+            ack({
+                messageId: message._id,
+                chatId,
+                total: reactions.length,
+                summary,
+                reactions,
+                title: 'Message reactions fetched'
+            });
+        }
+
+        logger.info(
+            `Message reactions fetched: messageId=${messageId}, total=${reactions.length}, userId=${requester.id}, duration=${Date.now() - startTime}ms`
+        );
+    } catch (ex) {
+        logger.error(`Error in messageReactions handler: ${ex.message}`, {
+            messageId: data?.messageId,
+            userId: this.user?.id,
+            duration: Date.now() - startTime
+        });
+
+        if (typeof ack === 'function') {
+            ack({
+                error: ex.message,
+                code: ex.code || 'MESSAGE_REACTIONS_ERROR'
             });
         }
     }
@@ -1294,24 +1559,34 @@ const markConversationSeen = async function(data, ack) {
     var offlineReceivers = [];
     try {
         const from = this.user.id;
-        
-        // Handle different possible data structures
-        // Sometimes data might be null/undefined if no arguments sent
-        let chatId, date, senders;
-        
+
+        // Normalize supported payload shapes:
+        // 1) { chatId, date, senders }
+        // 2) [{ chatId, date, senders }]
+        // 3) { data: [{ chatId, date, senders }], from }
+        let chatId;
+        let date;
+        let senders;
+        let normalizedData = {};
+
         if (!data) {
             console.warn(`[Mark Conversation Seen] No data object received`);
-            data = {};
         } else if (typeof data === 'string') {
-            // If data was passed as string, it's likely the chatId
             console.warn(`[Mark Conversation Seen] Data received as string, assuming it's chatId`);
-            chatId = data;
+            normalizedData = { chatId: data };
+        } else if (Array.isArray(data)) {
+            normalizedData = data[0] || {};
         } else if (typeof data === 'object') {
-            // Normal case: data object with properties
-            chatId = data.chatId;
-            date = data.date;
-            senders = data.senders;
-        } 
+            if (Array.isArray(data.data)) {
+                normalizedData = data.data[0] || {};
+            } else {
+                normalizedData = data;
+            }
+        }
+
+        chatId = normalizedData.chatId;
+        date = normalizedData.date;
+        senders = normalizedData.senders;
         
         if (!chatId) {
             const errorMsg = 'Chat ID is required in request data';
@@ -1389,15 +1664,18 @@ const markConversationSeen = async function(data, ack) {
             })
         }
     } catch (ex) {
+        const debugData = (data && typeof data === 'object' && !Array.isArray(data) && Array.isArray(data.data))
+            ? (data.data[0] || {})
+            : (Array.isArray(data) ? (data[0] || {}) : (data || {}));
         console.error(`[Error] Conversation seen failed:`, {
             message: ex.message,
             stack: ex.stack.split('\n').slice(0, 3).join('\n'), // First 3 lines of stack
             data: {
                 dataType: typeof data,
                 dataKeys: Object.keys(data || {}),
-                chatId: data?.chatId,
-                date: data?.date,
-                sendersCount: data?.senders?.length,
+                chatId: debugData?.chatId,
+                date: debugData?.date,
+                sendersCount: debugData?.senders?.length,
                 userId: this.user?.id,
                 offlineReceivers
             }

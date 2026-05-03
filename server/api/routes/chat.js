@@ -59,7 +59,7 @@ router.get('/all', all);
 /// Single chat 
 router.get('/:id', chatById); 
 
-router.get('/:id/messages', getMessagesForChat)
+router.get('/:chatId/messages', getMessagesForChat)
 
 /// ALl chats
 router.get('/all/unread', totalUnreadChatsForUser);  

@@ -14,7 +14,7 @@ class DeviceService {
     async newDevice(data) {
         const { platform, os, version, appVersion, info, token, voipToken, state, uniqueId, model } = data;
 
-        const device = new DeviceModel({
+        const payload = {
             platform,
             os: os || null,
             uniqueId: uniqueId || null,
@@ -26,8 +26,18 @@ class DeviceService {
             voipToken: voipToken || null,
             status: 'active',
             state: state || 'active'
-        });
+        };
 
+        // Deduplicate by physical-device identifier when provided.
+        if (payload.uniqueId) {
+            return DeviceModel.findOneAndUpdate(
+                { uniqueId: payload.uniqueId },
+                { $set: payload },
+                { upsert: true, new: true, setDefaultsOnInsert: true }
+            );
+        }
+
+        const device = new DeviceModel(payload);
         return device.save();
     }
 
@@ -61,13 +71,15 @@ class DeviceService {
 
         const device = await DeviceModel.findByIdAndUpdate(
             deviceId,
-            { $set: { user: userId } },
+            { $set: { user: userId, status: 'active', updatedOn: new Date() } },
             { new: true }
         );
 
+        if (!device) throw new Error('Device not found');
+
         await UserModel.updateOne(
             { _id: userId },
-            { $set: { device: deviceId } }
+            { $set: { device: device._id } }
         );
 
         return device;
@@ -101,8 +113,16 @@ class DeviceService {
 
         if (!device) throw new Error('Device not found');
 
+        // If this device is marked active, disable any other active devices for this user.
+        if (updates.status === 'active') {
+            await DeviceModel.updateMany(
+                { user: userId, status: 'active', _id: { $ne: deviceId } },
+                { $set: { status: 'disabled', token: null, voipToken: null } }
+            );
+        }
+
         // Ensure User.device always points to this device
-        await UserModel.updateOne({ _id: userId }, { $set: { device: deviceId } });
+        await UserModel.updateOne({ _id: userId }, { $set: { device: device._id } });
 
         return device;
     }
@@ -142,7 +162,7 @@ class DeviceService {
         if (!device) throw new Error('Device not found');
 
         // Keep User.device pointing at the now-active device
-        await UserModel.updateOne({ _id: userId }, { $set: { device: deviceId } });
+        await UserModel.updateOne({ _id: userId }, { $set: { device: device._id } });
 
         return device;
     }
@@ -164,7 +184,7 @@ class DeviceService {
 
         // If this was the user's current active device, clear the reference
         await UserModel.updateOne(
-            { _id: userId, device: deviceId },
+            { _id: userId, device: device._id },
             { $set: { device: null } }
         );
 
@@ -178,21 +198,80 @@ class DeviceService {
      * @param {string} token
      * @returns {Promise<Object>}
      */
-    async updateToken(deviceId, userId, token, voipToken) {
+    async updateToken(deviceId, userId, token, voipToken, metadata = {}) {
         const updates = { status: 'active', updatedOn: new Date() };
         if (token)     updates.token     = token;
         if (voipToken) updates.voipToken = voipToken;
 
-        const device = await DeviceModel.findOneAndUpdate(
+        let device = await DeviceModel.findOneAndUpdate(
             { _id: deviceId, user: userId },
             { $set: updates },
             { new: true }
         );
 
-        if (!device) throw new Error('Device not found');
+        // Self-heal stale references: if deviceId is missing for this user, recover by uniqueId
+        // or create a new device bound to this user.
+        if (!device) {
+            const normalizedPlatform = ['iOS', 'Android'].includes(metadata.platform)
+                ? metadata.platform
+                : 'iOS';
+
+            if (metadata.uniqueId) {
+                const existingByUniqueId = await DeviceModel.findOne({ uniqueId: metadata.uniqueId }).select('user').lean();
+
+                // If this physical device was linked to another user, detach old User.device pointer.
+                if (existingByUniqueId?.user && existingByUniqueId.user.toString() !== userId.toString()) {
+                    await UserModel.updateOne(
+                        { _id: existingByUniqueId.user, device: existingByUniqueId._id },
+                        { $set: { device: null } }
+                    );
+                }
+
+                device = await DeviceModel.findOneAndUpdate(
+                    { uniqueId: metadata.uniqueId },
+                    {
+                        $set: {
+                            user: userId,
+                            platform: normalizedPlatform,
+                            os: metadata.os || null,
+                            version: metadata.version || null,
+                            appVersion: metadata.appVersion || null,
+                            info: metadata.info || null,
+                            model: metadata.model || null,
+                            state: metadata.state || 'active',
+                            status: 'active',
+                            token: token || null,
+                            voipToken: voipToken || null,
+                            updatedOn: new Date()
+                        }
+                    },
+                    { upsert: true, new: true, setDefaultsOnInsert: true }
+                );
+            } else {
+                device = await DeviceModel.create({
+                    user: userId,
+                    platform: normalizedPlatform,
+                    os: metadata.os || null,
+                    version: metadata.version || null,
+                    appVersion: metadata.appVersion || null,
+                    info: metadata.info || null,
+                    model: metadata.model || null,
+                    state: metadata.state || 'active',
+                    status: 'active',
+                    token: token || null,
+                    voipToken: voipToken || null
+                });
+            }
+        }
+
+        // A token refresh means this is the currently active device.
+        await DeviceModel.updateMany(
+            { user: userId, status: 'active', _id: { $ne: device._id } },
+            { $set: { status: 'disabled', token: null, voipToken: null } }
+        );
 
         // A token refresh means this device is the live one — keep User.device current
-        await UserModel.updateOne({ _id: userId }, { $set: { device: deviceId } });
+        await UserModel.updateOne({ _id: userId }, { $set: { device: device._id } });
 
         return device;
     }
