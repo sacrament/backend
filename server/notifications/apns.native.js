@@ -46,6 +46,22 @@ class NativeApnsClient {
             return { ok: false, status: 0, reason: 'MissingTopic' };
         }
 
+        const firstAttempt = await this._sendAttempt(message);
+        if (firstAttempt.ok) {
+            return firstAttempt;
+        }
+
+        // Retry once on transport-level failures using a fresh session.
+        if (firstAttempt.status === 0) {
+            this._logger.warn(`APNs transport issue (${firstAttempt.reason}), retrying once with new session`);
+            this._destroySession();
+            return this._sendAttempt(message);
+        }
+
+        return firstAttempt;
+    }
+
+    _sendAttempt(message) {
         const session = this._ensureSession();
         const jwt = this._getProviderToken();
 
@@ -67,16 +83,24 @@ class NativeApnsClient {
         const body = JSON.stringify(message.payload || {});
 
         return new Promise((resolve) => {
+            let done = false;
             let status = 0;
             let apnsId = null;
             let responseBody = '';
+
+            const finish = (result) => {
+                if (done) return;
+                done = true;
+                resolve(result);
+            };
 
             const req = session.request(headers);
 
             req.setEncoding('utf8');
             req.setTimeout(this._timeoutMs, () => {
                 req.close(http2.constants.NGHTTP2_CANCEL);
-                resolve({ ok: false, status: 0, reason: 'Timeout' });
+                this._destroySession();
+                finish({ ok: false, status: 0, reason: 'Timeout' });
             });
 
             req.on('response', (responseHeaders) => {
@@ -99,11 +123,11 @@ class NativeApnsClient {
                 }
 
                 if (status >= 200 && status < 300) {
-                    resolve({ ok: true, status, apnsId });
+                    finish({ ok: true, status, apnsId });
                     return;
                 }
 
-                resolve({
+                finish({
                     ok: false,
                     status,
                     apnsId,
@@ -114,7 +138,8 @@ class NativeApnsClient {
 
             req.on('error', (err) => {
                 this._logger.error(`APNs request error: ${err.message}`);
-                resolve({ ok: false, status: 0, reason: err.message || 'RequestError' });
+                this._destroySession();
+                finish({ ok: false, status: 0, reason: err.message || 'RequestError' });
             });
 
             req.end(body);
@@ -143,6 +168,20 @@ class NativeApnsClient {
 
         this._session = session;
         return session;
+    }
+
+    _destroySession() {
+        if (!this._session) {
+            return;
+        }
+
+        try {
+            this._session.destroy();
+        } catch (_) {
+            // ignore destroy errors while forcing session reset
+        }
+
+        this._session = null;
     }
 
     _getProviderToken() {

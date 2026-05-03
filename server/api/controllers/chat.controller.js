@@ -224,13 +224,17 @@ const leaveChat = (req, res) => {
 }
 
 const getMessagesForChat = (req, res) => {
-    const { id } = req.params;
-    const { toMessageDate } = req.query;
+    const chatId = req.params.chatId || req.params.id;
+    const { toMessageDate, startValue } = req.query;
+    const parsedHowMany = Number.parseInt(req.query.howMany, 10);
+    const howMany = Number.isFinite(parsedHowMany) && parsedHowMany > 0 ? parsedHowMany : 20;
+    const isInitial = !(req.query.isInitial === false || req.query.isInitial === 'false');
     const userId = req.decodedToken.userId;
 
-    messageService.getMessages(id, userId, toMessageDate).then((result) => {
+    messageService.getMessages(chatId, userId, toMessageDate, howMany, startValue, isInitial).then((result) => {
+        const messages = result.messages || [];
         //res.status(200).json({ status: 'success', total: result.totalMessages, totalPages: result.totalPages, messages: result.messages, currentPage: result.currentPage, messagesPerPage: result.messagesPerPage });
-        res.status(200).json({status: 'success', total: result.length, messages: result})
+        res.status(200).json({status: 'success', total: messages.length, messages: messages})
     }).catch((err) => {
         logger.error('Get messages for chat error:', err);
         res.status(500).json({ status: 'error', message: err.message })
@@ -549,9 +553,9 @@ const sendMessage = async (req, res) => {
                 } else {
                     /// Offline people. Send a push notification
                     // logger.info(`Offline member: ${member.user.device}`);
-                    if (!member.options.muted) {
-                        offlineReceivers.push(member.user);
-                    }
+                    // Keep muted recipients so notification service can convert
+                    // their push to silent/background delivery.
+                    offlineReceivers.push(member);
                 }
             }
 

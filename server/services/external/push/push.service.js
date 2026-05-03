@@ -40,15 +40,12 @@ class PushNotificationService {
         return new Promise(async (resolve, reject) => {
             try {
                 const service = getTwilioClient();
-                service.bindings(sid).remove();
+                await service.bindings(sid).remove();
                 console.log('Device was unbind');
-                resolve();
                 //MARK: Remove token
                 const userService = new UserService();
-                // if (typeof userId === 'number') {  
-                //     userId = await userService.getUserIds([userId]);
-                // }
-                userService.disableUserDeviceFor(userId)
+                await userService.disableUserDeviceFor(userId);
+                resolve();
             } catch (err) {
                 console.error(err);
                 reject(err);

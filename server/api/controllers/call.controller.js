@@ -1,12 +1,10 @@
 const CallService = require('../../services/domain/call/call.service');
-const PushNotificationService = require('../../services/external/push/push.service');
 const CS = require('../../socket');
 const UserService = require('../../services/domain/user/user.service');
 const logger = require('../../utils/logger');
 
 const callService = new CallService();
 const userService = new UserService();
-const pushService = new PushNotificationService();
 
 const getAccessToken = (req, res) => {
     let identity = req.decodedToken.userId;
@@ -15,54 +13,6 @@ const getAccessToken = (req, res) => {
         res.status(200).json({status: 'success', token});
     }).catch((err) => {
         logger.error('Get access token error:', err);
-        res.status(500).json({status: 'error', message: err.message});
-    });
-};
-
-const bindDevice = async (req, res) => {
-    const bind = {
-        identity: req.decodedToken.userId,
-        type: req.body.type,
-        token: req.body.token
-    };
-
-    pushService.bindDevice(bind).then((binding) => {
-        res.status(200).json({status: 'success', sid: binding.sid});
-    }).catch((err) => {
-        logger.error('Bind device error:', err);
-        res.status(500).json({status: 'error', message: err.message});
-    });
-
-    await userService.updateVoipDeviceToken(bind.identity, bind.token);
-};
-
-const unbindDevice = (req, res) => {
-    let sid = req.body.sid;
-    let userId = req.decodedToken.userId
-
-    pushService.unbindDevice(sid, userId).then(() => {
-        res.status(200).json({status: 'success'});
-    }).catch((err) => {
-        logger.error('Unbind device error:', err);
-        res.status(500).json({status: 'error', message: err.message});
-    });
-};
-
-const sendNotification = (req, res) => {
-    let userId = req.decodedToken.userId;
-    let recipient = req.body.recipient;
-    let title = req.body.title;
-    let body = req.body.body;
-    let data = req.body.data;
-
-    let notification = {identity: recipient, title, body, data: {data}};
-
-    //MARK: TODO: Store call to db
-
-    pushService.send(userId, notification).then((notification) => {
-        res.status(200).json({status: 'success', sid: notification.sid});
-    }).catch((err) => {
-        logger.error('Send notification error:', err);
         res.status(500).json({status: 'error', message: err.message});
     });
 };
@@ -191,9 +141,6 @@ const deleteCallsByUser = async (req, res) => {
 };
 
 module.exports = {
-    bindDevice,
-    unbindDevice,
-    sendNotification,
     getAccessToken,
     declineCall,
     callHistory,

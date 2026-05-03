@@ -10,6 +10,7 @@ const UserService = require('../user/user.service');
 const utils = require('../../../utils/index');
 const { normalizeUserId } = require('../../../utils/user.utils');
 const { validateRequired, validateObjectId, validateString, validateFields } = require('../../../utils/validation.utils');
+const logger = require('../../../utils/logger');
 
 class MessageService {
     constructor() {
@@ -532,9 +533,17 @@ class MessageService {
     }
 
     /**
-     * Get chat messages with pagination and filtering
+     * Get chat messages with cursor-based pagination
+     * @param {string} chatId - Chat ID
+     * @param {string} userId - Requesting user ID
+     * @param {number|null} toMessageDate - Unix timestamp (seconds) used as cursor; required when isInitial is false
+     * @param {number} howMany - Page size (1-100, defaults to 20)
+     * @param {string} startValue - ObjectId cursor for tie-breaking; required when isInitial is false
+     * @param {boolean} isInitial - True for first load, false for older-page loads
+     * @param {Function} callback - Optional fn(hadUnread, uniqueSenders, chatId, userId) called after read-marking
+     * @returns {Promise<{messages: Array, hasMore: boolean}>}
      */
-    async getMessages(chatId, userId, toMessageDate = null, howMany = -1, startValue, isInitial, callback) {
+    async getMessages(chatId, userId, toMessageDate = null, howMany = -1, startValue, isInitial = true, callback) {
         validateObjectId(chatId, 'Chat ID');
         validateRequired(userId, 'User ID');
 
@@ -542,33 +551,50 @@ class MessageService {
 
         const member = await this.chatService.getChatMember(chatId, userId);
 
-        console.log(`toMessageDate: ${toMessageDate}`);
+        const MAX_LIMIT = 100;
+        const DEFAULT_LIMIT = 20;
+        const parsedHowMany = Number.parseInt(howMany, 10);
+        const limit = (Number.isFinite(parsedHowMany) && parsedHowMany > 0)
+            ? Math.min(parsedHowMany, MAX_LIMIT)
+            : DEFAULT_LIMIT;
 
-        let query = {
+        const initialLoad = !(isInitial === false || isInitial === 'false');
+
+        let cursorTimestamp = null;
+        if (toMessageDate !== undefined && toMessageDate !== null && toMessageDate !== '') {
+            cursorTimestamp = Number(toMessageDate) * 1000;
+            if (!Number.isFinite(cursorTimestamp)) {
+                throw new Error('Invalid toMessageDate value');
+            }
+        }
+
+        if (!initialLoad) {
+            if (!startValue || cursorTimestamp === null) {
+                throw new Error('toMessageDate and startValue are required when isInitial is false');
+            }
+            validateObjectId(startValue, 'startValue');
+        }
+
+        const joinedOnFilter = member.joinedOn ? { $gte: new Date(member.joinedOn) } : undefined;
+
+        const query = {
             'deleted.date': { $eq: null },
+            'deleted.forEveryone': { $ne: true },
             chatId: chatId,
-            sentOn: { $gte: new Date(member.joinedOn) }
+            ...(joinedOnFilter && { sentOn: joinedOnFilter })
         };
 
-        if (startValue) {
-            query._id = { $lt: startValue };
+        if (!initialLoad) {
+            query.$or = [
+                { sentOnTimestamp: { $lt: cursorTimestamp } },
+                { sentOnTimestamp: cursorTimestamp, _id: { $lt: new ObjectId(startValue) } }
+            ];
         }
 
-        if (toMessageDate) {
-            const $and = isInitial
-                ? [
-                    { sentOn: { $gte: new Date(member.joinedOn) } },
-                    { sentOn: { $gt: new Date(toMessageDate) } }
-                ]
-                : [
-                    { sentOn: { $gte: new Date(member.joinedOn) } },
-                    { sentOn: { $lte: new Date(toMessageDate) } }
-                ];
+        logger.debug(`getMessages: fetching chatId=${chatId} userId=${userId} initialLoad=${initialLoad} limit=${limit} cursor=${cursorTimestamp}`);
 
-            query.$and = $and;
-        }
-
-        const messages = await this.model
+        // Fetch one extra to determine hasMore without a separate count query
+        const latestFirstMessages = await this.model
             .find(query)
             .select(utils.messageColumnsToShow())
             .populate([
@@ -615,42 +641,48 @@ class MessageService {
                     ]
                 }
             ])
-            .sort({ sentOn: -1 })
-            .limit(howMany !== -1 ? howMany : 0)
+            .sort({ sentOnTimestamp: -1, _id: -1 })
+            .limit(limit + 1)
             .lean();
 
-        console.log(`Total messages: ${messages.length}`);
+        const hasMore = latestFirstMessages.length > limit;
+        if (hasMore) latestFirstMessages.pop();
 
+        const messages = latestFirstMessages.reverse();
+
+        logger.debug(`getMessages: fetched chatId=${chatId} count=${messages.length} hasMore=${hasMore}`);
+
+        // Mark unread messages as read and notify via callback
         if (messages.length > 0) {
-            const messageOwners = messages
-                .map(m => m.from._id.toString())
-                .filter(fromUser => fromUser !== userId);
+            const uniqueSenders = [
+                ...new Set(
+                    messages
+                        .map(m => m.from?._id?.toString())
+                        .filter(id => id && id !== userId)
+                )
+            ];
 
-            const uniqueSenders = [...new Set(messageOwners)];
+            const readUpdate = await this.model.updateMany(
+                {
+                    chatId: chatId,
+                    from: { $ne: new ObjectId(userId) },
+                    'status.read': { $eq: null }
+                },
+                { $set: { 'status.read': Date.now() } }
+            );
 
-            const updateQuery = {
-                chatId: chatId,
-                from: { $ne: new ObjectId(userId) },
-                'status.read': { $eq: null }
-            };
-            const update = { $set: { 'status.read': Date.now() } };
+            const hadUnread = (readUpdate.modifiedCount ?? readUpdate.nModified ?? 0) > 0;
 
-            const result = await this.model.updateMany(updateQuery, update);
+            if (hadUnread) {
+                logger.debug(`getMessages: marked ${readUpdate.modifiedCount ?? readUpdate.nModified} messages as read chatId=${chatId}`);
+            }
 
-            if (result.nModified > 0) {
-                console.log(`Messages marked as read, Total: ${result.nModified}`);
-                if (callback && typeof callback === 'function') {
-                    callback(true, uniqueSenders, chatId, userId);
-                }
-            } else {
-                console.log('No messages marked as read for conversation');
-                if (callback && typeof callback === 'function') {
-                    callback(false, uniqueSenders, chatId, userId);
-                }
+            if (callback && typeof callback === 'function') {
+                callback(hadUnread, uniqueSenders, chatId, userId);
             }
         }
 
-        return { messages: messages };
+        return { messages, hasMore };
     }
 
     /**

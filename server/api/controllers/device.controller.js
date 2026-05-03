@@ -123,13 +123,37 @@ const updateToken = async (req, res) => {
     try {
         const userId = req.decodedToken.userId;
         const { id } = req.params;
-        const { token, voipToken } = req.body;
+        const {
+            token,
+            voipToken,
+            platform,
+            uniqueId,
+            os,
+            version,
+            appVersion,
+            info,
+            model,
+            state
+        } = req.body;
 
         if (!token || token.trim() === '') {
             return res.status(400).json({ status: 'error', message: 'token is required' });
         }
 
-        const device = await deviceService.updateToken(id, userId, token, voipToken);
+        if (platform && !['iOS', 'Android'].includes(platform)) {
+            return res.status(400).json({ status: 'error', message: 'platform must be "iOS" or "Android"' });
+        }
+
+        const device = await deviceService.updateToken(id, userId, token, voipToken, {
+            platform,
+            uniqueId,
+            os,
+            version,
+            appVersion,
+            info,
+            model,
+            state
+        });
 
         return res.status(200).json({ status: 'success', device });
     } catch (ex) {

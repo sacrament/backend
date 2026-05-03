@@ -58,10 +58,31 @@ class E2EEService {
         userId = await normalizeUserId(userId);
         const E2EEDevice = mongoose.model('E2EEDevice');
 
+        // Current backend supports one E2EE device per user.
+        // Keep deviceId in the API contract for forward compatibility.
+        const parsedDeviceId = Number(deviceId);
+        if (!Number.isInteger(parsedDeviceId) || parsedDeviceId < 1) {
+            const error = new Error('Invalid deviceId');
+            error.status = 400;
+            throw error;
+        }
+
+        if (parsedDeviceId !== 1) {
+            const error = new Error(`Device ${parsedDeviceId} not found for user`);
+            error.status = 404;
+            throw error;
+        }
+
         const device = await E2EEDevice.findOne({ user: userId });
         if (!device) {
-            const error = new Error('Device not found');
+            const error = new Error('E2EE device not registered for user');
             error.status = 404;
+            throw error;
+        }
+
+        if (!device.signedPreKey || !device.signedPreKey.publicKey || !device.signedPreKey.signature) {
+            const error = new Error('Signed pre-key is missing for user device');
+            error.status = 409;
             throw error;
         }
 
@@ -70,7 +91,7 @@ class E2EEService {
 
         const bundle = {
             registrationId: device.registrationId,
-            deviceId: deviceId,
+            deviceId: parsedDeviceId,
             identityKey: device.identityKey,
             signedPreKeyId: device.signedPreKey.id,
             signedPreKey: device.signedPreKey.publicKey,
@@ -78,7 +99,7 @@ class E2EEService {
         };
 
         // Pop a one-time pre key if available
-        if (device.oneTimePreKeys.length > 0) {
+        if (Array.isArray(device.oneTimePreKeys) && device.oneTimePreKeys.length > 0) {
             const otk = device.oneTimePreKeys.shift();
             bundle.oneTimePreKeyId = otk.id;
             bundle.oneTimePreKey = otk.publicKey;

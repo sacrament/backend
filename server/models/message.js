@@ -34,6 +34,8 @@ const Message = new Schema({
     senderCopy: { type: String, default: null }
 });
 
+Message.index({ chatId: 1, sentOnTimestamp: 1, _id: 1 });
+
 Message.plugin(mongoosePaginate);
 
 mongoose.model('Message', Message);
