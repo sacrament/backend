@@ -1183,7 +1183,7 @@ const messageReactions = async function(data, ack) {
             throw new Error('Sender identification failed');
         }
 
-        const message = await messageService.getById(messageId);
+        const message = await messageService.getByIdOrClientId(messageId);
         if (!message) {
             throw new Error('Message not found');
         }

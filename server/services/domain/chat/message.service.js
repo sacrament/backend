@@ -389,15 +389,18 @@ class MessageService {
      * React to a message with emoji
      */
     async reactOnMessage(messageId, kind, from, date) {
-        validateObjectId(messageId, 'Message ID');
+        validateRequired(messageId, 'Message ID');
         validateString(kind, 'Reaction kind');
         validateRequired(from, 'From user ID');
         validateRequired(date, 'Date');
 
-        const message = await this.getById(messageId);
+        const message = await this.getByIdOrClientId(messageId);
+        if (!message) {
+            throw new Error('Message not found');
+        }
         const newDate = new Date(date * 1000);
 
-        const reactExists = await Reaction.findOne({ from: from, message: messageId })
+        const reactExists = await Reaction.findOne({ from: from, message: message._id })
             .populate({
                 path: 'from',
                 select: utils.userColumnsToShow()
@@ -423,7 +426,7 @@ class MessageService {
             const rct = new Reaction({
                 from: from,
                 kind: kind,
-                message: messageId,
+                message: message._id,
                 date: newDate,
                 chatId: message.chatId
             });
@@ -442,6 +445,116 @@ class MessageService {
             message: message.toObject(),
             title: 'Reaction saved for message'
         };
+    }
+
+    /**
+     * Resolve a message by Mongo _id first, then by client tempId.
+     * This avoids reaction failures when clients emit tempId before server ID sync.
+     */
+    async getByIdOrClientId(messageId) {
+        validateRequired(messageId, 'Message ID');
+
+        let message = null;
+
+        if (mongoose.Types.ObjectId.isValid(messageId)) {
+            message = await this.model.findById(messageId)
+                .select('-isImported -importedOn -summary -__v -uniqueId')
+                .populate([
+                    {
+                        path: 'from',
+                        select: utils.userColumnsToShow()
+                    },
+                    {
+                        path: 'media',
+                        select: utils.mediaColumnsToShow()
+                    },
+                    {
+                        path: 'reactions',
+                        select: utils.reactionColumnsToShow(),
+                        populate: {
+                            path: 'from',
+                            select: utils.userColumnsToShow()
+                        }
+                    },
+                    {
+                        path: 'replyTo',
+                        select: '-isImported -importedOn -summary -replyTo -__v -uniqueId',
+                        populate: [
+                            {
+                                path: 'media',
+                                select: utils.mediaColumnsToShow(),
+                                populate: {
+                                    path: 'from',
+                                    select: utils.userColumnsToShow()
+                                }
+                            },
+                            {
+                                path: 'reactions',
+                                select: utils.reactionColumnsToShow(),
+                                populate: {
+                                    path: 'from',
+                                    select: utils.userColumnsToShow()
+                                }
+                            },
+                            {
+                                path: 'from',
+                                select: utils.userColumnsToShow()
+                            }
+                        ]
+                    }
+                ]);
+        }
+
+        if (!message) {
+            message = await this.model.findOne({ tempId: messageId })
+                .select('-isImported -importedOn -summary -__v -uniqueId')
+                .populate([
+                    {
+                        path: 'from',
+                        select: utils.userColumnsToShow()
+                    },
+                    {
+                        path: 'media',
+                        select: utils.mediaColumnsToShow()
+                    },
+                    {
+                        path: 'reactions',
+                        select: utils.reactionColumnsToShow(),
+                        populate: {
+                            path: 'from',
+                            select: utils.userColumnsToShow()
+                        }
+                    },
+                    {
+                        path: 'replyTo',
+                        select: '-isImported -importedOn -summary -replyTo -__v -uniqueId',
+                        populate: [
+                            {
+                                path: 'media',
+                                select: utils.mediaColumnsToShow(),
+                                populate: {
+                                    path: 'from',
+                                    select: utils.userColumnsToShow()
+                                }
+                            },
+                            {
+                                path: 'reactions',
+                                select: utils.reactionColumnsToShow(),
+                                populate: {
+                                    path: 'from',
+                                    select: utils.userColumnsToShow()
+                                }
+                            },
+                            {
+                                path: 'from',
+                                select: utils.userColumnsToShow()
+                            }
+                        ]
+                    }
+                ]);
+        }
+
+        return message;
     }
 
     /**
