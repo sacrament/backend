@@ -6,7 +6,7 @@ const chatService = new ChatService();
 const reportService = new ReportService();
 const logger = require('../../utils/logger');
 const { getChatService } = require('../../socket/services');
-const { getAgenda } = require('../../startup/agenda');
+const push = require('../../notifications');
 
 /**
  * Search Users by Name
@@ -205,7 +205,7 @@ const sendConnectionRequest = async (req, res) => {
 
         const recipientIsOnline = await getChatService().isUserConnected(to);
         if (!recipientIsOnline) {
-            await getAgenda().now('push:connection-request', { request: result.request });
+            await push.newConnectionRequest(result.request);
         }
 
         return res.status(201).json({ status: 'success', request: result.request });
