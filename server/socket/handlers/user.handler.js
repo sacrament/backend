@@ -5,7 +5,7 @@ const UserModel = mongoose.model('User');
 const { UserService, ContactService, ChatService, CallService } = require('../../services'); 
 const utils = require('../../utils');
 const { getChatService } = require('../services');
-const { getAgenda } = require('../../startup/agenda');
+const push = require('../../notifications');
 const userService = new UserService();
 
 let chatSocketService;
@@ -52,7 +52,7 @@ const sendRequest = async function (data, cb) {
             const fromUser = await UserModel.findById(fromId).lean().select(utils.userColumnsToShow());
             this.to(toId).emit('new connection request', { from: fromUser, request: res.request });
         } else {
-            await getAgenda().now('push:connection-request', { request: res.request });
+            await push.newConnectionRequest(res.request);
         }
         cb({ request: res.request });
     } catch (ex) {
@@ -92,12 +92,7 @@ const respondRequest = async function (data, cb) {
             });
         } else {
             if (toUser) {
-                await getAgenda().now('push:connection-request-response', { 
-                    from: fromUser, 
-                    to: toUser, 
-                    request: res.request, 
-                    response
-                });
+                await push.respondConnectionRequest(fromUser, toUser, res.request, response);
             }
         }
 
@@ -132,7 +127,7 @@ const cancelRequest = async function (data, cb) {
             const fromUser = await UserModel.findById(fromId).lean().select(utils.userColumnsToShow());
             this.to(toId).emit('connection request cancelled', { from: fromUser, request: res.request });
         } else {
-            await getAgenda().now('push:connection-request-cancelled', { request: res.request });
+            await push.cancellConnectionRequest(res.request);
         }
         cb({ request: res.request });
     } catch (ex) {
@@ -155,7 +150,7 @@ const undoFriendshipConnection = async function (data, cb) {
             this.to(toId).emit('undo friendship connection', { from: fromUser, request: res.request });
         } else {
             const fromUser = await UserModel.findById(fromId).lean().select(utils.userColumnsToShow());
-            await getAgenda().now('push:undo-connection', { from: fromUser, request: res.request, to: toId });
+            await push.undoConnectionFriendship(fromUser, res.request, toId);
         }
         cb({ request: res.request });
     } catch (ex) {
@@ -195,7 +190,7 @@ const requestReminder = async function (data, cb) {
             this.to(toId).emit('connection request reminder', { from: fromUser, request });
         } else {
             const fromUser = await UserModel.findById(fromId).lean().select(utils.userColumnsToShow());
-            await getAgenda().now('push:connection-request-reminder', { from: fromUser, request, to: toId });
+            await push.reminderForConnectionRequest(fromUser, request, toId);
         }
         cb({ request });
     } catch (ex) {
