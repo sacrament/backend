@@ -134,6 +134,8 @@ const respondCallRequest = async function(data, ack) {
                 chatId:        dbRecord.chatId?.toString() ?? null,
                 mode:          dbRecord.mode,
                 callRequestId: dbRecord._id.toString(),
+                ipAddress:     dbRecord.ipAddress || null,
+                networkInfo:   dbRecord.networkInfo || null,
             };
         } else {
             pendingRequests.delete(requestId);
@@ -144,6 +146,14 @@ const respondCallRequest = async function(data, ack) {
 
         if (status === 'declined') {
             await callService.recordCallRequestResponse({ requestId, response: 'declined' });
+            await callService.recordDeclinedCall({
+                requestId,
+                from: callerId,
+                to: calleeId,
+                mode,
+                ipAddress: request.ipAddress || null,
+                networkInfo: request.networkInfo || null,
+            });
 
             if (isCallerOnline) {
                 this.to(callerId).emit('call request response', { requestId, chatId: request.chatId, status: 'declined' });
@@ -302,8 +312,11 @@ const initiateCall = async function(data, ack) {
         const calleeId = calleeObject._id.toString();
         const isCalleeOnline = await chatSocketService.isUserConnected(calleeId);
 
-        // Generate a Twilio access token for the receiver so they can join immediately
-        const { token: receiverToken } = await callService.call(resolvedCallId, resolvedCallerId, calleeId);
+        // Generate a Twilio access token for the receiver so they can join immediately.
+        // Do not mark answered here; answered is set when callee actually joins the room.
+        const { token: receiverToken } = await callService.call(resolvedCallId, resolvedCallerId, calleeId, {
+            markAnswered: false,
+        });
 
         const callPayload = {
             from:  callerObject,
@@ -319,12 +332,7 @@ const initiateCall = async function(data, ack) {
             this.to(calleeId).emit('incoming call', callPayload);
         } else {
             const notifPayload = { call: { sid: resolvedCallId }, from: callerObject, to: calleeObject, mode, token: receiverToken };
-            if (calleeObject.device?.type === 'ANDROID') {
-                await pushNotificationService.incomingCall(notifPayload);
-            } else {
-                const voipService = new VoipPushNotificationService();
-                await voipService.incomingCall(notifPayload);
-            }
+            await notifyOfflineCallEvent('incoming', notifPayload, calleeObject);
         }
 
         ack({ success: true, isCalleeOnline, callId: resolvedCallId });
@@ -369,7 +377,9 @@ const endCall = async function(data, ack) {
         const calleeId = callRecord.to._id.toString();
         const otherPartyId = senderId === callerId ? calleeId : callerId;
 
-        const endedCall = await callService.endCall(resolvedRoomSid, calleeId, callerId);
+        const endedCall = await callService.endCall(resolvedRoomSid, calleeId, callerId, {
+            senderId,
+        });
         const senderObject = await resolveUserByAnyId(userService, senderId);
         if (!senderObject) {
             return ack({ error: 'Sender not found' });
@@ -391,12 +401,7 @@ const endCall = async function(data, ack) {
             if (!otherObject) {
                 return;
             }
-            if (otherObject.device?.type === 'ANDROID') {
-                await pushNotificationService.endCall({ call: endedCall, from: senderObject, to: otherObject, mode: callRecord.callType });
-            } else {
-                const voipService = new VoipPushNotificationService();
-                await voipService.endCall({ call: endedCall, from: senderObject, to: otherObject, mode: callRecord.callType });
-            }
+            await notifyOfflineCallEvent('end', { call: endedCall, from: senderObject, to: otherObject, mode: callRecord.callType }, otherObject);
         }
     } catch (ex) {
         console.error(`end call error: ${ex.message}`);
@@ -428,7 +433,7 @@ const joinRoom = async function(data, ack) {
             return ack({ error: 'Callee not found' });
         }
 
-        // Fetch room & issue token for the callee (records incoming call history)
+        // Fetch room & issue token for the callee, marking this call as answered.
         const { call, token } = await callService.call(callId, null, calleeObject._id.toString());
 
         // Notify the caller that the receiver has joined
@@ -498,10 +503,12 @@ const createRoom = async function(data, ack) {
 
         const callType = mode === 'video' ? 'video' : 'voice';
         const meta = { ipAddress, networkInfo: networkType || null };
+        console.log(`[create room] busy-check requestId=${requestId} caller=${callerId} callee=${calleeId} mode=${callType}`);
 
         // ── Busy check ────────────────────────────────────────────────────────
         // If the callee is already on an active call, reject immediately.
         const calleeIsBusy = await callService.isUserInActiveCall(calleeId);
+        console.log(`[create room] busy-check result requestId=${requestId} callee=${calleeId} isBusy=${calleeIsBusy}`);
         if (calleeIsBusy) {
             const busyRecord = await callService.recordBusyRejection({
                 from:        callerId,
@@ -510,6 +517,7 @@ const createRoom = async function(data, ack) {
                 ipAddress:   meta.ipAddress,
                 networkInfo: meta.networkInfo,
             });
+            console.log(`[create room] busy rejection requestId=${requestId} callHistoryId=${busyRecord._id}`);
 
             // Tell the caller the line is busy
             ack({ success: false, busy: true, error: 'User is busy on another call' });
@@ -521,6 +529,13 @@ const createRoom = async function(data, ack) {
                     from: callerObject,
                     call: { _id: busyRecord._id.toString() },
                 });
+            } else {
+                await notifyOfflineCallEvent('missed', {
+                    call: { _id: busyRecord._id.toString() },
+                    from: callerObject,
+                    to: calleeObject,
+                    mode: callType,
+                }, calleeObject);
             }
 
             return;
@@ -528,6 +543,7 @@ const createRoom = async function(data, ack) {
         // ─────────────────────────────────────────────────────────────────────
 
         const { call, token, callHistoryId } = await callService.createCallRoom(callerId, calleeId, callType, meta);
+        console.log(`[create room] room created requestId=${requestId} roomSid=${call.sid} callHistoryId=${callHistoryId}`);
 
         ack({
             success: true,
@@ -613,4 +629,46 @@ async function resolveUserByAnyId(userService, rawId) {
 
     const user = await userService.getUserById(legacyUser._id.toString(), true);
     return user || legacyUser;
+}
+
+/**
+ * Prefer VoIP for offline call events when a voipToken exists.
+ * Falls back to standard push when VoIP is unavailable or fails.
+ */
+async function notifyOfflineCallEvent(eventType, payload, targetUser) {
+    const hasVoipToken = !!targetUser?.device?.voipToken;
+    const voipService = new VoipPushNotificationService();
+
+    const sendStandard = async () => {
+        if (eventType === 'incoming') {
+            return pushNotificationService.incomingCall(payload);
+        }
+        if (eventType === 'end') {
+            return pushNotificationService.endCall(payload);
+        }
+        if (eventType === 'missed') {
+            return pushNotificationService.missedCall(payload);
+        }
+    };
+
+    const sendVoip = async () => {
+        if (eventType === 'incoming') {
+            return voipService.incomingCall(payload);
+        }
+        // VoIP service uses endCall payload format for call-ended and missed-call categories.
+        if (eventType === 'end' || eventType === 'missed') {
+            return voipService.endCall(payload);
+        }
+    };
+
+    if (hasVoipToken) {
+        try {
+            await sendVoip();
+            return;
+        } catch (ex) {
+            console.warn(`notifyOfflineCallEvent ${eventType}: VoIP failed for user=${targetUser?._id}: ${ex.message}`);
+        }
+    }
+
+    await sendStandard();
 }

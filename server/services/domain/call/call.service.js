@@ -20,6 +20,79 @@ const helper = require('../../../utils/index');
  */
 class CallService {
     /**
+     * Best-effort normalization for stale active calls that were not closed properly.
+     * Returns true when the call is still active after checks, false otherwise.
+     *
+     * @param {Object} call
+     * @returns {Promise<boolean>}
+     */
+    async normalizeActiveCallState(call) {
+        if (!call || call.endedAt || !['ringing', 'answered'].includes(call.status)) {
+            return false;
+        }
+
+        // Pending/ringing records without roomId can get stuck if the flow aborts.
+        if (!call.roomId) {
+            const startedAtTs = call.startedAt ? new Date(call.startedAt).getTime() : 0;
+            const ageMs = Date.now() - startedAtTs;
+            const STALE_PENDING_MS = 2 * 60 * 1000;
+
+            if (ageMs > STALE_PENDING_MS) {
+                await CallHistory.findByIdAndUpdate(call._id, {
+                    $set: {
+                        endedAt: new Date(),
+                        status: call.answered ? 'ended' : 'missed',
+                        durationSeconds: call.answered && call.answeredAt
+                            ? Math.max(0, Math.round((Date.now() - new Date(call.answeredAt).getTime()) / 1000))
+                            : null,
+                    },
+                });
+                return false;
+            }
+
+            return true;
+        }
+
+        // If Twilio says the room is completed (or gone), this call is no longer active.
+        try {
+            const room = await client.video.rooms(call.roomId).fetch();
+            if (!room || room.status === 'completed') {
+                await CallHistory.findByIdAndUpdate(call._id, {
+                    $set: {
+                        endedAt: new Date(),
+                        status: call.answered ? 'ended' : 'missed',
+                        durationSeconds: call.answered && call.answeredAt
+                            ? Math.max(0, Math.round((Date.now() - new Date(call.answeredAt).getTime()) / 1000))
+                            : null,
+                    },
+                });
+                return false;
+            }
+
+            return ['in-progress', 'recording', 'created'].includes(room.status) || call.status === 'ringing' || call.status === 'answered';
+        } catch (err) {
+            // Twilio 20404 means room no longer exists; treat as ended.
+            const twilioCode = err && (err.code || err.status);
+            if (twilioCode === 20404 || twilioCode === 404) {
+                await CallHistory.findByIdAndUpdate(call._id, {
+                    $set: {
+                        endedAt: new Date(),
+                        status: call.answered ? 'ended' : 'missed',
+                        durationSeconds: call.answered && call.answeredAt
+                            ? Math.max(0, Math.round((Date.now() - new Date(call.answeredAt).getTime()) / 1000))
+                            : null,
+                    },
+                });
+                return false;
+            }
+
+            // For transient Twilio errors, do not incorrectly mark ended.
+            console.warn(`normalizeActiveCallState failed for call ${call._id}: ${err.message}`);
+            return true;
+        }
+    }
+
+    /**
      * Check if a user can call another user.
      * Validates: block status, chat exists, messages exchanged, permissions granted, rate limits.
      *
@@ -223,7 +296,8 @@ class CallService {
      * Invite user to join call room — marks the call as answered.
      * Returns a Twilio token for the callee to connect with.
      */
-    async call(roomId, caller, callee) {
+    async call(roomId, caller, callee, options = {}) {
+        const { markAnswered = true } = options;
         const call = await client.video.rooms(roomId).fetch();
 
         if (!call) {
@@ -233,11 +307,13 @@ class CallService {
         const token = await this.getAccessToken(callee);
         const jwt = token.jwt || token.toJwt();
 
-        // Mark the single call document as answered
-        await CallHistory.findOneAndUpdate(
-            { roomId: call.sid },
-            { $set: { status: 'answered', answered: true, answeredAt: new Date() } }
-        );
+        if (markAnswered) {
+            // Mark the call as answered only when the callee actually joins.
+            await CallHistory.findOneAndUpdate(
+                { roomId: call.sid },
+                { $set: { status: 'answered', answered: true, answeredAt: new Date() } }
+            );
+        }
 
         return { call: call, token: jwt };
     }
@@ -281,12 +357,14 @@ class CallService {
     async addCall(data) {
         const call = new CallHistory({
             roomId:          data.roomId,
+            requestId:       data.requestId || null,
             from:            data.from,
             to:              data.userId || data.to,
             userName:        data.userName || null,
             callType:        data.callType || 'voice',
             status:          data.status || 'ringing',
             startedAt:       data.startedAt || new Date(),
+            summary:         data.summary || null,
             ipAddress:       data.ipAddress || null,
             networkInfo:     data.networkInfo || null,
         });
@@ -359,6 +437,28 @@ class CallService {
             return;
         }
 
+        // Preserve explicit terminal states written by app logic (e.g. callee declined).
+        if (['declined', 'rejected', 'error'].includes(existing.status)) {
+            if (existing.endedAt) {
+                console.log(`[Twilio webhook] preserving existing terminal status=${existing.status} for roomId=${roomId}`);
+                return existing;
+            }
+
+            const preserved = await CallHistory.findOneAndUpdate(
+                { roomId },
+                {
+                    $set: {
+                        endedAt: now,
+                        answered: existing.status === 'declined' ? false : existing.answered,
+                        answeredAt: existing.status === 'declined' ? null : existing.answeredAt,
+                        durationSeconds: existing.status === 'declined' ? null : existing.durationSeconds,
+                    },
+                },
+                { new: true }
+            );
+            return preserved;
+        }
+
         const wasAnswered = existing.answered === true;
         const answeredAt  = existing.answeredAt || null;
 
@@ -385,35 +485,67 @@ class CallService {
     /**
      * End an active call — updates the single history document with end time and duration.
      */
-    async endCall(callId, callee, caller) {
-        const call = await client.video.rooms(callId).update({
-            status: 'completed'
-        });
+    async endCall(callId, callee, caller, options = {}) {
+        const { senderId, finalStatus = null, summary = null } = options;
 
-        console.log(`Call Ended: ${call.sid}`);
+        let twilioCall = null;
+        try {
+            twilioCall = await client.video.rooms(callId).update({
+                status: 'completed'
+            });
+            console.log(`Call Ended: ${twilioCall.sid}`);
+        } catch (err) {
+            // If the room is already completed/not found, continue DB finalization.
+            const twilioCode = err && (err.code || err.status);
+            if (twilioCode === 20404 || twilioCode === 404) {
+                console.warn(`endCall: room already closed or missing for roomId=${callId}`);
+            } else {
+                console.warn(`endCall: Twilio update failed for roomId=${callId}, proceeding with DB finalization: ${err.message}`);
+            }
+        }
 
         const now = new Date();
 
         // Fetch current record to check whether it was answered
-        const existing = await CallHistory.findOne({ roomId: call.sid }).lean();
+        const existing = await CallHistory.findOne({ roomId: callId }).lean();
         const wasAnswered = existing?.answered === true;
         const answeredAt  = existing?.answeredAt || null;
 
+        const sender = senderId ? senderId.toString() : null;
+        const calleeId = callee ? callee.toString() : null;
+        const inferredDeclined = !wasAnswered && sender && calleeId && sender === calleeId;
+
+        const resolvedStatus = finalStatus || (inferredDeclined ? 'declined' : (wasAnswered ? 'ended' : 'missed'));
+
         const update = {
             endedAt: now,
-            status:  wasAnswered ? 'ended' : 'missed',
-            durationSeconds: (wasAnswered && answeredAt)
-                ? Math.round((now - new Date(answeredAt)) / 1000)
-                : null,
+            status: resolvedStatus,
+            durationSeconds: resolvedStatus === 'declined'
+                ? null
+                : ((wasAnswered && answeredAt)
+                    ? Math.round((now - new Date(answeredAt)) / 1000)
+                    : null),
         };
 
+        if (resolvedStatus === 'declined') {
+            update.answered = false;
+            update.answeredAt = null;
+            if (!summary) {
+                update.summary = 'Call declined by callee';
+            }
+        }
+
+        if (summary) {
+            update.summary = summary;
+        }
+
         const record = await CallHistory.findOneAndUpdate(
-            { roomId: call.sid },
+            { roomId: callId },
             { $set: update },
             { new: true }
         );
 
-        return record || call;
+        return record || twilioCall;
     }
 
     /**
@@ -425,16 +557,45 @@ class CallService {
     async recordPendingCall(data) {
         const call = new CallHistory({
             roomId:      null,
+            requestId:   data.requestId || null,
             from:        data.from,
             to:          data.to,
             callType:    data.callType || 'voice',
             status:      'ringing',
+            summary:     data.summary || null,
             ipAddress:   data.ipAddress || null,
             networkInfo: data.networkInfo || null,
         });
 
         await call.save();
         console.log(`Pending call recorded: ${call._id}`);
+        return call;
+    }
+
+    /**
+     * Record a declined call request into call history.
+     *
+     * @param {{ requestId, from, to, mode, ipAddress, networkInfo }} data
+     * @returns {Promise<CallHistory>}
+     */
+    async recordDeclinedCall(data) {
+        const callType = data.mode === 'video' ? 'video' : 'voice';
+
+        const call = new CallHistory({
+            roomId:      null,
+            requestId:   data.requestId || null,
+            from:        data.from,
+            to:          data.to,
+            callType,
+            status:      'declined',
+            endedAt:     new Date(),
+            summary:     'Call request declined by callee',
+            ipAddress:   data.ipAddress || null,
+            networkInfo: data.networkInfo || null,
+        });
+
+        await call.save();
+        console.log(`Declined call recorded: ${call._id}`);
         return call;
     }
 
@@ -460,12 +621,27 @@ class CallService {
      * @returns {Promise<boolean>}
      */
     async isUserInActiveCall(userId) {
-        const active = await CallHistory.findOne({
+        const activeCalls = await CallHistory.find({
             $or: [{ from: userId }, { to: userId }],
             status: { $in: ['ringing', 'answered'] },
             endedAt: null,
-        }).lean();
-        return !!active;
+        })
+            .sort({ startedAt: -1 })
+            .limit(10)
+            .lean();
+
+        if (!activeCalls || !activeCalls.length) {
+            return false;
+        }
+
+        for (const call of activeCalls) {
+            const isStillActive = await this.normalizeActiveCallState(call);
+            if (isStillActive) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -474,6 +650,21 @@ class CallService {
      * @returns {Promise<CallHistory>}
      */
     async recordBusyRejection(data) {
+        // Avoid duplicate spam when the caller retries quickly while callee is busy.
+        const recent = await CallHistory.findOne({
+            from: data.from,
+            to: data.to,
+            status: 'rejected',
+            startedAt: { $gte: new Date(Date.now() - 20 * 1000) },
+        })
+            .sort({ startedAt: -1 })
+            .lean();
+
+        if (recent) {
+            console.log(`Busy rejection deduplicated: ${recent._id}`);
+            return recent;
+        }
+
         const call = new CallHistory({
             roomId:      null,
             from:        data.from,
