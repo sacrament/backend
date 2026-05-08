@@ -296,7 +296,8 @@ class CallService {
      * Invite user to join call room — marks the call as answered.
      * Returns a Twilio token for the callee to connect with.
      */
-    async call(roomId, caller, callee) {
+    async call(roomId, caller, callee, options = {}) {
+        const { markAnswered = true } = options;
         const call = await client.video.rooms(roomId).fetch();
 
         if (!call) {
@@ -306,11 +307,13 @@ class CallService {
         const token = await this.getAccessToken(callee);
         const jwt = token.jwt || token.toJwt();
 
-        // Mark the single call document as answered
-        await CallHistory.findOneAndUpdate(
-            { roomId: call.sid },
-            { $set: { status: 'answered', answered: true, answeredAt: new Date() } }
-        );
+        if (markAnswered) {
+            // Mark the call as answered only when the callee actually joins.
+            await CallHistory.findOneAndUpdate(
+                { roomId: call.sid },
+                { $set: { status: 'answered', answered: true, answeredAt: new Date() } }
+            );
+        }
 
         return { call: call, token: jwt };
     }
@@ -354,12 +357,14 @@ class CallService {
     async addCall(data) {
         const call = new CallHistory({
             roomId:          data.roomId,
+            requestId:       data.requestId || null,
             from:            data.from,
             to:              data.userId || data.to,
             userName:        data.userName || null,
             callType:        data.callType || 'voice',
             status:          data.status || 'ringing',
             startedAt:       data.startedAt || new Date(),
+            summary:         data.summary || null,
             ipAddress:       data.ipAddress || null,
             networkInfo:     data.networkInfo || null,
         });
@@ -432,6 +437,28 @@ class CallService {
             return;
         }
 
+        // Preserve explicit terminal states written by app logic (e.g. callee declined).
+        if (['declined', 'rejected', 'error'].includes(existing.status)) {
+            if (existing.endedAt) {
+                console.log(`[Twilio webhook] preserving existing terminal status=${existing.status} for roomId=${roomId}`);
+                return existing;
+            }
+
+            const preserved = await CallHistory.findOneAndUpdate(
+                { roomId },
+                {
+                    $set: {
+                        endedAt: now,
+                        answered: existing.status === 'declined' ? false : existing.answered,
+                        answeredAt: existing.status === 'declined' ? null : existing.answeredAt,
+                        durationSeconds: existing.status === 'declined' ? null : existing.durationSeconds,
+                    },
+                },
+                { new: true }
+            );
+            return preserved;
+        }
+
         const wasAnswered = existing.answered === true;
         const answeredAt  = existing.answeredAt || null;
 
@@ -458,7 +485,9 @@ class CallService {
     /**
      * End an active call — updates the single history document with end time and duration.
      */
-    async endCall(callId, callee, caller) {
+    async endCall(callId, callee, caller, options = {}) {
+        const { senderId, finalStatus = null, summary = null } = options;
+
         let twilioCall = null;
         try {
             twilioCall = await client.video.rooms(callId).update({
@@ -482,13 +511,33 @@ class CallService {
         const wasAnswered = existing?.answered === true;
         const answeredAt  = existing?.answeredAt || null;
 
+        const sender = senderId ? senderId.toString() : null;
+        const calleeId = callee ? callee.toString() : null;
+        const inferredDeclined = !wasAnswered && sender && calleeId && sender === calleeId;
+
+        const resolvedStatus = finalStatus || (inferredDeclined ? 'declined' : (wasAnswered ? 'ended' : 'missed'));
+
         const update = {
             endedAt: now,
-            status:  wasAnswered ? 'ended' : 'missed',
-            durationSeconds: (wasAnswered && answeredAt)
-                ? Math.round((now - new Date(answeredAt)) / 1000)
-                : null,
+            status: resolvedStatus,
+            durationSeconds: resolvedStatus === 'declined'
+                ? null
+                : ((wasAnswered && answeredAt)
+                    ? Math.round((now - new Date(answeredAt)) / 1000)
+                    : null),
         };
+
+        if (resolvedStatus === 'declined') {
+            update.answered = false;
+            update.answeredAt = null;
+            if (!summary) {
+                update.summary = 'Call declined by callee';
+            }
+        }
+
+        if (summary) {
+            update.summary = summary;
+        }
 
         const record = await CallHistory.findOneAndUpdate(
             { roomId: callId },
@@ -508,16 +557,45 @@ class CallService {
     async recordPendingCall(data) {
         const call = new CallHistory({
             roomId:      null,
+            requestId:   data.requestId || null,
             from:        data.from,
             to:          data.to,
             callType:    data.callType || 'voice',
             status:      'ringing',
+            summary:     data.summary || null,
             ipAddress:   data.ipAddress || null,
             networkInfo: data.networkInfo || null,
         });
 
         await call.save();
         console.log(`Pending call recorded: ${call._id}`);
+        return call;
+    }
+
+    /**
+     * Record a declined call request into call history.
+     *
+     * @param {{ requestId, from, to, mode, ipAddress, networkInfo }} data
+     * @returns {Promise<CallHistory>}
+     */
+    async recordDeclinedCall(data) {
+        const callType = data.mode === 'video' ? 'video' : 'voice';
+
+        const call = new CallHistory({
+            roomId:      null,
+            requestId:   data.requestId || null,
+            from:        data.from,
+            to:          data.to,
+            callType,
+            status:      'declined',
+            endedAt:     new Date(),
+            summary:     'Call request declined by callee',
+            ipAddress:   data.ipAddress || null,
+            networkInfo: data.networkInfo || null,
+        });
+
+        await call.save();
+        console.log(`Declined call recorded: ${call._id}`);
         return call;
     }
 

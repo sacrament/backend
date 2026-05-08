@@ -15,6 +15,11 @@
 const { Agenda } = require('agenda');
 const { MongoBackend } = require('@agendajs/mongo-backend');
 
+const isTruthy = (value) => {
+    if (typeof value !== 'string') return false;
+    return ['1', 'true', 'yes', 'on'].includes(value.toLowerCase());
+};
+
 /** @type {Agenda | null} */
 let _agenda = null;
 
@@ -33,8 +38,15 @@ const initAgenda = async () => {
 
     require('../jobs/notifications')(_agenda);
     require('../jobs/location')(_agenda);
+    require('../jobs/call.maintenance')(_agenda);
 
     await _agenda.start();
+
+    if (isTruthy(process.env.CALLS_CLEANUP_ON_STARTUP)) {
+        await _agenda.now('calls:cleanup-stale-active', { source: 'startup' });
+        console.log('✓ Startup call cleanup job queued (calls:cleanup-stale-active)');
+    }
+
     console.log('✓ Agenda job scheduler started');
 
     return _agenda;

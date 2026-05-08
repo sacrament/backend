@@ -3,6 +3,7 @@ const Schema = mongoose.Schema;
 
 const CallHistory = new Schema({
     roomId:          { type: String, index: true },
+    requestId:       { type: String, default: null, index: true },
     from:            { type: Schema.Types.ObjectId, ref: 'User', index: true },
     to:              { type: Schema.Types.ObjectId, ref: 'User', index: true },
     userName:        { type: String, default: null },         // Twilio room uniqueName
@@ -14,9 +15,10 @@ const CallHistory = new Schema({
     endedAt:         { type: Date, default: null },
 
     // Outcome
-    status:          { type: String, enum: ['ringing', 'answered', 'ended', 'missed', 'rejected', 'error'], default: 'ringing', index: true },
+    status:          { type: String, enum: ['ringing', 'answered', 'ended', 'missed', 'rejected', 'declined', 'error'], default: 'ringing', index: true },
     durationSeconds: { type: Number, default: null },                  // filled on end
     answered:        { type: Boolean, default: false },
+    summary:         { type: String, default: null },
 
     // Network/device metadata
     ipAddress:       { type: String, default: null },
