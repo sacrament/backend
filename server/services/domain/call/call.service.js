@@ -178,22 +178,6 @@ class CallService {
             }
 
 
-            // 7. Check missed call rate limit (prevent harassment)
-            const recentMissedCalls = await CallHistory.countDocuments({
-                from:       fromUserId,
-                to:         toUserId,
-                status:     'missed',
-                startedAt:  { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
-            });
-
-            if (recentMissedCalls >= 3) {
-                return {
-                    allowed: false,
-                    reason: 'Too many missed calls. Please wait before trying again.',
-                    code: 'RATE_LIMIT_EXCEEDED'
-                };
-            }
-
             return {
                 allowed: true,
                 reason: 'Call allowed',

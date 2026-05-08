@@ -107,7 +107,7 @@ const getCallRequests = async (req, res) => {
 const twilioCallStatusCallbackDetails = async (req, res) => {
     const data = req.body;
 
-    logger.info(`[Twilio webhook] headers: ${JSON.stringify(req.headers)}`);
+    // logger.info(`[Twilio webhook] headers: ${JSON.stringify(req.headers)}`);
     logger.info(`[Twilio webhook] body: ${JSON.stringify(data)}`);
 
     try {
