@@ -86,6 +86,7 @@ class NativeApnsClient {
             let done = false;
             let status = 0;
             let apnsId = null;
+            let responseDate = null;
             let responseBody = '';
 
             const finish = (result) => {
@@ -106,6 +107,7 @@ class NativeApnsClient {
             req.on('response', (responseHeaders) => {
                 status = Number(responseHeaders[':status'] || 0);
                 apnsId = responseHeaders['apns-id'] || null;
+                responseDate = responseHeaders.date || null;
             });
 
             req.on('data', (chunk) => {
@@ -127,12 +129,18 @@ class NativeApnsClient {
                     return;
                 }
 
+                const bodyTimestamp = parsed?.timestamp;
+                const headerTimestamp = responseDate ? Date.parse(responseDate) : NaN;
+                const timestamp = Number.isFinite(bodyTimestamp)
+                    ? bodyTimestamp
+                    : (Number.isFinite(headerTimestamp) ? headerTimestamp : null);
+
                 finish({
                     ok: false,
                     status,
                     apnsId,
                     reason: parsed?.reason || 'APNsError',
-                    timestamp: parsed?.timestamp,
+                    timestamp,
                 });
             });
 
