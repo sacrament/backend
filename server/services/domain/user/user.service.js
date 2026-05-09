@@ -4,7 +4,6 @@ const mongoose = require('mongoose');
 const UserModel = mongoose.model('User');
 const DeviceModel = mongoose.model('Device');
 const ContentStorage = mongoose.model('ContentStorage');
-const APIGateway = require('../../external/aws/api.gateway');
 
 const UserRequestModel = require('../../../models/user.request').UserRequest;
 const UserConnectStatus = require('../../../models/user.connect').UserConnectStatus;
@@ -16,6 +15,10 @@ const _ = require('lodash');
 class UserService {
     constructor() {
         this.model = UserModel;
+    }
+
+    get _BlockUser() {
+        return mongoose.model('BlockUser');
     }
 
     #normalizeInterestedIn(interestedIn) {
@@ -101,20 +104,26 @@ class UserService {
     }
 
     /**
-    /**
-     * Helper method to get user by integer ID
+     * Helper method to get user by either legacy integer ID or MongoDB _id.
      *
      * @private
-     * @param {number} userId - User integer ID
+     * @param {number|string} userId - User integer ID or MongoDB ObjectId
      * @returns {Promise<Object>} User object
      * @throws {Error} If user not found
      */
     async _getUserByIntId(userId) {
-        const user = await UserModel.findOne({ id: userId })
+        let user = await UserModel.findOne({ id: userId })
             .select('_id id name email phone imageUrl status device');
+
+        if (!user && mongoose.Types.ObjectId.isValid(userId)) {
+            user = await UserModel.findById(userId)
+                .select('_id id name email phone imageUrl status device');
+        }
+
         if (!user) {
             throw new Error(`User not found with id: ${userId}`);
         }
+
         return user;
     }
 
@@ -444,7 +453,7 @@ class UserService {
 
         const promises = users.map(async (m) => {
             const member = m.user;
-            const block = new this.model({
+            const block = new this._BlockUser({
                 blocker: from,
                 blocked: member._id,
                 reason: reason || 'NO_REASON',
@@ -477,7 +486,7 @@ class UserService {
 
         const promises = users.map(async (m) => {
             const memberId = m.user._id;
-            return await this.model.findOneAndRemove({ blocker: from, blocked: memberId });
+            return await this._BlockUser.findOneAndDelete({ blocker: from, blocked: memberId });
         });
 
         const result = await Promise.all(promises);
@@ -500,7 +509,7 @@ class UserService {
             $or: [{ blocker: userId }, { blocked: userId }]
         };
 
-        const users = await this.model.find(query)
+        const users = await this._BlockUser.find(query)
             .populate({
                 path: 'blocker blocked',
                 select: '_id id name email phone imageUrl status'
@@ -514,7 +523,7 @@ class UserService {
      * Block a single user
      *
      * @param {number} userId - User ID to block
-     * @param {Object} me - Current user object with userId and token
+     * @param {Object} me - Current user object with userId
      * @param {string} reason - Reason for blocking
      * @param {string} description - Description
      * @returns {Promise<Object>} Result object with blocked flag and user
@@ -522,53 +531,50 @@ class UserService {
     async blockUser(userId, me, reason, description) {
         try {
             const myId = me.userId;
-            const userIDString = userId;
-
             const userBlocked = await this._getUserByIntId(userId);
+            const targetUserId = userBlocked._id;
 
-            const blockExists = await this.model.findOne({
+            const block = await this._BlockUser.findOne({
                 blocker: myId,
-                blocked: userIDString
+                blocked: targetUserId
             });
 
-            if (blockExists) {
+            if (block) {
                 console.log(`Block for user: ${userId} exists from blocker: ${me.userId}`);
             } else {
                 console.log(`Block for user: ${userId} does not exist from blocker: ${me.userId}. Storing`);
 
-                const block = new this.model({
+                const newBlock = new this._BlockUser({
                     blocker: myId,
-                    blocked: userIDString,
+                    blocked: targetUserId,
                     reason: reason || 'NO_REASON',
                     description: description || 'Misbehaving',
                     status: 'active'
                 });
 
-                await block.save();
+                await newBlock.save();
             }
 
             // Cascade block to all shared chats
             const ChatModel = mongoose.model('Chat');
             const now = Date.now();
 
-            // Blocked user loses canChat access
-            await ChatModel.updateMany(
-                { 'members.user': { $all: [myId, userIDString] } },
-                { $set: { 'members.$[m].canChat': false, 'members.$[m].options.blocked': true, 'members.$[m].updatedOn': now } },
-                { arrayFilters: [{ 'm.user': userIDString }] }
-            );
+            await Promise.all([
+                // Blocked user loses canChat access
+                ChatModel.updateMany(
+                    { 'members.user': { $all: [myId, targetUserId] } },
+                    { $set: { 'members.$[m].canChat': false, 'members.$[m].options.blocked': true, 'members.$[m].updatedOn': now } },
+                    { arrayFilters: [{ 'm.user': targetUserId }] }
+                ),
+                // Blocker's side is also flagged as blocked so the UI reflects it
+                ChatModel.updateMany(
+                    { 'members.user': { $all: [myId, targetUserId] } },
+                    { $set: { 'members.$[m].options.blocked': true, 'members.$[m].updatedOn': now } },
+                    { arrayFilters: [{ 'm.user': myId }] }
+                )
+            ]);
 
-            // Blocker's side is also flagged as blocked so the UI reflects it
-            await ChatModel.updateMany(
-                { 'members.user': { $all: [myId, userIDString] } },
-                { $set: { 'members.$[m].options.blocked': true, 'members.$[m].updatedOn': now } },
-                { arrayFilters: [{ 'm.user': myId }] }
-            );
-
-            const apiGateway = new APIGateway();
-            const res = await apiGateway.blockUser(userId, me.token);
-
-            console.log(`Result from API [BLOCK user]: ${res}`);
+            console.log(`Result from [BLOCK user]: stored local block and updated chats for ${userId}`);
 
             return { blocked: true, blockedUser: userBlocked };
 
@@ -582,38 +588,35 @@ class UserService {
      * Unblock a single user
      *
      * @param {number} userId - User ID to unblock
-     * @param {Object} me - Current user object with userId and token
+     * @param {Object} me - Current user object with userId
      * @returns {Promise<Object>} Result object with unblocked flag and user
      */
     async unblockUser(userId, me) {
         try {
             const myId = me.userId;
-            const userIDString = userId;
-
             const userUnblocked = await this._getUserByIntId(userId);
+            const targetUserId = userUnblocked._id;
 
-            await this.model.findOneAndRemove({ blocker: myId, blocked: userIDString });
+            await this._BlockUser.findOneAndDelete({ blocker: myId, blocked: targetUserId });
 
             // Restore chat access in all shared chats
             const ChatModel = mongoose.model('Chat');
             const now = Date.now();
 
-            await ChatModel.updateMany(
-                { 'members.user': { $all: [myId, userIDString] } },
-                { $set: { 'members.$[m].canChat': true, 'members.$[m].options.blocked': false, 'members.$[m].updatedOn': now } },
-                { arrayFilters: [{ 'm.user': userIDString }] }
-            );
+            await Promise.all([
+                ChatModel.updateMany(
+                    { 'members.user': { $all: [myId, targetUserId] } },
+                    { $set: { 'members.$[m].canChat': true, 'members.$[m].options.blocked': false, 'members.$[m].updatedOn': now } },
+                    { arrayFilters: [{ 'm.user': targetUserId }] }
+                ),
+                ChatModel.updateMany(
+                    { 'members.user': { $all: [myId, targetUserId] } },
+                    { $set: { 'members.$[m].options.blocked': false, 'members.$[m].updatedOn': now } },
+                    { arrayFilters: [{ 'm.user': myId }] }
+                )
+            ]);
 
-            await ChatModel.updateMany(
-                { 'members.user': { $all: [myId, userIDString] } },
-                { $set: { 'members.$[m].options.blocked': false, 'members.$[m].updatedOn': now } },
-                { arrayFilters: [{ 'm.user': myId }] }
-            );
-
-            const apiGateway = new APIGateway();
-            const res = await apiGateway.unblockUser(userId, me.token);
-
-            console.log(`Result from API [UNBLOCK user]: ${res}`);
+            console.log(`Result from [UNBLOCK user]: removed local block and updated chats for ${userId}`);
 
             return { unblocked: true, userUnblocked: userUnblocked };
 
