@@ -467,6 +467,23 @@ class UserService {
         const result = await Promise.all(promises);
         console.log(`Result from [BLOCK users]: ${result.length} users blocked`);
 
+        // Notify all blocked users in real-time
+        try {
+            const io = getIO();
+            const blocker = await UserModel.findById(from).select('_id id name imageUrl');
+            
+            users.forEach(user => {
+                const blockedId = user.user._id.toString();
+                io.to(blockedId).emit('member blocked chat', {
+                    blockedBy: blocker,
+                    chatId: undefined,
+                    blockReason: 'Blocked via chat'
+                });
+            });
+        } catch (ioErr) {
+            console.warn(`Failed to notify blocked users via socket: ${ioErr.message}`);
+        }
+
         return result;
     }
 
@@ -491,6 +508,23 @@ class UserService {
 
         const result = await Promise.all(promises);
         console.log(`Result from [UNBLOCK users]: ${result.length} users unblocked`);
+
+        // Notify all unblocked users in real-time
+        try {
+            const io = getIO();
+            const unblocker = await UserModel.findById(from).select('_id id name imageUrl');
+            
+            users.forEach(user => {
+                const unblockedId = user.user._id.toString();
+                io.to(unblockedId).emit('member blocked chat', {
+                    unblockedBy: unblocker,
+                    chatId: undefined,
+                    blockStatus: false
+                });
+            });
+        } catch (ioErr) {
+            console.warn(`Failed to notify unblocked users via socket: ${ioErr.message}`);
+        }
 
         return result;
     }
@@ -574,6 +608,19 @@ class UserService {
                 )
             ]);
 
+            // Notify blocked user in real-time so they disappear from blocker's radar instantly
+            try {
+                const io = getIO();
+                const blocker = await UserModel.findById(myId).select('_id id name imageUrl');
+                io.to(targetUserId.toString()).emit('member blocked chat', {
+                    blockedBy: blocker,
+                    chatId: undefined,
+                    blockReason: reason || 'NO_REASON'
+                });
+            } catch (ioErr) {
+                console.warn(`Failed to notify blocked user via socket: ${ioErr.message}`);
+            }
+
             console.log(`Result from [BLOCK user]: stored local block and updated chats for ${userId}`);
 
             return { blocked: true, blockedUser: userBlocked };
@@ -615,6 +662,19 @@ class UserService {
                     { arrayFilters: [{ 'm.user': myId }] }
                 )
             ]);
+
+            // Notify unblocked user in real-time
+            try {
+                const io = getIO();
+                const unblocker = await UserModel.findById(myId).select('_id id name imageUrl');
+                io.to(targetUserId.toString()).emit('member blocked chat', {
+                    unblockedBy: unblocker,
+                    chatId: undefined,
+                    blockStatus: false
+                });
+            } catch (ioErr) {
+                console.warn(`Failed to notify unblocked user via socket: ${ioErr.message}`);
+            }
 
             console.log(`Result from [UNBLOCK user]: removed local block and updated chats for ${userId}`);
 
