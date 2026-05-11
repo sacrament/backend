@@ -615,6 +615,7 @@ class UserService {
                 io.to(targetUserId.toString()).emit('member blocked chat', {
                     blockedBy: blocker,
                     chatId: undefined,
+                    blockStatus: true,
                     blockReason: reason || 'NO_REASON'
                 });
             } catch (ioErr) {
