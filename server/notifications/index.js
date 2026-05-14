@@ -513,11 +513,21 @@ class PushNotificationService {
                     }
                 }
 
-                // Check notification preference if one was specified for this push type
+                // Check all relevant notification preferences for push eligibility
                 const prefs = user.notificationPreferences ?? (await getUserPreferences(user._id.toString()));
-                if (data.pref && prefs?.[data.pref] === false) {
-                    console.log(`push:_send — User ${user._id?.toString()} has ${data.pref} disabled, skipping`);
-                    return { skipped: true, reason: 'preference_disabled' };
+                const requiredPrefs = [
+                    'newMessages',
+                    'chatRequests',
+                    'connectionRequests',
+                    'nearbyWinks',
+                    'sound',
+                    'vibration',
+                    'badge'
+                ];
+                const missingPref = requiredPrefs.find((key) => prefs?.[key] === false);
+                if (missingPref) {
+                    console.log(`push:_send — User ${user._id?.toString()} has ${missingPref} disabled, skipping push notification`);
+                    return { skipped: true, reason: `preference_disabled:${missingPref}` };
                 }
 
                 // Validate device exists
