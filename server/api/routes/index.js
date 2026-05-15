@@ -3,6 +3,16 @@ const crypto        = require('crypto');
 const rateLimit     = require('express-rate-limit');
 const { ipKeyGenerator } = require('express-rate-limit');
 const { verifyToken, verifyClientToken } = require('../../middleware/verify');
+const authController = require('../controllers/auth.controller');
+
+const optionalVerifyToken = async (req, res, next) => {
+    if (!req.headers.authorization) {
+        console.log(`optionalVerifyToken: No Authorization header present`);
+        return next();
+    }
+    console.log(`optionalVerifyToken: Authorization header found, verifying token`);
+    return verifyToken(req, res, next);
+};
 
 // Route modules
 const authRoutes         = require('./auth');
@@ -44,12 +54,28 @@ const otpLimiter = rateLimit({
     legacyHeaders: false,
 });
 
+const appleRevokeLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 30,
+    keyGenerator: (req) => {
+        const userId = req.decodedToken?.userId || req.body?.appleUserId || ipKeyGenerator(req);
+        return `revoke:${userId}`;
+    },
+    skip: (req) => !req.decodedToken?.userId && !req.body?.appleUserId,
+    message: { status: 'error', code: 429, message: 'Too many revoke requests, please try again later' },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 const router = express.Router();
 
 router.get('/', (req, res) => res.json({ title: 'Winky' }));
 router.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
+
+// Dedicated revoke route supporting both authenticated and legacy payload flows
+router.post('/api/auth/apple/revoke', appleRevokeLimiter, optionalVerifyToken, authController.appleRevoke);
 
 router.use('/api/webhook', webhookRoutes); // For Twilio status callbacks that don't have client token
 

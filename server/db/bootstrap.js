@@ -28,6 +28,7 @@ module.exports = {
     require('../models/moderation.log');
     require('../models/user.ban');
     require('../models/user.action.log');
+    require('../models/deleted.user');
     require('../models/pending.socket.event');
   },
 

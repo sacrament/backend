@@ -8,6 +8,7 @@ const {
     getDevices,
     enableDevice,
     disableDevice,
+    deleteDevice,
     updateToken,
     updateState,
 } = require('../controllers/device.controller');
@@ -23,6 +24,9 @@ router.put('/:id/enable', verifyToken, enableDevice);
 
 // PUT /api/devices/:id/disable
 router.put('/:id/disable', verifyToken, disableDevice);
+
+// DELETE /api/devices/:id
+router.delete('/:id', verifyToken, deleteDevice);
 
 // PUT /api/devices/:id/token
 router.put('/:id/token', verifyToken, updateToken);

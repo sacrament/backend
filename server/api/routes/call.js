@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
-const { getAccessToken, declineCall, callHistory, storeCallInfo, twilioCallStatusCallbackDetails, callDetails, deleteCallsByUser, getCallRequests } = require('../controllers/call.controller');
+const { getAccessToken, declineCall, callHistory, storeCallInfo, twilioCallStatusCallbackDetails, callDetails, deleteCallsByUser, getCallRequests, deleteCallById } = require('../controllers/call.controller');
 const { verifyToken } = require('../../middleware/verify');
 
 router.get('/', (req, res)  => {
@@ -21,5 +21,8 @@ router.post('/deleteByUser', verifyToken, deleteCallsByUser);
 
 // get call requests for the authenticated user (optional ?response= filter)
 router.get('/requests', verifyToken, getCallRequests);
+
+// Delete a single call by its MongoDB _id
+router.delete('/:id', verifyToken, deleteCallById);
 
 module.exports = router;

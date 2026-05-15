@@ -116,6 +116,27 @@ const disableDevice = async (req, res) => {
 };
 
 /**
+ * DELETE /api/devices/:id
+ * Soft-delete a device (mark deleted and clear tokens)
+ */
+const deleteDevice = async (req, res) => {
+    try {
+        const userId = req.decodedToken.userId;
+        const { id } = req.params;
+
+        const device = await deviceService.deleteDevice(id, userId);
+
+        return res.status(200).json({ status: 'success', device });
+    } catch (ex) {
+        if (ex.message === 'Device not found') {
+            return res.status(404).json({ status: 'error', message: ex.message });
+        }
+        logger.error('Delete device error:', ex);
+        return res.status(500).json({ status: 'error', message: ex.message });
+    }
+};
+
+/**
  * PUT /api/devices/:id/token
  * Update the push notification token for a device
  */
@@ -197,6 +218,7 @@ module.exports = {
     getDevices,
     enableDevice,
     disableDevice,
+    deleteDevice,
     updateToken,
     updateState,
 };

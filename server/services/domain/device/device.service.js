@@ -192,6 +192,50 @@ class DeviceService {
     }
 
     /**
+     * Soft-delete a device for a user.
+     * Clears push tokens and marks status as deleted.
+     *
+     * @param {string} deviceId
+     * @param {string} userId
+     * @returns {Promise<Object>}
+     */
+    async deleteDevice(deviceId, userId) {
+        const device = await DeviceModel.findOneAndUpdate(
+            { _id: deviceId, user: userId },
+            { $set: { status: 'deleted', token: null, voipToken: null, updatedOn: new Date() } },
+            { new: true }
+        );
+
+        if (!device) throw new Error('Device not found');
+
+        await UserModel.updateOne(
+            { _id: userId, device: device._id },
+            { $set: { device: null } }
+        );
+
+        return device;
+    }
+
+    /**
+     * Disable all devices for a user (global logout safety).
+     * Clears push tokens so no APNs/GCM/VoIP notification is sent after logout.
+     *
+     * @param {string} userId
+     * @returns {Promise<void>}
+     */
+    async disableAllDevicesForUser(userId) {
+        await DeviceModel.updateMany(
+            { user: userId, status: { $in: ['active', 'disabled'] } },
+            { $set: { status: 'disabled', token: null, voipToken: null, updatedOn: new Date() } }
+        );
+
+        await UserModel.updateOne(
+            { _id: userId },
+            { $set: { device: null } }
+        );
+    }
+
+    /**
      * Update push notification token for a device
      * @param {string} deviceId
      * @param {string} userId

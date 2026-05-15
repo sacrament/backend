@@ -5,7 +5,8 @@
  */
 
 if (process.env.ENV_NAME !== 'production') {
-    require('dotenv').config({ path: '.env.local' });
+    const path = require('path');
+    require('dotenv').config({ path: path.resolve(__dirname, '.env.local') });
 }
 
 const express      = require('express');
