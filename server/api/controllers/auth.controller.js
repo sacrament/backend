@@ -1,4 +1,83 @@
 /**
+ * Apple Token Revocation
+ * POST /api/auth/apple/revoke
+ * 
+ * Supports multiple authentication flows:
+ * 1. Authenticated: Authorization: Bearer <accessToken> header
+ * 2. With Apple ID: Body contains { appleUserId: "...", appleRefreshToken?: "...", appleAccessToken?: "..." }
+ * 3. Direct tokens: Body contains { appleRefreshToken: "...", appleAccessToken: "..." } (requires appleUserId for user lookup)
+ */
+const appleRevoke = async (req, res) => {
+  try {
+    const userId = req.decodedToken?.userId;
+    const appleUserId = req.body?.appleUserId;
+    
+    logger.info(`Apple revoke: Attempting revoke. userId from token=${userId}, appleUserId from body=${appleUserId}`);
+    
+    if (!userId && !appleUserId) {
+      logger.warn(`Apple revoke: Neither userId (from auth token) nor appleUserId (from body) provided. Request must include either: (1) Authorization: Bearer <token> header, or (2) appleUserId in request body`);
+      return res.status(400).json({
+        status: 'error',
+        message: 'Authentication required. Provide either: (1) Authorization header with session token, or (2) appleUserId in request body'
+      });
+    }
+    
+    const user = userId
+      ? await userService.model.findById(userId)
+      : await userService.model.findOne({ appleId: appleUserId });
+
+    if (!user) {
+      logger.warn(`Apple revoke: User lookup failed. Searched for userId=${userId} or appleId=${appleUserId}. Found: null`);
+      return res.status(404).json({ status: 'error', message: 'User not found' });
+    }
+
+    logger.info(`Apple revoke: Found user ${user._id} (appleId=${user.appleId})`);
+
+    // Gather tokens from request body or user document (in priority order)
+    const refreshTokenToRevoke =
+      req.body?.appleRefreshToken ||
+      req.body?.refreshToken ||
+      req.body?.refresh_token ||
+      user.appleRefreshToken;
+
+    const accessTokenToRevoke =
+      req.body?.appleAccessToken ||
+      req.body?.accessToken ||
+      req.body?.access_token ||
+      req.body?.appleToken ||
+      req.body?.idToken ||
+      req.body?.identityToken ||
+      user.appleAccessToken;
+
+    // Build candidates from stored tokens only
+    // NOTE: Do NOT exchange authorization codes in revoke — they are single-use and belong in sign-in only
+    const tokenCandidates = [];
+    if (refreshTokenToRevoke) tokenCandidates.push({ token: refreshTokenToRevoke, tokenTypeHint: 'refresh_token' });
+    if (accessTokenToRevoke) tokenCandidates.push({ token: accessTokenToRevoke, tokenTypeHint: 'access_token' });
+
+    if (tokenCandidates.length === 0) {
+      logger.warn(`Apple revoke: No tokens available to revoke. User ${user._id} has: refresh=${!!user.appleRefreshToken}, access=${!!user.appleAccessToken}. iOS must pass tokens via body or user must have signed in with authorization code exchange.`);
+      return res.status(400).json({
+        status: 'error',
+        message: 'No Apple tokens found. Pass appleRefreshToken/appleAccessToken in request body, or ensure user signed in with authorization code.'
+      });
+    }
+
+    await authService.revokeAppleTokens(tokenCandidates);
+
+    user.appleAccessToken = null;
+    user.appleRefreshToken = null;
+    user.appleId = null;
+    user.updatedOn = new Date();
+    await user.save();
+
+    return res.status(200).json({ status: 'success', message: 'Apple account revoked and unlinked' });
+  } catch (error) {
+    logger.error('Apple revoke error:', error);
+    return res.status(500).json({ status: 'error', message: 'Failed to revoke Apple token' });
+  }
+};
+/**
  * Authentication Controller
  * Handles user authentication logic for Facebook, Apple, and Phone OTP
  */
@@ -25,13 +104,23 @@ const GLOBAL_OTP_MAX_PER_HOUR = parseInt(process.env.OTP_GLOBAL_HOURLY_LIMIT) ||
  */
 const appleAuth = async (req, res) => {
   try {
-    const { appleToken } = req.body;
+    const { appleToken, email, name } = req.body;
+    const appleAccessToken = req.body?.appleAccessToken || req.body?.accessToken || req.body?.access_token || null;
+    const appleRefreshToken = req.body?.appleRefreshToken || req.body?.refreshToken || req.body?.refresh_token || null;
+    const appleAuthorizationCode = req.body?.appleAuthorizationCode || req.body?.authorizationCode || req.body?.authorization_code || null;
 
     if (!appleToken || appleToken.trim() === '') {
       return res.status(400).json({ status: 'error', code: 1001, message: 'Apple token is required and cannot be blank' });
     }
 
-    const { user, accessToken, refreshToken, clientToken } = await authService.authenticateApple(appleToken);
+    const { user, accessToken, refreshToken, clientToken, accountExisted } = await authService.authenticateApple(
+      appleToken,
+      email,
+      name,
+      appleAccessToken || appleToken || null,
+      appleRefreshToken || null,
+      appleAuthorizationCode || null
+    );
 
     return res.status(200).json({
       status: 'success',
@@ -39,6 +128,7 @@ const appleAuth = async (req, res) => {
       refreshToken,
       clientToken,
       user: formatUserResponse(user),
+      hasAccount: accountExisted,
       otpRequired: false
     });
 
@@ -270,13 +360,9 @@ const logout = async (req, res) => {
     const userId = req.decodedToken?.userId;
 
     if (userId) {
-      const user = await userService.getUserById(userId);
-
       await Promise.all([
         userService.clearRefreshToken(userId),
-        user?.device
-          ? deviceService.disableDevice(user.device._id?.toString() ?? user.device.toString(), userId)
-          : Promise.resolve(),
+        deviceService.disableAllDevicesForUser(userId),
       ]);
     }
 
@@ -344,4 +430,4 @@ function formatUserResponse(user) {
   };
 }
 
-module.exports = { appleAuth, googleAuth, requestPhoneOtp, phoneAuth, refreshToken, logout };
+module.exports = { appleAuth, googleAuth, requestPhoneOtp, phoneAuth, refreshToken, logout, appleRevoke };

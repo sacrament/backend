@@ -23,6 +23,22 @@ function validClientEpochs() {
     return [current, current - 1];
 }
 
+/**
+ * Allow inactive/deleted accounts to pass auth only for deletion endpoints.
+ * This keeps account deletion idempotent while still protecting other routes.
+ */
+function isAccountDeletionRequest(request) {
+    if (request.method !== 'DELETE') return false;
+
+    const baseUrl = request.baseUrl || '';
+    const path = request.path || '';
+
+    return (
+        (baseUrl === '/api/user' && path === '/me/deleteAccount') ||
+        (baseUrl === '/api/me' && (path === '/' || path === ''))
+    );
+}
+
 module.exports = {
     /**
      * Verify user authentication token (per-request JWT, 30-day lifetime).
@@ -40,7 +56,9 @@ module.exports = {
         let decoded;
         try {
             decoded = jwt.verify(token, config.APP_SECRET);
+            console.log(`verifyToken: Token verified successfully. userId=${decoded.userId}`);
         } catch (err) {
+            console.error(`verifyToken: Token verification failed. ${err.name}: ${err.message}`);
             if (err.name === 'TokenExpiredError') {
                 return response.status(401).json({ status: 'error', code: 'TOKEN_EXPIRED', message: 'Your session has expired. Please log in again.' });
             }
@@ -50,7 +68,7 @@ module.exports = {
         // Check current account status on every request so blocked/deleted
         // users are denied immediately without waiting for token expiry.
         try {
-            const user = await mongoose.model('User').findById(decoded.userId).select('status').lean();
+            const user = await mongoose.model('User').findById(decoded.userId).select('status deleted').lean();
 
             if (!user) {
                 return response.status(401).json({ status: 'error', code: 'ACCOUNT_NOT_FOUND', message: 'Account not found. Please log in again.' });
@@ -60,8 +78,10 @@ module.exports = {
                 return response.status(403).json({ status: 'error', code: 'ACCOUNT_BLOCKED', message: 'Your account has been suspended. Please contact support.' });
             }
 
-            if (user.status === 'inactive' || user.deleted) {
-                return response.status(403).json({ status: 'error', code: 'ACCOUNT_INACTIVE', message: 'Your account is no longer active.' });
+            if (user.status === 'inactive' || user.status === 'deleted' || user.deleted) {
+                if (!isAccountDeletionRequest(request)) {
+                    return response.status(403).json({ status: 'error', code: 'ACCOUNT_INACTIVE', message: 'Your account is no longer active.' });
+                }
             }
         } catch (err) {
             logger.error('verifyToken user lookup error:', err.message);
