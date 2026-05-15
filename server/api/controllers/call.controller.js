@@ -118,7 +118,7 @@ const twilioCallStatusCallbackDetails = async (req, res) => {
         // Still return 200 so Twilio does not retry
         res.status(200).json({ status: 'error', message: err.message });
     }
-}
+};
 
 /**
  * POST /api/call/deleteByUser
@@ -140,6 +140,27 @@ const deleteCallsByUser = async (req, res) => {
     }
 };
 
+/**
+ * DELETE /api/call/:id
+ * Deletes a single call history record by its MongoDB _id.
+ */
+const deleteCallById = async (req, res) => {
+    const { id } = req.params;
+    if (!id) return res.status(400).json({ status: 'error', message: 'Call ID is required' });
+    try {
+        const mongoose = require('mongoose');
+        const CallHistory = mongoose.model('CallHistory');
+        const result = await CallHistory.deleteOne({ _id: id });
+        if (result.deletedCount === 0) {
+            return res.status(404).json({ status: 'error', message: 'Call not found' });
+        }
+        return res.status(200).json({ success: true, deletedCount: result.deletedCount });
+    } catch (error) {
+        logger.error('Delete call by id error:', error);
+        return res.status(500).json({ status: 'error', message: 'Failed to delete call' });
+    }
+};
+
 module.exports = {
     getAccessToken,
     declineCall,
@@ -149,4 +170,5 @@ module.exports = {
     callDetails,
     deleteCallsByUser,
     getCallRequests,
+    deleteCallById,
 };
