@@ -1048,12 +1048,10 @@ const reactOnMessage = async function(data, ack) {
                 const memberIsOnline = await chatSocketService.isUserConnected(to);
                 if (memberIsOnline) {
                     this.to(to).emit('message reaction', {
-                        reaction: {
-                            message: { id: message._id },
-                            kind: result.reaction
-                        },
-                        chat: { id: chat._id },
-                        by: from.id,
+                        reaction: result.reaction._doc || result.reaction,
+                        messageId:  message._id.toString(),
+                        chatId: chat._id.toString(),
+                        from: userFrom,
                         date: Date.now()
                     });
                     onlineReceivers.push(to);
@@ -1065,9 +1063,9 @@ const reactOnMessage = async function(data, ack) {
         await Promise.allSettled(notifyPromises);
 
         const payload = {
-            message: message._doc || message,
-            chat,
-            reaction: result.reaction,
+            messageId: message._id.toString(),
+            chatId: chat._id.toString(),
+            reaction: result.reaction._doc || result.reaction,
             offlineReceivers,
             title: 'Message reaction is stored',
             from: userFrom
