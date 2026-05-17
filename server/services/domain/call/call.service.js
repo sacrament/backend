@@ -444,7 +444,11 @@ class CallService {
         }
 
         const wasAnswered = existing.answered === true;
-        const answeredAt  = existing.answeredAt || null;
+        let answeredAt  = existing.answeredAt || null;
+        // If the call was answered but answeredAt is missing, set it to startedAt or now
+        if (wasAnswered && !answeredAt) {
+            answeredAt = existing?.startedAt ? new Date(existing.startedAt) : now;
+        }
 
         const update = {
             endedAt: now,
@@ -455,6 +459,9 @@ class CallService {
                     ? Math.round((now - new Date(answeredAt)) / 1000)
                     : null),
         };
+        if (wasAnswered && !existing.answeredAt) {
+            update.answeredAt = answeredAt;
+        }
 
         const call = await CallHistory.findOneAndUpdate(
             { roomId },
@@ -493,7 +500,12 @@ class CallService {
         // Fetch current record to check whether it was answered
         const existing = await CallHistory.findOne({ roomId: callId }).lean();
         const wasAnswered = existing?.answered === true;
-        const answeredAt  = existing?.answeredAt || null;
+        let answeredAt  = existing?.answeredAt || null;
+
+        // If the call was answered but answeredAt is missing, set it to startedAt or now
+        if (wasAnswered && !answeredAt) {
+            answeredAt = existing?.startedAt ? new Date(existing.startedAt) : now;
+        }
 
         const sender = senderId ? senderId.toString() : null;
         const calleeId = callee ? callee.toString() : null;
@@ -506,10 +518,14 @@ class CallService {
             status: resolvedStatus,
             durationSeconds: resolvedStatus === 'declined'
                 ? null
-                : ((wasAnswered && answeredAt)
+                : (wasAnswered && answeredAt
                     ? Math.round((now - new Date(answeredAt)) / 1000)
                     : null),
         };
+
+        if (wasAnswered && !existing.answeredAt) {
+            update.answeredAt = answeredAt;
+        }
 
         if (resolvedStatus === 'declined') {
             update.answered = false;
