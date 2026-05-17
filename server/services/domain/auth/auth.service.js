@@ -100,7 +100,7 @@ class AuthService {
         }
         const user = await userService.findOrCreateByPhone(phoneNumber);
         await this.markOTPUsed(partition);
-        return user;
+        return { user, ...(await this.issueTokens(user)) };
     }
 
     async markOTPUsed(partition) {
