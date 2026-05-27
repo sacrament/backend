@@ -104,7 +104,7 @@ const GLOBAL_OTP_MAX_PER_HOUR = parseInt(process.env.OTP_GLOBAL_HOURLY_LIMIT) ||
  */
 const appleAuth = async (req, res) => {
   try {
-    const { appleToken, email, name } = req.body;
+    const { appleToken, email, name, deviceId } = req.body;
     const appleAccessToken = req.body?.appleAccessToken || req.body?.accessToken || req.body?.access_token || null;
     const appleRefreshToken = req.body?.appleRefreshToken || req.body?.refreshToken || req.body?.refresh_token || null;
     const appleAuthorizationCode = req.body?.appleAuthorizationCode || req.body?.authorizationCode || req.body?.authorization_code || null;
@@ -119,7 +119,8 @@ const appleAuth = async (req, res) => {
       name,
       appleAccessToken || appleToken || null,
       appleRefreshToken || null,
-      appleAuthorizationCode || null
+      appleAuthorizationCode || null,
+      deviceId || null
     );
 
     return res.status(200).json({
@@ -147,13 +148,13 @@ const appleAuth = async (req, res) => {
  */
 const googleAuth = async (req, res) => {
   try {
-    const { idToken } = req.body;
+    const { idToken, deviceId } = req.body;
 
     if (!idToken || idToken.trim() === '') {
       return res.status(400).json({ status: 'error', code: 1019, message: 'Google ID token is required' });
     }
 
-    const { user, accessToken, refreshToken, clientToken } = await authService.authenticateGoogle(idToken);
+    const { user, accessToken, refreshToken, clientToken } = await authService.authenticateGoogle(idToken, deviceId || null);
 
     return res.status(200).json({
       status: 'success',
@@ -294,7 +295,7 @@ const requestPhoneOtp = async (req, res) => {
  */
 const phoneAuth = async (req, res) => {
   try {
-    const { phoneNumber, otp } = req.body;
+    const { phoneNumber, otp, deviceId } = req.body;
 
     if (!phoneNumber || !/^\+\d{8,15}$/.test(phoneNumber)) {
       return res.status(400).json({ status: 'error', code: 1012, message: 'Invalid phone number format. Must be in E.164 format (e.g. +14165550000)' });
@@ -304,7 +305,7 @@ const phoneAuth = async (req, res) => {
       return res.status(400).json({ status: 'error', code: 1013, message: 'OTP must be exactly 4 digits' });
     }
 
-    const { user, accessToken, refreshToken, clientToken } = await authService.authenticatePhone(phoneNumber, otp);
+    const { user, accessToken, refreshToken, clientToken } = await authService.authenticatePhone(phoneNumber, otp, deviceId || null);
 
     return res.status(200).json({
       status: 'success',
