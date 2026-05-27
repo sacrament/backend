@@ -85,7 +85,7 @@ class AuthService {
         return { valid: true };
     }
 
-    async authenticatePhone(phoneNumber, otp) {
+    async authenticatePhone(phoneNumber, otp, deviceId = null) {
         const partition = this.hashPhone(phoneNumber);
         const verification = await this.verifyOtp(partition, otp);
         if (!verification.valid) {
@@ -100,7 +100,7 @@ class AuthService {
         }
         const user = await userService.findOrCreateByPhone(phoneNumber);
         await this.markOTPUsed(partition);
-        return { user, ...(await this.issueTokens(user)) };
+        return { user, ...(await this.issueTokens(user, deviceId)) };
     }
 
     async markOTPUsed(partition) {
@@ -110,14 +110,24 @@ class AuthService {
         );
     }
 
-    async issueTokens(user) {
+    async issueTokens(user, deviceId = null) {
         const userId = user._id.toString();
         if (user.refreshToken) {
             try {
                 const { getIO } = require('../../../socket/io');
-                getIO().to(userId).emit('session displaced', {
-                    reason: 'Your account was signed in on another device.',
-                });
+                const io = getIO();
+                
+                // Get all sockets for this user
+                const userSockets = await io.in(userId).fetchSockets();
+                
+                // Emit to all sockets except the one with matching deviceId
+                for (const socket of userSockets) {
+                    if (!deviceId || socket.deviceId !== deviceId) {
+                        socket.emit('session displaced', {
+                            reason: 'Your account was signed in on another device.',
+                        });
+                    }
+                }
             } catch (_) { }
             await userService.disableUserDeviceFor(userId);
         }
@@ -133,7 +143,7 @@ class AuthService {
         };
     }
 
-    async authenticateApple(appleToken, email, name, appleAccessToken, appleRefreshToken, appleAuthorizationCode) {
+    async authenticateApple(appleToken, email, name, appleAccessToken, appleRefreshToken, appleAuthorizationCode, deviceId = null) {
         const jwt = require('jsonwebtoken');
         let resolvedAppleAccessToken = appleAccessToken || null;
         let resolvedAppleRefreshToken = appleRefreshToken || null;
@@ -184,7 +194,7 @@ class AuthService {
             resolvedAppleRefreshToken,
         );
         console.log(`Apple auth: Stored user ${user._id} with refresh=${!!user.appleRefreshToken}, access=${!!user.appleAccessToken}`);
-        return { user, accountExisted, ...(await this.issueTokens(user)) };
+        return { user, accountExisted, ...(await this.issueTokens(user, deviceId)) };
     }
 
     async verifyAppleToken(token) {
@@ -488,7 +498,7 @@ class AuthService {
         };
     }
 
-    async authenticateGoogle(idToken) {
+    async authenticateGoogle(idToken, deviceId = null) {
         const clientId = process.env.GOOGLE_CLIENT_ID;
         if (!clientId) throw new Error('GOOGLE_CLIENT_ID is not configured');
         const client = new OAuth2Client(clientId);
@@ -506,7 +516,7 @@ class AuthService {
             picture: payload.picture || null,
         };
         const user = await userService.findOrCreateByGoogle(googleUser);
-        return { user, ...(await this.issueTokens(user)) };
+        return { user, ...(await this.issueTokens(user, deviceId)) };
     }
 
     async _sendOtp(phoneNumber, otp) {

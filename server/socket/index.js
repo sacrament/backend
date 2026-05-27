@@ -167,7 +167,8 @@ const onConnected = async (socket, io) => {
             id: userId,
             socket: socket.id,
             type: socket.decoded_token?.type || 'mobile',
-            token: socket.token
+            token: socket.token,
+            deviceId: socket.deviceId || null
         };
 
         // Check if user already has an active socket connection
@@ -194,22 +195,24 @@ const onConnected = async (socket, io) => {
                 }
                 
                 // Now register the new socket
-                console.log(`➕ User connected: ${userId} (${socket.user.type}) socket: ${socket.id}`);
+                console.log(`➕ User connected: ${userId} (${socket.user.type}) socket: ${socket.id}, deviceId: ${socket.deviceId || 'none'}`);
                 userSessions.set(userId, {
                     userId,
                     socketId: socket.id,
                     type: socket.user.type,
+                    deviceId: socket.deviceId || null,
                     connectedAt: Date.now(),
                     lastSeen: Date.now()
                 });
             }
         } else {
             // First connection for this user
-            console.log(`➕ User connected: ${userId} (${socket.user.type}) socket: ${socket.id}`);
+            console.log(`➕ User connected: ${userId} (${socket.user.type}) socket: ${socket.id}, deviceId: ${socket.deviceId || 'none'}`);
             userSessions.set(userId, {
                 userId,
                 socketId: socket.id,
                 type: socket.user.type,
+                deviceId: socket.deviceId || null,
                 connectedAt: Date.now(),
                 lastSeen: Date.now()
             });

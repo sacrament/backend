@@ -23,6 +23,12 @@ function authenticateSocket(socket, next) {
       socket.handshake.query.token || 
       socket.handshake.headers.authorization;
 
+    // Get deviceId from handshake
+    const deviceId = 
+      socket.handshake.auth.deviceId || 
+      socket.handshake.query.deviceId || 
+      null;
+
     // Remove Bearer prefix if present
     if (token && token.startsWith('Bearer ')) {
       token = token.slice(7);
@@ -49,12 +55,13 @@ function authenticateSocket(socket, next) {
         return next(new Error('Authentication error: Invalid token'));
       }
 
-      // Attach decoded token to socket
+      // Attach decoded token and deviceId to socket
       socket.decoded_token = decoded;
       socket.userId = decoded.userId;
       socket.token = token;
+      socket.deviceId = deviceId;
 
-      console.log(`[Socket Auth] ✓ Authentication successful for user: ${decoded.userId} (socket: ${socket.id})`);
+      console.log(`[Socket Auth] ✓ Authentication successful for user: ${decoded.userId} (socket: ${socket.id}, deviceId: ${deviceId || 'none'})`);
       next();
     });
   } catch (error) {

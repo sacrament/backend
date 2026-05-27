@@ -988,6 +988,7 @@ const messages = async function(data, ack) {
 const reactOnMessage = async function(data, ack) {
     const startTime = Date.now();
 
+
     try {
         if (!data || typeof data !== 'object') {
             throw new Error('Invalid reaction payload');
@@ -1010,16 +1011,12 @@ const reactOnMessage = async function(data, ack) {
 
         logger.debug(`React on Message: messageId=${messageId}`);
 
-        // Save the reaction first.
-        const result = await messageService.reactOnMessage(messageId, reaction, from.id, date);
-        if (!result || !result.message) {
-            throw new Error('Failed to save reaction');
+        // Get the message and chat context first (to check block status before saving reaction)
+        const message = await messageService.getByIdOrClientId(messageId);
+        if (!message) {
+            throw new Error('Message not found');
         }
 
-        const message = result.message;
-        const userFrom = await userService.getUserById(from.id, true);
-
-        // Get chat members and distribute reaction updates.
         const rawChatId = message?.chatId;
         const normalizedChatId = (typeof rawChatId === 'string')
             ? rawChatId
@@ -1033,6 +1030,27 @@ const reactOnMessage = async function(data, ack) {
         if (!chat || !Array.isArray(chat.members)) {
             throw new Error('Chat not found for reaction message');
         }
+
+        // Block check: reject if sender is blocked by any member (mirroring message logic)
+        const senderId = from.id;
+        const blockedForSender = chat.members.some(
+            member => member.user && member.user._id && member.user._id.toString() === senderId && member.options && member.options.blocked
+        );
+        if (blockedForSender) {
+            if (typeof ack === 'function') {
+                ack({ error: 'You are blocked and cannot react to messages in this chat.', code: 'REACTION_BLOCKED' });
+            }
+            logger.info(`Reaction rejected: user ${senderId} is blocked in chat ${normalizedChatId}`);
+            return;
+        }
+
+        // Save the reaction after passing block check
+        const result = await messageService.reactOnMessage(messageId, reaction, from.id, date);
+        if (!result || !result.message) {
+            throw new Error('Failed to save reaction');
+        }
+
+        const userFrom = await userService.getUserById(from.id, true);
 
         const offlineReceivers = [];
         const onlineReceivers = [];
