@@ -7,15 +7,11 @@
 
 const path = require('path');
 const gcm = require('node-gcm');
-const mongoose = require('mongoose');
 const config = require('../utils/config');
 const ChatService = require('../services/domain/chat/chat.service');
 const UserService = require('../services/domain/user/user.service');
 const logger = require('../utils/logger');
 const NativeApnsClient = require('./apns.native');
-
-const UserModel = mongoose.model('User');
-const DeviceModel = mongoose.model('Device');
 
 const certsFolder = path.resolve(__dirname, '..', 'certs');
 
@@ -45,19 +41,12 @@ class PushNotificationService {
             const body = message.kind === 'text' ? message.content : message.kind;
             const title = from.name;
 
-            // Extract media preview URLs so iOS notification extensions can render
-            // a preview even when the full message object is trimmed for size.
-            const firstMedia = message.media?.[0];
-            const mediaUrl   = firstMedia?.url       || null;
-            const thumbnail  = firstMedia?.thumbnail || null;
-            const videoUrl   = message.kind === 'video' ? (firstMedia?.url || null) : null;
-
             await this.#send({
                 title,
                 body,
                 category: 'NewMessage',
                 pref: 'newMessages',
-                custom: { chat: chatRef(chat), message, fromUser: from, save: 1, newMessage: true, mediaUrl, thumbnail, videoUrl },
+                custom: { chat: chatRef(chat), message, fromUser: from, save: 1, newMessage: true },
             }, offlineReceivers);
         } catch (ex) {
             logger.error(`push:newMessage — ${ex.message}`);
@@ -119,7 +108,6 @@ class PushNotificationService {
             await this.#send({
                 title: from.name,
                 body: 'Deleted',
-                category: 'ChatDeleted',
                 pref: 'newMessages',
                 custom: { chat: chatRef(chat), fromUser: from, deleted: true },
             }, offlineReceivers);
@@ -174,7 +162,6 @@ class PushNotificationService {
             await this.#send({
                 title,
                 body: 'Deleted a message',
-                category: 'MessageDeleted',
                 silent: true,
                 pref: 'newMessages',
                 custom: { chat: chatRef(chat), message, fromUser: from, deleted: true },
@@ -199,7 +186,6 @@ class PushNotificationService {
             await this.#send({
                 title,
                 body: 'Reacted on a message',
-                category: 'MessageReaction',
                 pref: 'newMessages',
                 custom: { chat: chatRef(chat), messageId: message._id, reaction, fromUser: from, save: 1, isReact: true },
             }, offlineReceivers);
@@ -264,8 +250,8 @@ class PushNotificationService {
 
     async incomingCall(content) {
         try {
-            const from = { ...(content.from._doc || content.from) };
-            const to = content.to._doc || content.to;
+            const from = { ...content.from._doc };
+            const to = content.to._doc;
             delete from.device;
 
             await this.#send({
@@ -494,15 +480,13 @@ class PushNotificationService {
             return [];
         }
 
-        const normalizedData = withActionType(data);
-
         const promises = users.map(async (member) => {
             try {
                 // Create per-user payload copies to prevent shared-state mutation across
                 // concurrent promises (badge, sound, muted-state deletions must be isolated).
-                const { iOSContent, androidContent } = preparePayload(normalizedData);
+                const { iOSContent, androidContent } = preparePayload(data);
                 // Handle both embedded user objects and references
-                var user = member.user || member;
+                let user = member.user || member;
                 
                 // If user is just an ID, fetch full details
                 if (typeof user === 'string') {
@@ -529,12 +513,13 @@ class PushNotificationService {
                 // validate user device is not mongo Objectid (happens when user is passed as an ID but fetching details fails)
                 if (user.device.constructor.name === 'ObjectId') {
                     console.warn(`push:_send — User ${user._id?.toString()} has invalid device data`);
-                    // Resolve and persist a valid User.device reference (or clear it if none exists).
-                    user = await repairUserDeviceReference(user);
-                    if (!user?.device || (typeof user.device === 'object' && user.device.constructor.name === 'ObjectId')) {
+                    // fetch the device details to confirm if it's a valid device or just an ObjectId placeholder
+                    const userDetails = await getUserDetails(user._id.toString());
+                    if (!userDetails?.device || (typeof userDetails.device === 'object' && userDetails.device.constructor.name === 'ObjectId')) {
                         console.warn(`push:_send — User ${user._id?.toString()} has no valid device after fetching details`);
                         return { skipped: true };
                     }
+                    user.device = userDetails.device; // update with valid device details
                 }
 
                 // Validate token exists
@@ -546,7 +531,7 @@ class PushNotificationService {
                 const muted = member.options?.muted || false;
 
                 const totalUnread = await getUnreadMessagesForUser(user._id.toString());
-                const badge = totalUnread + (normalizedData.custom.isReact || normalizedData.custom.isConnectionRequest || normalizedData.custom.respondConnetionRequest ? 1 : 0);
+                const badge = totalUnread + (data.custom.isReact || data.custom.isConnectionRequest || data.custom.respondConnetionRequest ? 1 : 0);
 
                 iOSContent.badge = badge;
                 iOSContent.aps.badge = badge;
@@ -585,7 +570,13 @@ class PushNotificationService {
                 const isAndroid  = deviceType === 'ANDROID';
                 const payload    = isAndroid ? androidContent : iOSContent;
 
-
+                if (data.custom.message?.kind === 'image' || data.custom.message?.kind === 'video') {
+                    if (!isAndroid) {
+                        payload.payload.message.media[0].thumbnail = '';
+                    } else {
+                        payload.params.data.message.media[0].thumbnail = '';
+                    }
+                }
 
                 const payloadSize = JSON.stringify(payload).length;
                 if (payloadSize > 3900 && payload.payload?.message) {
@@ -595,23 +586,9 @@ class PushNotificationService {
                         _id: msg._id,
                         content: msg.content,
                         mediaUrl: msg.media?.length ? msg.media[0].url : '',
-                        thumbnail: msg.media?.length ? (msg.media[0].thumbnail || null) : null,
-                        videoUrl: msg.kind === 'video' && msg.media?.length ? (msg.media[0].url || null) : null,
                         kind: msg.kind,
                         chatId: msg.chatId,
-                        sentOnTimestamp: msg.sentOnTimestamp,
                     };
-
-                    // If still too large after trimming, tell the client to fetch via GET /message/:id
-                    const trimmedSize = JSON.stringify(payload).length;
-                    if (trimmedSize > 3900) {
-                        payload.payload.save = 1;
-                        payload.payload.message = {
-                            messageId: msg._id,
-                            chatId: msg.chatId,
-                            fromId: msg.from?._id ?? msg.from,
-                        };
-                    }
                 }
 
                 console.log(`push:_send — Sending to ${user._id} (${isAndroid ? 'Android' : 'iOS'}) token: ${user.device.token.substring(0,16)}...`);
@@ -634,8 +611,7 @@ class PushNotificationService {
             return [];
         }
 
-        const normalizedData = withActionType(data);
-        const { iOSContent, androidContent } = preparePayload(normalizedData);
+        const { iOSContent, androidContent } = preparePayload(data);
 
         const promises = users.map(async (id) => {
             try {
@@ -672,14 +648,7 @@ class PushNotificationService {
         return new Promise((resolve) => {
             try {
                 // Ensure tokens is always an array.
-                const tokenArray = (Array.isArray(tokens) ? tokens : [tokens])
-                    .map((token) => typeof token === 'string' ? token.replace(/[<>\s]/g, '') : token)
-                    .filter(Boolean);
-
-                if (tokenArray.length === 0) {
-                    console.warn(`push:sendIOS — No normalized iOS tokens provided`);
-                    return resolve({ skipped: true });
-                }
+                const tokenArray = Array.isArray(tokens) ? tokens : [tokens];
                 
                 console.log(`push:sendIOS — Attempting to send via APNs to ${tokenArray.length} token(s)`);
 
@@ -759,56 +728,6 @@ const getUserPreferences = async (userId) => {
     return doc?.notificationPreferences ?? null;
 };
 
-const repairUserDeviceReference = async (user) => {
-    if (!user?._id) return user;
-
-    const userId = user._id.toString();
-    let resolvedDevice = null;
-
-    // First, try resolving by currently referenced device id.
-    if (user.device) {
-        const rawDeviceId = typeof user.device === 'object' && user.device._id
-            ? user.device._id.toString()
-            : user.device.toString();
-
-        resolvedDevice = await DeviceModel.findById(rawDeviceId).lean().exec();
-    }
-
-    // Fallback: pick latest active device for this user.
-    if (!resolvedDevice) {
-        resolvedDevice = await DeviceModel.findOne({ user: userId, status: 'active' })
-            .sort({ updatedAt: -1, createdAt: -1 })
-            .lean()
-            .exec();
-    }
-
-    if (resolvedDevice) {
-        await UserModel.updateOne({ _id: userId }, { $set: { device: resolvedDevice._id } });
-
-        // Return a normalized user object preserving both `_id` and `id`.
-        const refreshedUser = await getUserDetails(userId);
-        if (refreshedUser) {
-            return {
-                ...refreshedUser,
-                _id: refreshedUser._id,
-                id: refreshedUser.id || refreshedUser._id?.toString(),
-                device: refreshedUser.device || resolvedDevice,
-            };
-        }
-
-        user.device = resolvedDevice;
-        user.id = user.id || user._id?.toString();
-        return user;
-    }
-
-    await UserModel.updateOne({ _id: userId }, { $set: { device: null } });
-
-    // Preserve original user identity even when no device is resolvable.
-    user.device = null;
-    user.id = user.id || user._id?.toString();
-    return user;
-};
-
 const chatRef = (chat) => ({
     id: chat._id.toString(),
     name: chat.name,
@@ -822,54 +741,6 @@ const stripMessageFields = (message) => {
     delete message.uniqueId;
     delete message.editedOn;
     delete message.summary;
-};
-
-const withActionType = (data) => {
-    const custom = { ...(data?.custom || {}) };
-
-    if (!custom.actionType) {
-        custom.actionType = deriveActionType(custom, data?.category);
-    }
-
-    return {
-        ...data,
-        custom,
-    };
-};
-
-const deriveActionType = (custom, category) => {
-    if (custom.newMessage) return 'new_message';
-    if (custom.isReact) return 'message_reaction';
-    if (custom.deleted) return 'message_deleted';
-    if (custom.messageEdited) return 'message_edited';
-    if (custom.newChatCreated) return 'chat_created';
-    if (custom.newMember) return 'chat_members_added';
-    if (custom.memberRemoved) return 'chat_members_removed';
-    if (custom.memberLeftChat) return 'chat_member_left';
-    if (custom.blockChat) return custom.blockStatus ? 'chat_blocked' : 'chat_unblocked';
-    if (custom.messageDelivered) return 'message_delivered';
-    if (custom.messageSeen) return 'message_seen';
-    if (custom.markConversationSeen) return 'conversation_seen';
-    if (custom.isCallRequest) return 'call_request';
-    if (custom.isCallRequestResponse) return 'call_request_response';
-    if (custom.missedCall) return 'missed_call';
-    if (custom.end) return 'call_ended';
-    if (custom.newUsersNearby) return 'new_users_nearby';
-    if (custom.connectionNearby) return 'connection_nearby';
-    if (custom.isConnectionRequest) return 'connection_request';
-    if (custom.respondConnetionRequest) return 'connection_request_response';
-    if (custom.cancelConnetionRequest) return 'connection_request_cancelled';
-    if (custom.undoConnectionFriendship) return 'connection_friendship_undone';
-    if (custom.isConnectionRequestReminder) return 'connection_request_reminder';
-
-    if (category) {
-        return String(category)
-            .replace(/([a-z])([A-Z])/g, '$1_$2')
-            .replace(/\s+/g, '_')
-            .toLowerCase();
-    }
-
-    return 'generic';
 };
 
 const preparePayload = (content) => {
