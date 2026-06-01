@@ -1222,6 +1222,7 @@ class UserService {
 
     async findOrCreateByGoogle(googleUser) {
         let user = await UserModel.findOne({ googleId: googleUser.id });
+        const accountExisted = !!user;
         if (!user) {
             user = await new UserModel({
                 googleId:  googleUser.id,
@@ -1234,12 +1235,13 @@ class UserService {
             }).save();
         }
         this.#assertAccountCanAuthenticate(user);
-        return user;
+        return { user, accountExisted };
     }
 
     async findOrCreateByPhone(phoneNumber) {
         const phoneHash = this.#hashPhone(phoneNumber);
         let user = await UserModel.findOne({ partition: phoneHash });
+        const accountExisted = !!user;
         if (!user) {
             user = await new UserModel({
                 partition: phoneHash,
@@ -1254,7 +1256,7 @@ class UserService {
         if (user.phone) {
             user.phone = this.decryptPhone(user.phone);
         }
-        return user;
+        return { user, accountExisted };
     }
 
     async getActiveUserById(userId) {

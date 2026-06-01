@@ -130,6 +130,7 @@ const appleAuth = async (req, res) => {
       clientToken,
       user: formatUserResponse(user),
       hasAccount: accountExisted,
+      profileComplete: isProfileComplete(user),
       otpRequired: false
     });
 
@@ -154,7 +155,7 @@ const googleAuth = async (req, res) => {
       return res.status(400).json({ status: 'error', code: 1019, message: 'Google ID token is required' });
     }
 
-    const { user, accessToken, refreshToken, clientToken } = await authService.authenticateGoogle(idToken, deviceId || null);
+    const { user, accountExisted: googleAccountExisted, accessToken, refreshToken, clientToken } = await authService.authenticateGoogle(idToken, deviceId || null);
 
     return res.status(200).json({
       status: 'success',
@@ -162,6 +163,8 @@ const googleAuth = async (req, res) => {
       refreshToken,
       clientToken,
       user: formatUserResponse(user),
+      hasAccount: googleAccountExisted,
+      profileComplete: isProfileComplete(user),
       otpRequired: false
     });
 
@@ -305,14 +308,16 @@ const phoneAuth = async (req, res) => {
       return res.status(400).json({ status: 'error', code: 1013, message: 'OTP must be exactly 4 digits' });
     }
 
-    const { user, accessToken, refreshToken, clientToken } = await authService.authenticatePhone(phoneNumber, otp, deviceId || null);
+    const { user, accessToken, refreshToken, clientToken, accountExisted: phoneAccountExisted } = await authService.authenticatePhone(phoneNumber, otp, deviceId || null);
 
     return res.status(200).json({
       status: 'success',
       accessToken,
       refreshToken,
       clientToken,
-      user: user,
+      user: formatUserResponse(user),
+      hasAccount: phoneAccountExisted,
+      profileComplete: isProfileComplete(user),
       otpRequired: false
     });
 
@@ -414,6 +419,22 @@ function checkRateLimit(key, maxRequests, windowSeconds) {
 
   bucket.requests.push(now);
   return { allowed: true };
+}
+
+/**
+ * A profile is considered complete when the user has supplied the minimum
+ * fields required to participate in the app as a dater.  These are the
+ * fields the onboarding flow collects; anything less means onboarding is
+ * still pending regardless of whether the account record already existed.
+ */
+function isProfileComplete(user) {
+  return !!(
+    user.name &&
+    user.imageUrl &&
+    user.gender &&
+    (user.age || user.dateOfBirth) &&
+    user.interestedIn
+  );
 }
 
 function formatUserResponse(user) {

@@ -98,9 +98,9 @@ class AuthService {
             err.httpStatus = verification.reason === 'locked' ? 429 : 401;
             throw err;
         }
-        const user = await userService.findOrCreateByPhone(phoneNumber);
+        const { user, accountExisted } = await userService.findOrCreateByPhone(phoneNumber);
         await this.markOTPUsed(partition);
-        return { user, ...(await this.issueTokens(user, deviceId)) };
+        return { user, accountExisted, ...(await this.issueTokens(user, deviceId)) };
     }
 
     async markOTPUsed(partition) {
@@ -515,8 +515,8 @@ class AuthService {
             email: payload.email || null,
             picture: payload.picture || null,
         };
-        const user = await userService.findOrCreateByGoogle(googleUser);
-        return { user, ...(await this.issueTokens(user, deviceId)) };
+        const { user, accountExisted } = await userService.findOrCreateByGoogle(googleUser);
+        return { user, accountExisted, ...(await this.issueTokens(user, deviceId)) };
     }
 
     async _sendOtp(phoneNumber, otp) {
