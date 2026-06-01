@@ -13,7 +13,7 @@ const Device = new Schema({
     model: { type: String, default: null },
     token: { type: String, default: null },
     voipToken: { type: String, default: null },
-    status: { type: String, enum: ['active', 'disabled'], default: 'active' },
+    status: { type: String, enum: ['active', 'disabled', 'deleted'], default: 'active' },
     state: { type: String, enum: ['active', 'background'], default: 'active' }
 }, { timestamps: true });
 

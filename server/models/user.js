@@ -15,9 +15,11 @@ const User = new Schema({
     registeredOn: { type: Date, default: Date.now() },
     updatedOn: { type: Date, default: null }, 
     appleId: { type: String, default: null },
+    appleAccessToken: { type: String, default: null },
+    appleRefreshToken: { type: String, default: null },
     googleId: { type: String, default: null },
     lastLogin: { type: Date, default: null },
-    status: { type: String, enum: ['active', 'blocked', 'inactive', null], default: null },
+    status: { type: String, enum: ['active', 'blocked', 'inactive', 'deleted', null], default: null },
     gender: {
         type: String,
         enum: ['male', 'female', 'other', 'non-binary', 'prefer-not-to-say', null],

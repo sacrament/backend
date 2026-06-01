@@ -866,60 +866,183 @@ const messages = async function(data, ack) {
  * * TODO: Need  to finish the push notifiation
  */
 const reactOnMessage = async function(data, ack) {
+    const startTime = Date.now();
+
+
     try {
-        console.log(`React on Message`)
-        var offlineReceivers = [];
-        const from = this.user; 
-        //Save the reaction
-        messageService.reactOnMessage(data.messageId, data.reaction, from.id, data.date).then(async (result) => { 
-            const message = result.message;
-            const userFrom = await userService.getUserById(from.id, true);
-        // ~Get chat members
-            const chat = await chatService.getChatById(message.chatId);
-            const members = chat.members;
+        if (!data || typeof data !== 'object') {
+            throw new Error('Invalid reaction payload');
+        }
 
-            for (const member of members) {
-                const canChat = member.canChat; 
-                if (!canChat) continue;
+        const { messageId, reaction, date } = data;
 
-                const to = member.user._id.toString();
-                if (to == from.id) continue;
-                 
-                const memberIsOnline = await chatSocketService.isUserConnected(to); 
+        if (!messageId) {
+            throw new Error('messageId is required');
+        }
+
+        if (!reaction) {
+            throw new Error('reaction is required');
+        }
+
+        const from = this.user;
+        if (!from || !from.id) {
+            throw new Error('Sender identification failed');
+        }
+
+        logger.debug(`React on Message: messageId=${messageId}`);
+
+        // Get the message and chat context first (to check block status before saving reaction)
+        const message = await messageService.getByIdOrClientId(messageId);
+        if (!message) {
+            throw new Error('Message not found');
+        }
+
+        const rawChatId = message?.chatId;
+        const normalizedChatId = (typeof rawChatId === 'string')
+            ? rawChatId
+            : (rawChatId?._id?.toString?.() || rawChatId?.toString?.());
+
+        if (!normalizedChatId || !mongoose.Types.ObjectId.isValid(normalizedChatId)) {
+            throw new Error('Invalid chatId in reaction message');
+        }
+
+        const chat = await chatService.getChatById(normalizedChatId);
+        if (!chat || !Array.isArray(chat.members)) {
+            throw new Error('Chat not found for reaction message');
+        }
+
+        // Block check: reject if sender is blocked by any member (mirroring message logic)
+        const senderId = from.id;
+        const blockedForSender = chat.members.some(
+            member => member.user && member.user._id && member.user._id.toString() === senderId && member.options && member.options.blocked
+        );
+        if (blockedForSender) {
+            if (typeof ack === 'function') {
+                ack({ error: 'You are blocked and cannot react to messages in this chat.', code: 'REACTION_BLOCKED' });
+            }
+            logger.info(`Reaction rejected: user ${senderId} is blocked in chat ${normalizedChatId}`);
+            return;
+        }
+
+        // Save the reaction after passing block check
+        const result = await messageService.reactOnMessage(messageId, reaction, from.id, date);
+        if (!result || !result.message) {
+            throw new Error('Failed to save reaction');
+        }
+
+        const userFrom = await userService.getUserById(from.id, true);
+
+        const offlineReceivers = [];
+        const onlineReceivers = [];
+
+        const notifyPromises = chat.members
+            .filter(member => member.canChat)
+            .map(async (member) => {
+                const to = member.user?._id?.toString();
+                if (!to || to === from.id) {
+                    return;
+                }
+
+                const memberIsOnline = await chatSocketService.isUserConnected(to);
                 if (memberIsOnline) {
                     // Send the message to online users
                     this.to(to).emit('message reaction', {
-                        reaction: {
-                            message: { id: message._id },
-                            kind: result.reaction
-                        }
+                        reaction: result.reaction._doc || result.reaction,
+                        messageId:  message._id.toString(),
+                        chatId: chat._id.toString(),
+                        from: userFrom,
+                        date: Date.now()
                     });
                 } else {
                     /// Offline people. Send a push notification
                     // if (!member.options.muted) {
                     offlineReceivers.push(member);
-                    // }
                 }
-            }
-            const obj = {message: message._doc, chat: chat, reaction: result.reaction, offlineReceivers: offlineReceivers, title: 'Message reaction is stored', from: userFrom};
-            ack(obj);
+            });
 
-            return new Promise((resolve) => {
-                resolve(obj)
-            }); 
-            // console.log("Label: " + result.title);
-        }).then(result => {
-            if (result.offlineReceivers.length) {
-                // Send the push notifications 
-                // result.from = fromUser;
-                pushNotificationService.reactOnMessage(result);
-            } else {
-                console.log(`No offline users`)
-            }
-        }).catch((err) => {
-            console.error(`Error on message react: ${err}`)
-            ack(err);
-        }) 
+        await Promise.allSettled(notifyPromises);
+
+        const payload = {
+            message: message._doc || message,
+            chat,
+            reaction: result.reaction,
+            offlineReceivers,
+            title: 'Message reaction is stored',
+            from: userFrom
+        };
+
+        const reactionList = Array.isArray(message?.reactions) ? message.reactions : [];
+        const summary = reactionList.reduce((acc, reactionItem) => {
+            const kind = reactionItem?.kind;
+            if (!kind) return acc;
+            acc[kind] = (acc[kind] || 0) + 1;
+            return acc;
+        }, {});
+
+        const getUserReactionKind = (userId) => {
+            const found = reactionList.find((reactionItem) => {
+                const fromUserId = reactionItem?.from?._id?.toString?.() || reactionItem?.from?.toString?.();
+                return fromUserId === userId;
+            });
+            return found?.kind || null;
+        };
+
+        if (typeof ack === 'function') {
+            ack(payload);
+        }
+
+        const summaryForSender = {
+            messageId: message._id,
+            chat: { id: chat._id },
+            total: reactionList.length,
+            summary,
+            lastReaction: {
+                kind: result.reaction?.kind || result.reaction,
+                by: from.id,
+                date: Date.now()
+            },
+            mine: getUserReactionKind(from.id)
+        };
+
+        // Real-time UI refresh event for reaction chips/counts (ActionSheet opener can use this too).
+        this.emit('message reaction summary', summaryForSender);
+
+        const summaryNotifyPromises = chat.members
+            .filter(member => member.canChat)
+            .map(async (member) => {
+                const to = member.user?._id?.toString();
+                if (!to || to === from.id) {
+                    return;
+                }
+
+                const memberIsOnline = await chatSocketService.isUserConnected(to);
+                if (!memberIsOnline) {
+                    return;
+                }
+
+                this.to(to).emit('message reaction summary', {
+                    messageId: message._id,
+                    chat: { id: chat._id },
+                    total: reactionList.length,
+                    summary,
+                    lastReaction: {
+                        kind: result.reaction?.kind || result.reaction,
+                        by: from.id,
+                        date: Date.now()
+                    },
+                    mine: getUserReactionKind(to)
+                });
+            });
+
+        await Promise.allSettled(summaryNotifyPromises);
+
+        if (offlineReceivers.length > 0) {
+            pushNotificationService.reactOnMessage(payload);
+        }
+
+        logger.info(
+            `Reaction processed: messageId=${messageId}, online=${onlineReceivers.length}, offline=${offlineReceivers.length}, duration=${Date.now() - startTime}ms`
+        );
     } catch (ex) {
         console.err(`General error on message react: ${err}`)
         ack(ex);

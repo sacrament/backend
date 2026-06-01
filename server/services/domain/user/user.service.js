@@ -3,6 +3,7 @@ const SMSService = require('../../external/twilio/sms.service');
 const mongoose = require('mongoose');
 const UserModel = mongoose.model('User');
 const DeviceModel = mongoose.model('Device');
+const DeletedUserModel = mongoose.model('DeletedUser');
 const ContentStorage = mongoose.model('ContentStorage');
 
 const UserRequestModel = require('../../../models/user.request').UserRequest;
@@ -57,10 +58,30 @@ class UserService {
      * Derive a consistent, non-reversible hash for a phone number.
      * Used for indexed lookups — same input always produces the same key.
      */
-    #hashPhone(phoneNumber) {
+    #hashPartitionValue(value) {
         const pepper = process.env.OTP_PHONE_HASH_SECRET;
         if (!pepper) throw new Error('OTP_PHONE_HASH_SECRET is not set');
-        return crypto.createHmac('sha256', pepper).update(phoneNumber).digest('hex');
+        return crypto.createHmac('sha256', pepper).update(value).digest('hex');
+    }
+
+    #hashPhone(phoneNumber) {
+        return this.#hashPartitionValue(phoneNumber);
+    }
+
+    #assertAccountCanAuthenticate(user) {
+        if (user.status === 'blocked') {
+            const err = new Error('User is blocked');
+            err.httpStatus = 403;
+            err.code = 1010;
+            throw err;
+        }
+
+        if (user.deleted || user.status === 'deleted') {
+            const err = new Error('User account has been deleted');
+            err.httpStatus = 403;
+            err.code = 1020;
+            throw err;
+        }
     }
 
     /**
@@ -1071,15 +1092,8 @@ class UserService {
      * @returns {Promise<Object>} Result object with status and deleted user
      */
     async deleteAccount(userId) {
-        const user = await UserModel.findByIdAndUpdate(
-            userId,
-            { $set: { deleted: true, deletedOn: new Date(), deletedReason: 'User initiated' } },
-            { new: true }
-        );
-
-        if (!user) throw new Error('User not found');
-
-        return { status: 'deleted', deletedUser: user };
+        const deletedUser = await this.softDeleteAccount(userId, 'User initiated');
+        return { status: 'deleted', deletedUser };
     }
 
     async updateVisibilityPreferences(userId, prefs) {
@@ -1133,36 +1147,82 @@ class UserService {
                 isPublic: false
             }).save();
         }
-        if (user.status === 'blocked') {
-            const err = new Error('User is blocked');
-            err.httpStatus = 403; err.code = 1010;
-            throw err;
-        }
+        this.#assertAccountCanAuthenticate(user);
         return user;
     }
 
-    async findOrCreateByApple(appleUser) {
+    async findOrCreateByApple(appleUser, appleAccessToken, appleRefreshToken) {
         let user = await UserModel.findOne({ appleId: appleUser.id });
+        let accountExisted = !!user;
+        const normalizedEmail = typeof appleUser.email === 'string'
+            ? appleUser.email.trim().toLowerCase()
+            : null;
+
+        if (!user && normalizedEmail) {
+            user = await UserModel.findOne({ email: normalizedEmail }).collation({ locale: 'en', strength: 2 });
+            accountExisted = !!user;
+        }
+
         if (!user) {
+            console.log(`Apple: Creating new user ${appleUser.id} with access=${!!appleAccessToken}, refresh=${!!appleRefreshToken}`);
             user = await new UserModel({
                 appleId: appleUser.id,
                 name: appleUser.name || 'Apple User',
-                email: appleUser.email || null,
+                email: normalizedEmail,
+                partition: normalizedEmail ? this.#hashPartitionValue(normalizedEmail) : null,
                 status: 'active',
                 registeredOn: new Date(),
-                isPublic: false
+                isPublic: false,
+                appleAccessToken: appleAccessToken || null,
+                appleRefreshToken: appleRefreshToken || null
             }).save();
+            console.log(`Apple: New user saved ${user._id} with tokens: access=${!!user.appleAccessToken}, refresh=${!!user.appleRefreshToken}`);
+        } else {
+            console.log(`Apple: Updating existing user ${user._id}. Received: access=${!!appleAccessToken}, refresh=${!!appleRefreshToken}`);
+            let shouldSave = false;
+
+            if (!user.appleId) {
+                user.appleId = appleUser.id;
+                shouldSave = true;
+            }
+
+            if (!user.email && normalizedEmail) {
+                user.email = normalizedEmail;
+                shouldSave = true;
+            }
+
+            if (!user.partition && normalizedEmail) {
+                user.partition = this.#hashPartitionValue(normalizedEmail);
+                shouldSave = true;
+            }
+
+            if (appleAccessToken) {
+                user.appleAccessToken = appleAccessToken;
+                shouldSave = true;
+                console.log(`Apple: Setting access token`);
+            }
+
+            if (appleRefreshToken) {
+                user.appleRefreshToken = appleRefreshToken;
+                shouldSave = true;
+                console.log(`Apple: Setting refresh token`);
+            }
+            if (shouldSave) {
+                await user.save();
+                console.log(`Apple: User saved. Tokens now: access=${!!user.appleAccessToken}, refresh=${!!user.appleRefreshToken}`);
+            } else {
+                console.log(`Apple: No tokens to update, skipping save`);
+            }
         }
-        if (user.status === 'blocked') {
-            const err = new Error('User is blocked');
-            err.httpStatus = 403; err.code = 1010;
-            throw err;
-        }
-        return user;
+
+        this.#assertAccountCanAuthenticate(user);
+
+        return { user, accountExisted };
     }
 
     async findOrCreateByGoogle(googleUser) {
         let user = await UserModel.findOne({ googleId: googleUser.id });
+        const accountExisted = !!user;
         if (!user) {
             user = await new UserModel({
                 googleId:  googleUser.id,
@@ -1174,17 +1234,14 @@ class UserService {
                 isPublic:  false
             }).save();
         }
-        if (user.status === 'blocked') {
-            const err = new Error('User is blocked');
-            err.httpStatus = 403; err.code = 1010;
-            throw err;
-        }
-        return user;
+        this.#assertAccountCanAuthenticate(user);
+        return { user, accountExisted };
     }
 
     async findOrCreateByPhone(phoneNumber) {
         const phoneHash = this.#hashPhone(phoneNumber);
         let user = await UserModel.findOne({ partition: phoneHash });
+        const accountExisted = !!user;
         if (!user) {
             user = await new UserModel({
                 partition: phoneHash,
@@ -1194,16 +1251,12 @@ class UserService {
                 isPublic: false
             }).save();
         }
-        if (user.status === 'blocked') {
-            const err = new Error('User is blocked');
-            err.httpStatus = 403; err.code = 1010;
-            throw err;
-        }
+        this.#assertAccountCanAuthenticate(user);
         // decrypt phone for response if it's the same user
         if (user.phone) {
             user.phone = this.decryptPhone(user.phone);
         }
-        return user;
+        return { user, accountExisted };
     }
 
     async getActiveUserById(userId) {
@@ -1312,13 +1365,104 @@ class UserService {
     }
 
     async hardDeleteAccount(userId) {
-        const user = await UserModel.findByIdAndUpdate(
-            userId,
-            { $set: { deleted: true, deletedOn: new Date(), deletedReason: 'User initiated' } },
-            { new: true }
-        );
-        if (!user) throw new Error('User not found');
-        return user;
+        return this.softDeleteAccount(userId, 'User initiated');
+    }
+
+    async softDeleteAccount(userId, reason = 'User initiated') {
+        const now = new Date();
+
+        const user = await UserModel.findById(userId)
+            .select('name email phone partition status deleted registeredOn lastLogin device appleId googleId gender age interestedIn')
+            .lean();
+
+        if (!user) {
+            throw new Error('User not found');
+        }
+
+        const hadDevice = !!user.device;
+        let devicePlatform = null;
+
+        const activeDevice = await DeviceModel.findOne({ user: userId }).select('platform').lean();
+        if (activeDevice?.platform) {
+            devicePlatform = activeDevice.platform;
+        }
+
+        const maskedName = `Deleted User ${String(user._id).slice(-6)}`;
+        const maskedEmail = user.email ? `deleted+${String(user._id)}@winky.deleted` : null;
+        const maskedAppleId = user.appleId ? `deleted-${String(user._id).slice(-6)}` : null;
+
+        const accountAgeDays = user.registeredOn
+            ? Math.max(0, Math.floor((now.getTime() - new Date(user.registeredOn).getTime()) / (1000 * 60 * 60 * 24)))
+            : null;
+
+        await Promise.all([
+            UserModel.findByIdAndUpdate(
+                userId,
+                {
+                    $set: {
+                        deleted: true,
+                        status: 'deleted',
+                        deletedOn: now,
+                        deletedReason: reason,
+                        name: maskedName,
+                        email: maskedEmail,
+                        phone: null,
+                        bio: null,
+                        imageUrl: null,
+                        refreshToken: null,
+                        device: null,
+                        location: null,
+                        updatedOn: now,
+                        appleId: maskedAppleId,
+                    },
+                    $unset: {
+                        partition: 1,
+                    },
+                },
+                { new: true }
+            ),
+            DeviceModel.updateMany(
+                { user: userId, status: { $in: ['active', 'disabled'] } },
+                {
+                    $set: {
+                        status: 'deleted',
+                        token: null,
+                        voipToken: null,
+                        state: 'background',
+                        updatedAt: now,
+                    },
+                }
+            ),
+            DeletedUserModel.updateOne(
+                { user: userId },
+                {
+                    $setOnInsert: {
+                        user: userId,
+                        deletedOn: now,
+                        reason,
+                        statusBefore: user.status || null,
+                        hadDevice,
+                        devicePlatform,
+                        registrationDate: user.registeredOn || null,
+                        lastLogin: user.lastLogin || null,
+                        accountAgeDays,
+                        authProvider: {
+                            apple: !!user.appleId,
+                            google: !!user.googleId,
+                            phone: !!user.partition || !!user.phone,
+                        },
+                        profileSnapshot: {
+                            gender: user.gender || null,
+                            age: user.age || null,
+                            interestedIn: user.interestedIn || null,
+                        },
+                    },
+                },
+                { upsert: true }
+            ),
+        ]);
+
+        return await UserModel.findById(userId).lean();
     }
 
     // ─── Device ────────────────────────────────────────────────────────────────
