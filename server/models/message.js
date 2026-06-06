@@ -10,7 +10,7 @@ const Message = new Schema({
     chatId: { type: Schema.Types.ObjectId, ref: 'Chat' },
     sentOn: { type: Date, default: Date.now },
     sentOnTimestamp: { type: Number, default: Date.now },
-    kind: { type: String, enum: ['text', 'image', 'video', 'audio', 'document', 'GIF', 'generic', 'share contact'], default: 'text' },
+    kind: { type: String, enum: ['text', 'image', 'video', 'audio', 'document', 'GIF', 'generic', 'share contact', 'screenshot_taken'], default: 'text' },
     deleted: {
         forEveryone: { type: Boolean, default: null },
         forMyself: { type: Boolean, default: null },

@@ -425,7 +425,7 @@ const newMessage = async function(data, ack) {
         }
 
         // Validate message type
-        const validKinds = ['text', 'image', 'video'];
+        const validKinds = ['text', 'image', 'video', 'screenshot_taken'];
         if (kind && !validKinds.includes(kind)) {
             throw new Error(`Invalid message kind: ${kind}`);
         }
