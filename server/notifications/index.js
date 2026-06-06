@@ -38,7 +38,8 @@ class PushNotificationService {
             delete from.device;
             stripMessageFields(message);
 
-            const body = message.kind === 'text' ? message.content : message.kind;
+            const kindBodyMap = { screenshot_taken: 'Took a screenshot' };
+            const body = message.kind === 'text' ? message.content : (kindBodyMap[message.kind] ?? message.kind);
             const title = from.name;
 
             await this.#send({
