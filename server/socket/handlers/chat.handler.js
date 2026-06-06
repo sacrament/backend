@@ -51,16 +51,13 @@ module.exports = class Chat {
  */
 const newChat = async function(data, ack) {
     const userId = this.user?.id;
-    try {
-        if (!data || typeof data !== 'object') {
-            return ack({ error: 'Invalid request data' });
-        }
-
-        if (!data.users) {
-            return ack({ error: 'users is required' });
-        }
-
+    try { 
         logger.info(`New Chat: ${JSON.stringify(data)}`);
+
+        if (!data || typeof data !== 'object') {
+            logger.warn('newChat: Invalid data format');
+            return ack({ error: 'Invalid request data' });
+        } 
 
         data.userId = userId;
 
