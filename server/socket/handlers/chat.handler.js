@@ -50,43 +50,35 @@ module.exports = class Chat {
  * @param {*} ack
  */
 const newChat = async function(data, ack) {
+    const userId = this.user?.id;
     try {
-        console.log(`New Chat: ${JSON.stringify(data)}`)
+        if (!data || typeof data !== 'object') {
+            return ack({ error: 'Invalid request data' });
+        }
 
-        const from = this.user.id;
-        const fromUser = this.user;
-        data.userId = from; 
+        if (!data.users) {
+            return ack({ error: 'users is required' });
+        }
 
-        chatService.create(data).then(async (result) => {
-            ack(result);
+        logger.info(`New Chat: ${JSON.stringify(data)}`);
 
-            // Broadcast new chat to all other members
-            if (result.chat && result.chat.members) {
-                const members = result.chat.members.filter(member => {
-                    const memberId = member.user ? member.user._id.toString() : member._id.toString();
-                    return memberId !== from;
-                });
+        data.userId = userId;
 
-                for (const member of members) {
-                    const to = member.user ? member.user._id.toString() : member._id.toString();
-                    const memberIsOnline = await chatSocketService.isUserConnected(to);
-                    if (memberIsOnline) {
-                        this.to(to).emit('new chat created', { chat: result.chat });
-                    } else {
-                        pushNotificationService.newChatCreated({
-                            chat: result.chat,
-                            from: fromUser,
-                            offlineReceivers: [member]
-                        });
-                    }
-                }
-            }
-        }).catch((err) => {
-            ack({error: err.message});
-        })
+        let result;
+        try {
+            result = await chatService.create(data);
+        } catch (err) {
+            logger.error(`Error creating chat: ${err.message}`, { userId });
+            return ack({ error: err.message });
+        }
+
+        ack(result);
+
+        // Receiver is notified when the first message arrives, not at chat creation time.
     } catch (ex) {
-        ack(ex.message);
-    } 
+        logger.error(`Error in newChat handler: ${ex.message}`, { userId });
+        ack({ error: ex.message });
+    }
 };
  
 /**
