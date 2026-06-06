@@ -485,111 +485,233 @@ const updateMessageSeen = async (messageById, from, date) => {
  * @param {*} res
  */
 const sendMessage = async (req, res) => {
+    const startTime = Date.now();
     try {
-        logger.info(`API: Send message: ${Date()}`)
-        const { content, chatId, type, messageId, date, senderCopy } = req.body;
+        logger.info(`API: Send message: ${Date()}`);
+        const { content, chatId, type: kind, messageId: tempId, date, senderCopy, publicKey, bytes } = req.body;
 
-        var from = req.decodedToken.userId;
+        if (!chatId || !content) {
+            return res.status(400).json({ status: 'error', message: 'chatId and content are required' });
+        }
 
+        const validKinds = ['text', 'image', 'video', 'screenshot_taken'];
+        if (kind && !validKinds.includes(kind)) {
+            return res.status(400).json({ status: 'error', message: `Invalid message kind: ${kind}` });
+        }
+
+        let from = req.decodedToken.userId;
         if (typeof from === 'number') {
             from = await userService.getUserIds([from]);
         }
 
-        const data = {
-            content: content,
-            chatId: chatId,
-            type: type,
-            senderCopy: senderCopy ?? null
+        // Duplicate check
+        if (tempId) {
+            const isDuplicate = await messageService.isDuplicate(tempId, chatId);
+            if (isDuplicate) {
+                logger.warn(`Duplicate message detected: tempId=${tempId}`);
+                return res.status(200).json({ warning: 'Duplicate message', isDuplicate: true });
+            }
         }
 
-        // Get the chat
-        const chat = await chatService.getById(chatId, from);
-        // // Remove the sender from the members
-        const members = chat.members
+        // Get chat and verify sender membership
+        let chat;
+        try {
+            chat = await chatService.getById(chatId, from);
+        } catch (err) {
+            throw new Error(`Unable to verify chat membership: ${err.message}`);
+        }
 
-        const json = data;
-        json.sentOn = Date.now();
-        json.members = members;
-        json.from = from;
+        if (!chat) {
+            return res.status(404).json({ status: 'error', message: 'Chat not found or access denied' });
+        }
 
-        // Create a temporary message
-        const tempMessage = await messageService.create(json);
-        // Save the message
-        messageService.save(tempMessage)
-        .then(async (result) => {
-            var deliveredTo = [];
-            var offlineReceivers = [];
-            // Set to chat this message
-            //MARK: If not necessary, move these two lines at the end
-            const update = await chatService.setLatestMessage(data.chatId, tempMessage._id, from);
-            const chat = update.chat;
+        let members = chat.members;
+        const senderMember = members.find(m => m.user._id.toString() === from.toString());
 
-            const object = {
-                message: tempMessage,
-                chat: chat
-            }
+        if (!senderMember || !senderMember.canChat) {
+            return res.status(403).json({ status: 'error', message: 'Sender is not authorized to send messages in this chat' });
+        }
 
-            const IO = getIO();
-            const socketService = new CS();
-
-            // // Process the message
-            for (const member of members) {
-                // Check if the user can chat
-                const canChat = member.canChat;
-                if (!canChat) continue;
-
-                const to = member.user._id.toString();
-                if (to == from) continue;
-
-                const memberIsOnline = await socketService.isUserConnected(to);
-
-                if (memberIsOnline) {
-                    const unreadMessages = await chatService.countUnreadMessagesForChat(chat._id, to)
-                    object.chat.unreadMessages = unreadMessages;
-
-                    IO.to(to).emit('new message received', object);
-
-                    deliveredTo.push(to);
-                } else {
-                    /// Offline people. Send a push notification
-                    // logger.info(`Offline member: ${member.user.device}`);
-                    // Keep muted recipients so notification service can convert
-                    // their push to silent/background delivery.
-                    offlineReceivers.push(member);
+        // Re-enable receiver if they previously left this chat
+        const receiverMember = members.find(m => m.user._id.toString() !== from.toString());
+        if (receiverMember && !receiverMember.canChat && receiverMember.leftOn) {
+            const receiverId = receiverMember.user._id.toString();
+            try {
+                const reactivated = await chatService.clearChat(chatId, receiverId);
+                if (reactivated?.chat?.members) {
+                    chat = reactivated.chat;
+                    members = chat.members;
                 }
+
+                const IO = getIO();
+                const socketService = new CS();
+                const receiverIsOnline = await socketService.isUserConnected(receiverId);
+                if (receiverIsOnline) {
+                    IO.to(receiverId).emit('new chat created', { chat });
+                } else {
+                    pushNotificationService.newChatCreated({ chat, from: { id: from }, offlineReceivers: [receiverMember] });
+                }
+                logger.info(`Re-enabled receiver ${receiverId} in chat ${chatId} on new message`);
+            } catch (reactivateErr) {
+                logger.error(`Failed to re-enable receiver in chat ${chatId}: ${reactivateErr.message}`);
             }
+        }
 
-            if (deliveredTo.length) {
-                //Update the status of the message to delivered for users
-                await messageService.messageDelivered(deliveredTo, result.message._id, Date.now());
-            }
+        if (members.filter(m => m.canChat).length < 2) {
+            return res.status(400).json({ status: 'error', message: 'At least 2 members needed to send messages' });
+        }
 
-            // Send the response back
-            res.status(200).json({ status: 'success', title: 'Message Sent', message: result.message, chat: chat, deliveredTo: deliveredTo });
+        const mongoose = require('mongoose');
+        const messageData = {
+            content,
+            chatId,
+            kind: kind || 'text',
+            senderCopy: senderCopy ?? null,
+            sentOn: Date.now(),
+            sentOnTimestamp: Math.floor(Date.now() / 1000),
+            members,
+            from,
+            tempId: tempId || new mongoose.Types.ObjectId().toString()
+        };
 
-            const obj = { message: result.message, chat: chat, offlineReceivers: offlineReceivers };
+        const tempMessage = await messageService.create(messageData);
+        const result = await messageService.save(tempMessage);
 
-            return new Promise((resolve) => {
-                resolve(obj)
-            });
-        }).then(async result => {
-            if (result.offlineReceivers.length) {
-                // Send the push notifications
-                let fromUser = await userService.getUserById(from, true);
-                result.from = fromUser;
-                pushNotificationService.newMessage(result);
-            } else {
-                logger.info(`No offline users`)
-            }
+        if (!result || !result.message) {
+            throw new Error('Failed to persist message');
+        }
 
-            await updateMessageSeen(messageId, from, date);
-        }).catch((err) => {
-            logger.error(`Send message error: ${err.message}`)
-            res.status(400).json({ status: 'error', message: err.message });
+        logger.info(`Message saved: ${result.message._id} in ${Date.now() - startTime}ms`);
+
+        let updatedChat;
+        try {
+            const update = await chatService.setLatestMessage(chatId, tempMessage._id, from);
+            updatedChat = update.chat;
+        } catch (err) {
+            logger.error(`Failed to update last message: ${err.message}`);
+            updatedChat = chat;
+        }
+
+        // Respond immediately (equivalent to socket ACK)
+        res.status(200).json({
+            status: 'success',
+            title: 'Message Sent',
+            message: result.message,
+            chat: updatedChat,
+            tempId: messageData.tempId
         });
+
+        // Store public key (fire-and-forget)
+        if (publicKey) {
+            chatService.updateChatWithPublicKey({ chatId, publicKey })
+                .catch(err => logger.warn(`Failed to store publicKey to chat: ${err.message}`));
+        }
+
+        // Async delivery — non-blocking
+        setImmediate(async () => {
+            try {
+                const IO = getIO();
+                const socketService = new CS();
+                const deliveredTo = [];
+                const offlineReceivers = [];
+                const blockedReceivers = [];
+
+                const deliveryPromises = members
+                    .filter(member => member.canChat && member.user._id.toString() !== from.toString())
+                    .map(async (member) => {
+                        const recipientId = member.user._id.toString();
+                        try {
+                            if (member.options?.blocked) {
+                                blockedReceivers.push(recipientId);
+                                messageService.setMessageNotVisible(tempMessage._id)
+                                    .catch(err => logger.warn(`Failed to mark invisible: ${err.message}`));
+                                return;
+                            }
+
+                            const isOnline = await socketService.isUserConnected(recipientId);
+                            if (isOnline) {
+                                const unreadMessages = await chatService.countUnreadMessagesForChat(updatedChat._id, recipientId);
+                                IO.to(recipientId).emit('new message received', {
+                                    message: result.message,
+                                    chat: { ...(updatedChat.toObject?.() ?? updatedChat), unreadMessages },
+                                    publicKey,
+                                    bytes,
+                                    sentAt: Date.now()
+                                });
+                                deliveredTo.push(recipientId);
+                            } else {
+                                offlineReceivers.push(member);
+                            }
+                        } catch (err) {
+                            logger.error(`Error processing recipient ${recipientId}: ${err.message}`);
+                        }
+                    });
+
+                await Promise.allSettled(deliveryPromises);
+
+                if (deliveredTo.length > 0) {
+                    try {
+                        await messageService.messageDelivered(deliveredTo, result.message._id.toString(), Date.now());
+                        IO.to(from.toString()).emit('message delivered to', {
+                            messageId: result.message._id,
+                            deliveredTo,
+                            timestamp: Date.now()
+                        });
+                    } catch (err) {
+                        logger.error(`Failed to update delivery status: ${err.message}`);
+                    }
+                }
+
+                if (offlineReceivers.length > 0) {
+                    try {
+                        const notifiableReceivers = offlineReceivers.filter(m => !m.options?.muted);
+                        if (notifiableReceivers.length > 0) {
+                            const loginChecks = await Promise.all(
+                                notifiableReceivers.map(m => userService.isUserLoggedIn(m.user._id.toString()))
+                            );
+                            const loggedInReceivers = notifiableReceivers.filter((m, i) => {
+                                if (!loginChecks[i]) {
+                                    logger.debug(`push:newMessage — receiver ${m.user._id} is not logged in, skipping push`);
+                                    return false;
+                                }
+                                return true;
+                            });
+
+                            if (loggedInReceivers.length > 0) {
+                                const senderUser = await userService.getUserById(from.toString());
+                                if (!senderUser) {
+                                    logger.warn(`push:newMessage — sender ${from} not found, skipping push`);
+                                } else {
+                                    pushNotificationService.newMessage({
+                                        message: result.message,
+                                        chat: updatedChat,
+                                        offlineReceivers: loggedInReceivers,
+                                        from: senderUser,
+                                        timestamp: Date.now()
+                                    });
+                                }
+                            }
+                        }
+                    } catch (err) {
+                        logger.error(`Error queueing push notifications: ${err.message}`);
+                    }
+                }
+
+                logger.info(
+                    `Message delivery: online=${deliveredTo.length}, offline=${offlineReceivers.length}, blocked=${blockedReceivers.length}, duration=${Date.now() - startTime}ms`
+                );
+            } catch (err) {
+                logger.error(`Error distributing message ${tempMessage._id}: ${err.message}`);
+            }
+        });
+
+        await updateMessageSeen(tempId, from, date);
+
     } catch (ex) {
         logger.error('Send message unexpected error:', ex);
-        res.status(400).json({ status: 'error', message: ex.message });
+        if (!res.headersSent) {
+            res.status(400).json({ status: 'error', message: ex.message });
+        }
     }
 }
 
