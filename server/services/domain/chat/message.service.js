@@ -43,7 +43,7 @@ class MessageService {
             tempId: { type: 'string', required: true },
             chatId: { type: 'objectId', required: true },
             from: { type: 'string', required: true },
-            type: { type: 'string', required: true, enum: ['text', 'image', 'video', 'audio', 'document', 'share contact'] },
+            type: { type: 'string', required: true, enum: ['text', 'image', 'video', 'audio', 'document', 'share contact', 'screenshot_taken'] },
             sentOn: { type: 'date', required: true },
             members: { type: 'array', required: true, minLength: 1 }
         });
@@ -194,12 +194,14 @@ class MessageService {
                 ]);
             }
 
+            logger.info(`Message saved successfully with ID: ${message._id}`);
+
             return {
                 title: 'Message is saved',
                 message: message
             };
         } catch (ex) {
-            console.error(`Error occurred while saving message: ${ex.message}`);
+            logger.error(`Error occurred while saving message: ${ex.message}`);
             throw ex;
         }
     }
