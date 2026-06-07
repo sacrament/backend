@@ -407,16 +407,16 @@ const newMessage = async function(data, ack) {
             throw new Error('Invalid message data');
         }
 
-        const { chatId, tempId, content, kind } = data;
-        
+        const { chatId, tempId, content, type } = data;
+
         if (!chatId || !content) {
             throw new Error('chatId and content are required');
         }
 
         // Validate message type
-        const validKinds = ['text', 'image', 'video', 'screenshot_taken'];
-        if (kind && !validKinds.includes(kind)) {
-            throw new Error(`Invalid message kind: ${kind}`);
+        const validTypes = ['text', 'image', 'video', 'screenshot_taken'];
+        if (type && !validTypes.includes(type)) {
+            throw new Error(`Invalid message type: ${type}`);
         }
 
         logger.debug(`New message: ${chatId}`);
