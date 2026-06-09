@@ -11,8 +11,8 @@
  
 const mongoose = require('mongoose');
 const socketAuth = require('../middleware/socket.auth');
-const { UserService } = require('../services');
 const MessageService = require('../services/domain/chat/message.service');
+const logger = require('../utils/logger');
 const PendingSocketEventService = require('../services/domain/socket/pending.socket.event.service');
 
 // Import event handlers
@@ -43,8 +43,8 @@ const RECONNECT_BACKOFF_MS = 30 * 1000; // tell client to wait 30s
  * @param { import("socket.io").Server } io - Socket.IO instance
  */
 module.exports = async (io) => {
-    console.log('Socket.IO started at: ' + new Date().toISOString());
-    console.log('🔄 Server started - clearing session map for fresh start');
+    logger.info('Socket.IO started at: ' + new Date().toISOString());
+    logger.info('Server started - clearing session map for fresh start');
     
     // Initialize socket services once
     socketServicesManager.initialize(io);
@@ -55,14 +55,6 @@ module.exports = async (io) => {
     // Register authentication middleware first
     io.use(socketAuth);
     
-    // Global error handler for auth/connection errors
-    io.use((socket, next) => {
-        socket.on('error', (error) => {
-            console.error(`[Socket Error] ${socket.id}: ${error}`);
-        });
-        next();
-    });
-    
     // Initialize and register event handlers ONCE at startup
     if (!handlersInitialized) {
         initializeHandlers(io);
@@ -71,14 +63,12 @@ module.exports = async (io) => {
 
     // Connection handler
     io.on('connection', async (socket) => {
-        // console.log(`📡 New socket connection attempt: ${socket.id}`);
-        
         // Register all domain event handlers on this socket
         Object.entries(eventHandlers).forEach(([event, handler]) => {
             socket.on(event, function(data, ack) {
                 // Log all socket events for debugging
                 if (event !== 'check status') { // Skip frequent heartbeat events
-                    console.log(`[Socket Event] ${event} - data keys: ${Object.keys(data || {}).join(', ') || '(empty)'}`);
+                    logger.info(`[Socket Event] ${event} - data keys: ${Object.keys(data || {}).join(', ') || '(empty)'}`);
                 }
                 handler.call(socket, data, ack);
             });
@@ -91,7 +81,7 @@ module.exports = async (io) => {
 
     // Connection error handler
     io.on('connect_error', (error) => {
-        console.error(`[Socket Connect Error] ${error.message}`, error);
+        logger.error(`[Socket Connect Error] ${error.message}`, { stack: error.stack });
     });
 };
 
@@ -100,7 +90,7 @@ module.exports = async (io) => {
  * @param {import("socket.io").Server} io - Socket.IO instance
  */
 const initializeHandlers = (io) => {
-    console.log('Initializing event handlers (one-time setup)');
+    logger.info('Initializing event handlers (one-time setup)');
 
     const chat = new ChatHandler();
     const calls = new CallsHandler();
@@ -114,7 +104,7 @@ const initializeHandlers = (io) => {
     };
 
     const eventCount = Object.keys(eventHandlers).length;
-    console.log(`✓ Event handlers initialized: ${eventCount} events registered`);
+    logger.info(`Event handlers initialized: ${eventCount} events registered`);
 };
 
 /**
@@ -126,7 +116,7 @@ const onConnected = async (socket, io) => {
     const userId = socket.decoded_token?.userId;
 
     if (!userId) {
-        console.error(`[Auth Error] No userId in decoded token for socket: ${socket.id}`);
+        logger.error(`[Auth Error] No userId in decoded token for socket: ${socket.id}`);
         socket.emit('error', 'Authentication failed: No user ID in token');
         socket.disconnect(true);
         return;
@@ -139,7 +129,7 @@ const onConnected = async (socket, io) => {
     connectTimestamps.set(userId, timestamps);
 
     if (timestamps.length > RECONNECT_MAX_IN_WINDOW) {
-        console.warn(`[RateLimit] User ${userId} exceeded reconnect limit (${timestamps.length} in ${RECONNECT_WINDOW_MS / 1000}s) — throttling`);
+        logger.warn(`[RateLimit] User ${userId} exceeded reconnect limit (${timestamps.length} in ${RECONNECT_WINDOW_MS / 1000}s) — throttling`);
         socket.emit('reconnect_throttled', { retryAfter: RECONNECT_BACKOFF_MS });
         socket.disconnect(true);
         return;
@@ -150,33 +140,29 @@ const onConnected = async (socket, io) => {
         const user = await UserModel.findById(userId).select('deleted status').lean();
 
         if (!user) {
-            console.warn(`[Auth Error] User not found: ${userId}`);
+            logger.warn(`[Auth Error] User not found: ${userId}`);
             socket.emit('error', 'User not found');
-            socket.emit('connected', { userId, sessionValid: false });
             socket.disconnect(true);
             return;
         }
 
         if (user.deleted) {
-            console.warn(`[Auth Error] User account deleted: ${userId}`);
+            logger.warn(`[Auth Error] User account deleted: ${userId}`);
             socket.emit('error', 'User account has been deleted');
-            socket.emit('connected', { userId, sessionValid: false });
             socket.disconnect(true);
             return;
         }
 
         if (user.status === 'blocked') {
-            console.warn(`[Auth Error] User account blocked: ${userId}`);
+            logger.warn(`[Auth Error] User account blocked: ${userId}`);
             socket.emit('error', 'User account is blocked');
-            socket.emit('connected', { userId, sessionValid: false });
             socket.disconnect(true);
             return;
         }
 
         if (user.status === 'inactive') {
-            console.warn(`[Auth Error] User account inactive: ${userId}`);
+            logger.warn(`[Auth Error] User account inactive: ${userId}`);
             socket.emit('error', 'User account is inactive');
-            socket.emit('connected', { userId, sessionValid: false });
             socket.disconnect(true);
             return;
         }
@@ -196,11 +182,11 @@ const onConnected = async (socket, io) => {
             
             // If this is the same socket (reconnection from recovery), allow it
             if (previousSession.socketId === socket.id) {
-                console.log(`✓ User reconnected: ${userId} (${socket.user.type}) socket: ${socket.id}`);
+                logger.info(`User reconnected: ${userId} (${socket.user.type}) socket: ${socket.id}`);
                 previousSession.lastSeen = Date.now();
             } else {
                 // Different socket - disconnect the old one
-                console.log(`⚡ Disconnecting previous socket for user ${userId}: ${previousSession.socketId}, new socket: ${socket.id}`);
+                logger.info(`Disconnecting previous socket for user ${userId}: ${previousSession.socketId}, new socket: ${socket.id}`);
                 
                 // Get the actual socket object and disconnect it
                 const previousSocket = io.sockets.sockets.get(previousSession.socketId);
@@ -210,11 +196,11 @@ const onConnected = async (socket, io) => {
                         newSocketId: socket.id 
                     });
                     previousSocket.disconnect(true);
-                    console.log(`✓ Previous socket disconnected for user: ${userId}`);
+                    logger.info(`Previous socket disconnected for user: ${userId}`);
                 }
                 
                 // Now register the new socket
-                console.log(`➕ User connected: ${userId} (${socket.user.type}) socket: ${socket.id}, deviceId: ${socket.deviceId || 'none'}`);
+                logger.info(`User connected: ${userId} (${socket.user.type}) socket: ${socket.id}, deviceId: ${socket.deviceId || 'none'}`);
                 userSessions.set(userId, {
                     userId,
                     socketId: socket.id,
@@ -226,7 +212,7 @@ const onConnected = async (socket, io) => {
             }
         } else {
             // First connection for this user
-            console.log(`➕ User connected: ${userId} (${socket.user.type}) socket: ${socket.id}, deviceId: ${socket.deviceId || 'none'}`);
+            logger.info(`User connected: ${userId} (${socket.user.type}) socket: ${socket.id}, deviceId: ${socket.deviceId || 'none'}`);
             userSessions.set(userId, {
                 userId,
                 socketId: socket.id,
@@ -246,20 +232,20 @@ const onConnected = async (socket, io) => {
                 for (const pendingEvent of pendingEvents) {
                     socket.emit(pendingEvent.event, pendingEvent.payload);
                 }
-                console.log(`Replayed ${pendingEvents.length} pending socket event(s) for user: ${userId}`);
+                logger.info(`Replayed ${pendingEvents.length} pending socket event(s) for user: ${userId}`);
             }
         } catch (error) {
-            console.error(`Error replaying pending socket events for ${userId}: ${error.message}`);
+            logger.error(`Error replaying pending socket events for ${userId}: ${error.message}`);
         }
 
         // Mark all pending messages as delivered for this user (was offline, now back online)
         try {
             const markedCount = await messageService.markPendingMessagesAsDelivered(userId);
             if (markedCount > 0) {
-                console.log(`Updated ${markedCount} messages as delivered for user: ${userId}`);
+                logger.info(`Updated ${markedCount} messages as delivered for user: ${userId}`);
             }
         } catch (error) {
-            console.error(`Error marking messages as delivered: ${error.message}`);
+            logger.error(`Error marking messages as delivered: ${error.message}`);
             // Don't fail the connection, just log the error
         }
 
@@ -275,7 +261,7 @@ const onConnected = async (socket, io) => {
             socketId: socket.id
         });
     } catch (error) {
-        console.error(`[Socket Error] Error in onConnected for user ${userId}:`, error);
+        logger.error(`[Socket Error] Error in onConnected for user ${userId}: ${error.message}`);
         socket.emit('error', `Connection error: ${error.message}`);
         socket.disconnect(true);
     }
@@ -291,11 +277,11 @@ const onDisconnected = (socket, io) => {
         const userId = socket.user?.id;
         
         if (userId) {
-            console.log(`User disconnected: ${userId} (socket: ${socket.id}) reason: ${reason}`);
+            logger.info(`User disconnected: ${userId} (socket: ${socket.id}) reason: ${reason}`);
             
             // For temporary disconnections (network issues), keep session alive
             if (reason === 'transport error' || reason === 'ping timeout' || reason === 'transport close') {
-                console.log(`⏱ Reconnection grace period started for user: ${userId} (${RECONNECTION_GRACE_PERIOD / 1000}s)`);
+                logger.info(`Reconnection grace period started for user: ${userId} (${RECONNECTION_GRACE_PERIOD / 1000}s)`);
 
                 // Cancel any existing grace-period timer for this user before creating a new one
                 if (userSessions.has(userId)) {
@@ -312,7 +298,7 @@ const onDisconnected = (socket, io) => {
                         // Only clean up if socket hasn't been renewed
                         if (session.socketId === socket.id) {
                             userSessions.delete(userId);
-                            console.log(`Session cleaned up for user: ${userId} (grace period expired)`);
+                            logger.info(`Session cleaned up for user: ${userId} (grace period expired)`);
                             // Notify others that user is truly offline
                             socket.broadcast.emit('user disconnected', { userId });
                         }
@@ -330,11 +316,11 @@ const onDisconnected = (socket, io) => {
                     if (session.gracePeriodTimer) clearTimeout(session.gracePeriodTimer);
                 }
                 userSessions.delete(userId);
-                console.log(`Session ended for user: ${userId}`);
+                logger.info(`Session ended for user: ${userId}`);
                 socket.broadcast.emit('user disconnected', { userId });
             }
         } else {
-            console.log(`Socket disconnected before authentication: ${socket.id} reason: ${reason}`);
+            logger.info(`Socket disconnected before authentication: ${socket.id} reason: ${reason}`);
         }
     });
 };
@@ -349,7 +335,7 @@ const onReconnect = (socket, io) => {
         const userId = socket.user?.id;
         
         if (userId && userSessions.has(userId)) {
-            console.log(`✓ User successfully reconnected: ${userId} (attempt: ${attemptNumber})`);
+            logger.info(`User successfully reconnected: ${userId} (attempt: ${attemptNumber})`);
             
             // Stale reconnection request - socket.io has already rejoin rooms in onConnected
             // Just update last seen time
@@ -377,7 +363,7 @@ const setupSessionCleanup = (io) => {
             if (now - session.lastSeen > RECONNECTION_GRACE_PERIOD) {
                 userSessions.delete(userId);
                 cleanedCount++;
-                console.log(`Session auto-cleanup: ${userId}`);
+                logger.info(`Session auto-cleanup: ${userId}`);
             }
         });
 
@@ -392,7 +378,7 @@ const setupSessionCleanup = (io) => {
         });
 
         if (cleanedCount > 0) {
-            console.log(`✓ Cleaned up ${cleanedCount} expired sessions (active: ${userSessions.size})`);
+            logger.info(`Cleaned up ${cleanedCount} expired sessions (active: ${userSessions.size})`);
         }
     }, 60000); // Run every minute
 };
