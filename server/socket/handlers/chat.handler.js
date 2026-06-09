@@ -410,7 +410,8 @@ const newMessage = async function(data, ack) {
         const { chatId, tempId, content, type } = data;
 
         if (!chatId || !content) {
-            throw new Error('chatId and content are required');
+            logger.warn('newMessage: missing required fields', { chatId, hasContent: !!content, userId: this.user?.id });
+            return ack({ error: 'chatId and content are required', code: 'VALIDATION_ERROR' });
         }
 
         // Validate message type
@@ -1033,8 +1034,8 @@ const reactOnMessage = async function(data, ack) {
             `Reaction processed: messageId=${messageId}, online=${onlineReceivers.length}, offline=${offlineReceivers.length}, duration=${Date.now() - startTime}ms`
         );
     } catch (ex) {
-        console.err(`General error on message react: ${err}`)
-        ack(ex);
+        logger.error(`General error on message react: ${ex.message}`);
+        if (typeof ack === 'function') ack({ error: ex.message });
     }
 }
 
@@ -1262,12 +1263,9 @@ const markConversationSeen = async function(data, ack) {
         } 
         
         if (!chatId) {
-            const errorMsg = 'Chat ID is required in request data';
-            console.error(`[Mark Conversation Seen Error] ${errorMsg} - Received data:`, {
-                data,
-                from
-            });
-            throw new Error(errorMsg);
+            logger.warn(`[Mark Conversation Seen] Missing chatId`, { userId: from, dataType: typeof data });
+            if (ack && typeof ack === 'function') ack({ error: 'Chat ID is required' });
+            return;
         }
 
         if (!from) {

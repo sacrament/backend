@@ -32,6 +32,12 @@ const pendingSocketEventService = new PendingSocketEventService();
 // Reconnection grace period: keep session data for 30 seconds
 const RECONNECTION_GRACE_PERIOD = 30 * 1000;
 
+// Reconnect rate limiter: track connect timestamps per user
+const connectTimestamps = new Map();
+const RECONNECT_WINDOW_MS = 60 * 1000; // 1 minute
+const RECONNECT_MAX_IN_WINDOW = 8;      // allow up to 8 connects/min before throttling
+const RECONNECT_BACKOFF_MS = 30 * 1000; // tell client to wait 30s
+
 /**
  * Initialize Socket.IO with authentication and event handlers
  * @param { import("socket.io").Server } io - Socket.IO instance
@@ -118,10 +124,23 @@ const initializeHandlers = (io) => {
  */
 const onConnected = async (socket, io) => {
     const userId = socket.decoded_token?.userId;
-    
+
     if (!userId) {
         console.error(`[Auth Error] No userId in decoded token for socket: ${socket.id}`);
         socket.emit('error', 'Authentication failed: No user ID in token');
+        socket.disconnect(true);
+        return;
+    }
+
+    // Rate-limit reconnect storms: reject if user connects too frequently
+    const now = Date.now();
+    const timestamps = (connectTimestamps.get(userId) || []).filter(t => now - t < RECONNECT_WINDOW_MS);
+    timestamps.push(now);
+    connectTimestamps.set(userId, timestamps);
+
+    if (timestamps.length > RECONNECT_MAX_IN_WINDOW) {
+        console.warn(`[RateLimit] User ${userId} exceeded reconnect limit (${timestamps.length} in ${RECONNECT_WINDOW_MS / 1000}s) — throttling`);
+        socket.emit('reconnect_throttled', { retryAfter: RECONNECT_BACKOFF_MS });
         socket.disconnect(true);
         return;
     }
@@ -359,6 +378,16 @@ const setupSessionCleanup = (io) => {
                 userSessions.delete(userId);
                 cleanedCount++;
                 console.log(`Session auto-cleanup: ${userId}`);
+            }
+        });
+
+        // Clean up stale rate-limit entries
+        connectTimestamps.forEach((timestamps, userId) => {
+            const fresh = timestamps.filter(t => now - t < RECONNECT_WINDOW_MS);
+            if (fresh.length === 0) {
+                connectTimestamps.delete(userId);
+            } else {
+                connectTimestamps.set(userId, fresh);
             }
         });
 
