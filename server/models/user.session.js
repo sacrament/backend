@@ -7,7 +7,7 @@ const UserSessionSchema = new mongoose.Schema({
     userAgent:   { type: String, default: null },
     deviceId:    { type: String, default: null },
     transport:   { type: String, default: null },        // 'polling' | 'websocket'
-    connectedAt: { type: Date, default: Date.now, index: true },
+    connectedAt: { type: Date, default: Date.now },
     disconnectedAt: { type: Date, default: null },
     disconnectReason: { type: String, default: null },
     durationMs:  { type: Number, default: null },        // filled on disconnect
