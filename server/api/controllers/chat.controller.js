@@ -488,15 +488,15 @@ const sendMessage = async (req, res) => {
     const startTime = Date.now();
     try {
         logger.info(`API: Send message: ${Date()}`);
-        const { content, chatId, type: kind, messageId: tempId, date, senderCopy, publicKey, bytes } = req.body;
+        const { content, chatId, type, messageId: tempId, date, senderCopy, publicKey, bytes } = req.body;
 
         if (!chatId || !content) {
             return res.status(400).json({ status: 'error', message: 'chatId and content are required' });
         }
 
-        const validKinds = ['text', 'image', 'video', 'screenshot_taken'];
-        if (kind && !validKinds.includes(kind)) {
-            return res.status(400).json({ status: 'error', message: `Invalid message kind: ${kind}` });
+        const validTypes = ['text', 'image', 'video', 'screenshot_taken'];
+        if (type && !validTypes.includes(type)) {
+            return res.status(400).json({ status: 'error', message: `Invalid message type: ${type}` });
         }
 
         let from = req.decodedToken.userId;
@@ -565,7 +565,7 @@ const sendMessage = async (req, res) => {
         const messageData = {
             content,
             chatId,
-            kind: kind || 'text',
+            type: type || 'text',
             senderCopy: senderCopy ?? null,
             sentOn: Date.now(),
             sentOnTimestamp: Math.floor(Date.now() / 1000),

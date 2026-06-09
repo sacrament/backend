@@ -7,6 +7,7 @@
 const config = require('../utils/config');
 const { initIO } = require('./io');
 const socketIO = require('socket.io');
+const logger = require('../utils/logger');
 
 module.exports = {
   async initializeSocket(server) {
@@ -56,12 +57,12 @@ module.exports = {
       try {
         await this._setupRedisAdapter(io);
       } catch (error) {
-        console.warn('⚠ Redis adapter not available, running Socket.IO in-memory:', error.message);
+        logger.warn(`Redis adapter not available, running Socket.IO in-memory: ${error.message}`);
       }
     }
 
     initIO(io);
-    console.log('✓ Socket.IO initialized on port', config.PORT);
+    logger.info(`Socket.IO initialized on port ${config.PORT}`);
     return io;
   },
 
@@ -77,6 +78,6 @@ module.exports = {
     await Promise.all([pubClient.connect(), subClient.connect()]);
     io.adapter(createAdapter(pubClient, subClient));
 
-    console.log('✓ Redis adapter configured for Socket.IO');
+    logger.info('Redis adapter configured for Socket.IO');
   }
 };
