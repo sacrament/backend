@@ -14,6 +14,7 @@ const socketAuth = require('../middleware/socket.auth');
 const MessageService = require('../services/domain/chat/message.service');
 const logger = require('../utils/logger');
 const PendingSocketEventService = require('../services/domain/socket/pending.socket.event.service');
+const UserSession = require('../models/user.session');
 
 // Import event handlers
 const { ChatHandler, CallsHandler, UserHandler } = require('./handlers');
@@ -226,39 +227,47 @@ const onConnected = async (socket, io) => {
         // Join user-specific room
         socket.join(userId);
 
-        try {
-            const pendingEvents = await pendingSocketEventService.consumeForUser(userId);
-            if (pendingEvents.length > 0) {
-                for (const pendingEvent of pendingEvents) {
-                    socket.emit(pendingEvent.event, pendingEvent.payload);
-                }
-                logger.info(`Replayed ${pendingEvents.length} pending socket event(s) for user: ${userId}`);
-            }
-        } catch (error) {
-            logger.error(`Error replaying pending socket events for ${userId}: ${error.message}`);
-        }
+        // Ack the client immediately — nothing below should delay this
+        socket.emit('connected', { userId, sessionValid: true, socketId: socket.id });
+        socket.broadcast.emit('new user connected', { userId });
 
-        // Mark all pending messages as delivered for this user (was offline, now back online)
-        try {
-            const markedCount = await messageService.markPendingMessagesAsDelivered(userId);
-            if (markedCount > 0) {
-                logger.info(`Updated ${markedCount} messages as delivered for user: ${userId}`);
-            }
-        } catch (error) {
-            logger.error(`Error marking messages as delivered: ${error.message}`);
-            // Don't fail the connection, just log the error
-        }
+        // All post-connect work is fire-and-forget so it never blocks the handshake
+        setImmediate(async () => {
+            // Record session in DB
+            socket._sessionConnectedAt = new Date();
+            UserSession.create({
+                userId,
+                socketId: socket.id,
+                ip: socket.handshake.headers['x-forwarded-for']?.split(',')[0].trim()
+                    || socket.handshake.address,
+                userAgent: socket.handshake.headers['user-agent'] || null,
+                deviceId: socket.deviceId || null,
+                transport: socket.conn?.transport?.name || null,
+                connectedAt: socket._sessionConnectedAt,
+            }).then(session => {
+                socket._sessionId = session._id;
+            }).catch(err => logger.error(`Failed to record user session: ${err.message}`));
 
-        // Notify others
-        socket.broadcast.emit('new user connected', {
-            userId
-        });
-
-        // Notify this client
-        socket.emit('connected', { 
-            userId, 
-            sessionValid: true,
-            socketId: socket.id
+            // Replay pending events and mark messages delivered in parallel
+            await Promise.allSettled([
+                pendingSocketEventService.consumeForUser(userId).then(pendingEvents => {
+                    for (const pendingEvent of pendingEvents) {
+                        socket.emit(pendingEvent.event, pendingEvent.payload);
+                    }
+                    if (pendingEvents.length > 0) {
+                        logger.info(`Replayed ${pendingEvents.length} pending socket event(s) for user: ${userId}`);
+                    }
+                }),
+                messageService.markPendingMessagesAsDelivered(userId).then(markedCount => {
+                    if (markedCount > 0) {
+                        logger.info(`Updated ${markedCount} messages as delivered for user: ${userId}`);
+                    }
+                }),
+            ]).then(results => {
+                results.forEach(r => {
+                    if (r.status === 'rejected') logger.error(`Post-connect task failed for ${userId}: ${r.reason?.message}`);
+                });
+            });
         });
     } catch (error) {
         logger.error(`[Socket Error] Error in onConnected for user ${userId}: ${error.message}`);
@@ -278,6 +287,16 @@ const onDisconnected = (socket, io) => {
         
         if (userId) {
             logger.info(`User disconnected: ${userId} (socket: ${socket.id}) reason: ${reason}`);
+
+            // Close the session record
+            if (socket._sessionId) {
+                const now = new Date();
+                UserSession.findByIdAndUpdate(socket._sessionId, {
+                    disconnectedAt: now,
+                    disconnectReason: reason,
+                    durationMs: now - (socket._sessionConnectedAt || now),
+                }).catch(err => logger.error(`Failed to close user session: ${err.message}`));
+            }
             
             // For temporary disconnections (network issues), keep session alive
             if (reason === 'transport error' || reason === 'ping timeout' || reason === 'transport close') {
