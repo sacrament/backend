@@ -1109,7 +1109,7 @@ class UserService {
     }
 
     async updateNotificationPreferences(userId, prefs) {
-        const fields = ['newMessages', 'chatRequests', 'connectionRequests', 'nearbyWinks', 'sound', 'vibration', 'badge'];
+        const fields = ['newMessages', 'chatRequests', 'connectionRequests', 'nearbyWinks', 'profileViews', 'systemUpdates', 'sound', 'vibration', 'badge'];
         const update = {};
         for (const key of fields) {
             if (typeof prefs[key] === 'boolean') update[`notificationPreferences.${key}`] = prefs[key];
@@ -1118,6 +1118,65 @@ class UserService {
         const user = await UserModel.findByIdAndUpdate(userId, { $set: update }, { new: true });
         if (!user) throw new Error('User not found');
         return user.notificationPreferences;
+    }
+
+    /**
+     * "Who can see your profile" — everyone | nobody.
+     */
+    async updateProfileVisibility(userId, visibility) {
+        if (!['everyone', 'nobody'].includes(visibility)) throw new Error('Invalid visibility');
+        const user = await UserModel.findByIdAndUpdate(userId, { $set: { profileVisibility: visibility } }, { new: true });
+        if (!user) throw new Error('User not found');
+        return user.profileVisibility;
+    }
+
+    /**
+     * "Call permissions" — everyone | nobody.
+     */
+    async updateCallPermissions(userId, permissions) {
+        if (!['everyone', 'nobody'].includes(permissions)) throw new Error('Invalid permissions');
+        const user = await UserModel.findByIdAndUpdate(userId, { $set: { callPermissions: permissions } }, { new: true });
+        if (!user) throw new Error('User not found');
+        return user.callPermissions;
+    }
+
+    /**
+     * Upsert a profile view (viewer looked at viewed's profile).
+     * Self-views are ignored.
+     */
+    async logProfileView(viewerId, viewedId) {
+        if (viewerId.toString() === viewedId.toString()) return;
+        const ProfileViewModel = require('../../../models/profile.view');
+        await ProfileViewModel.findOneAndUpdate(
+            { viewer: viewerId, viewed: viewedId },
+            { $set: { viewedAt: new Date() } },
+            { upsert: true }
+        );
+    }
+
+    /**
+     * "Who viewed me" — unique recent viewers, newest first.
+     */
+    async getProfileViewers(userId, limit = 50) {
+        const ProfileViewModel = require('../../../models/profile.view');
+        const views = await ProfileViewModel
+            .find({ viewed: userId })
+            .sort({ viewedAt: -1 })
+            .limit(limit)
+            .populate('viewer');
+        return views
+            .filter(v => v.viewer && !v.viewer.deleted)
+            .map(v => ({ user: v.viewer, viewedAt: v.viewedAt }));
+    }
+
+    /**
+     * "Who saved me" — users who added this user to their favorites.
+     */
+    async getSavers(userId, limit = 50) {
+        return UserModel
+            .find({ favorites: userId, deleted: { $ne: true } })
+            .sort({ updatedOn: -1 })
+            .limit(limit);
     }
 
     async updateProfilePrivacy(userId, prefs) {
@@ -1273,7 +1332,7 @@ class UserService {
         const user = await UserModel.findById(userId);
         if (!user) throw new Error('User not found');
 
-        const { name, email, imageUrl, isPublic, bio, gender, dateOfBirth, interestedIn } = fields;
+        const { name, email, imageUrl, isPublic, bio, gender, dateOfBirth, interestedIn, interests, age } = fields;
         if (name !== undefined)        user.name        = name;
         if (email !== undefined)       user.email       = email;
         if (imageUrl !== undefined)    user.imageUrl    = imageUrl;
@@ -1283,6 +1342,8 @@ class UserService {
         if (interestedIn !== undefined) {
             user.interestedIn = this.#normalizeInterestedIn(interestedIn);
         }
+        if (interests !== undefined) user.interests = interests;
+        if (age !== undefined && dateOfBirth === undefined) user.age = age;
         if (dateOfBirth !== undefined) {
             user.dateOfBirth = new Date(dateOfBirth);
             // keep age in sync

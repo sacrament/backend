@@ -12,6 +12,8 @@ const User = new Schema({
     phone: { type: String, default: null },
     imageUrl: { type: String, default: null },
     bio: { type: String, default: null },
+    // Interest tags shown on the profile ("My interests" in Personal info)
+    interests: [{ type: String }],
     registeredOn: { type: Date, default: Date.now() },
     updatedOn: { type: Date, default: null }, 
     appleId: { type: String, default: null },
@@ -43,6 +45,10 @@ const User = new Schema({
         invisible: { type: Boolean, default: false },
         updatedOn: { type: Date, default: null },
     },
+    // Who can see this profile at all ("Who can see your profile" in Visibility)
+    profileVisibility: { type: String, enum: ['everyone', 'nobody'], default: 'everyone' },
+    // Who is allowed to send call requests ("Call permissions" in Privacy & Safety)
+    callPermissions: { type: String, enum: ['everyone', 'nobody'], default: 'everyone' },
     // Visibility preferences (Section 7.1)
     visibilityPreferences: {
         womenOnly: { type: Boolean, default: false },
@@ -56,6 +62,8 @@ const User = new Schema({
         chatRequests: { type: Boolean, default: true },
         connectionRequests: { type: Boolean, default: true },
         nearbyWinks: { type: Boolean, default: true },
+        profileViews: { type: Boolean, default: true },
+        systemUpdates: { type: Boolean, default: true },
         sound: { type: Boolean, default: true },
         vibration: { type: Boolean, default: true },
         badge: { type: Boolean, default: true }

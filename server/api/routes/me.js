@@ -40,6 +40,16 @@ router.put('/visibility/preferences', meController.updateVisibilityPreferences);
 // PUT  /me/privacy
 router.put('/privacy', meController.updateProfilePrivacy);
 
+// "Who can see your profile" (everyone | nobody)
+router.put('/visibility', meController.updateProfileVisibility);
+
+// "Call permissions" (everyone | nobody)
+router.put('/call-permissions', meController.updateCallPermissions);
+
+// History & Activity
+router.get('/viewers', meController.getProfileViewers);
+router.get('/savers', meController.getSavers);
+
 // DELETE /me
 router.delete('/', meController.deleteCurrentUserAccount);
 

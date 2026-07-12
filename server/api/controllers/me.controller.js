@@ -231,7 +231,8 @@ const updateCurrentUserProfile = async (req, res) => {
     const userId = req.decodedToken.userId;
     // Accept both field name variants from the spec
     const {
-      name, bio, email, isPublic, interestedIn, pictureUrl
+      name, bio, email, isPublic, interestedIn, pictureUrl,
+      gender, age, birthday, dateOfBirth, interests
     } = req.body;
 
     logger.info(
@@ -240,6 +241,16 @@ const updateCurrentUserProfile = async (req, res) => {
 
     if (email !== undefined && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ status: 'error', message: 'Invalid email format' });
+    }
+    if (gender !== undefined && !['male', 'female', 'other', 'non-binary', 'prefer-not-to-say'].includes(gender)) {
+      return res.status(400).json({ status: 'error', message: 'gender must be male, female, other, non-binary, or prefer-not-to-say' });
+    }
+    if (interests !== undefined && (
+      !Array.isArray(interests) ||
+      interests.length > 20 ||
+      interests.some(i => typeof i !== 'string' || i.length === 0 || i.length > 30)
+    )) {
+      return res.status(400).json({ status: 'error', message: 'interests must be an array of up to 20 short strings' });
     }
     // if (gender !== undefined && !['male', 'female', 'other', 'non-binary', 'prefer-not-to-say', 'none'].includes(gender)) {
     //   return res.status(400).json({ status: 'error', message: 'gender must be male, female, other, non-binary, prefer-not-to-say, or none' });
@@ -259,14 +270,21 @@ const updateCurrentUserProfile = async (req, res) => {
     if (email        !== undefined) fields.email       = email;
     if (isPublic     !== undefined) fields.isPublic    = isPublic;
     if (interestedIn !== undefined) fields.interestedIn = normalizedInterestedIn.value;
-    // if (gender       !== undefined) fields.gender      = gender;
-    // if (age          !== undefined) fields.age         = age;
+    if (gender       !== undefined) fields.gender      = gender;
+    if (age          !== undefined) fields.age         = age;
+    if (interests    !== undefined) fields.interests   = interests;
     // pictureUrl / imageUrl are interchangeable
     const photo = pictureUrl;
     if (photo !== undefined) fields.imageUrl = photo;
     // birthday / dateOfBirth are interchangeable
-    // const dob = birthday ?? dateOfBirth;
-    // if (dob !== undefined) fields.dateOfBirth = dob;
+    const dob = birthday ?? dateOfBirth;
+    if (dob !== undefined) {
+      const parsed = new Date(dob);
+      if (isNaN(parsed.getTime())) {
+        return res.status(400).json({ status: 'error', message: 'Invalid birthday' });
+      }
+      fields.dateOfBirth = parsed;
+    }
 
     if (Object.keys(fields).length === 0) {
       return res.status(400).json({ status: 'error', message: 'No fields provided to update' });
@@ -279,7 +297,7 @@ const updateCurrentUserProfile = async (req, res) => {
     const user = await userService.updateProfile(userId, fields);
 
     // Broadcast profile changes to connections in real time
-    const publicFields = ['name', 'bio', 'isPublic', 'imageUrl', 'interestedIn'];
+    const publicFields = ['name', 'bio', 'isPublic', 'imageUrl', 'interestedIn', 'interests'];
     const changedPublic = publicFields.filter(f => fields[f] !== undefined);
     if (changedPublic.length > 0) {
       const updatePayload = { userId: userId.toString() };
@@ -449,6 +467,69 @@ const updateVisibilityPreferences = async (req, res) => {
 /**
  * PUT /me/privacy
  */
+/**
+ * PUT /me/visibility
+ * "Who can see your profile" — { visibility: 'everyone' | 'nobody' }
+ */
+const updateProfileVisibility = async (req, res) => {
+  try {
+    const profileVisibility = await userService.updateProfileVisibility(req.decodedToken.userId, req.body.visibility);
+    return res.status(200).json({ status: 'success', profileVisibility });
+  } catch (error) {
+    if (error.message === 'Invalid visibility') return res.status(400).json({ status: 'error', message: "visibility must be 'everyone' or 'nobody'" });
+    if (error.message === 'User not found')    return res.status(404).json({ status: 'error', message: 'User not found' });
+    logger.error('Update profile visibility error:', error);
+    return res.status(500).json({ status: 'error', message: 'Failed to update visibility' });
+  }
+};
+
+/**
+ * PUT /me/call-permissions
+ * "Call permissions" — { permissions: 'everyone' | 'nobody' }
+ */
+const updateCallPermissions = async (req, res) => {
+  try {
+    const callPermissions = await userService.updateCallPermissions(req.decodedToken.userId, req.body.permissions);
+    return res.status(200).json({ status: 'success', callPermissions });
+  } catch (error) {
+    if (error.message === 'Invalid permissions') return res.status(400).json({ status: 'error', message: "permissions must be 'everyone' or 'nobody'" });
+    if (error.message === 'User not found')      return res.status(404).json({ status: 'error', message: 'User not found' });
+    logger.error('Update call permissions error:', error);
+    return res.status(500).json({ status: 'error', message: 'Failed to update call permissions' });
+  }
+};
+
+/**
+ * GET /me/viewers
+ * "Who viewed me" — unique recent viewers with the latest view time.
+ */
+const getProfileViewers = async (req, res) => {
+  try {
+    const viewers = await userService.getProfileViewers(req.decodedToken.userId);
+    return res.status(200).json({
+      status: 'success',
+      viewers: viewers.map(v => ({ user: formatUserResponse(v.user), viewedAt: v.viewedAt })),
+    });
+  } catch (error) {
+    logger.error('Get profile viewers error:', error);
+    return res.status(500).json({ status: 'error', message: 'Failed to get profile viewers' });
+  }
+};
+
+/**
+ * GET /me/savers
+ * "Who saved me" — users who favorited the current user.
+ */
+const getSavers = async (req, res) => {
+  try {
+    const savers = await userService.getSavers(req.decodedToken.userId);
+    return res.status(200).json({ status: 'success', savers: savers.map(formatUserResponse) });
+  } catch (error) {
+    logger.error('Get savers error:', error);
+    return res.status(500).json({ status: 'error', message: 'Failed to get savers' });
+  }
+};
+
 const updateProfilePrivacy = async (req, res) => {
   try {
     const userId = req.decodedToken.userId;
@@ -808,6 +889,9 @@ function formatUserResponse(user) {
     gender:       user.gender   ?? null,
     dateOfBirth:  user.dateOfBirth ?? null,
     interestedIn: user.interestedIn ?? null,
+    interests:    user.interests ?? [],
+    profileVisibility: user.profileVisibility ?? 'everyone',
+    callPermissions:   user.callPermissions   ?? 'everyone',
     radar: {
       enabled:   user.radar?.enabled   ?? true,
       invisible: user.radar?.invisible ?? false,
@@ -882,6 +966,10 @@ async function syncActionLogs(req, res) {
 
 module.exports = {
   getCurrentUserProfile,
+  updateProfileVisibility,
+  updateCallPermissions,
+  getProfileViewers,
+  getSavers,
   setupProfile,
   updateCurrentUserProfile,
   updateCurrentUserPicture,

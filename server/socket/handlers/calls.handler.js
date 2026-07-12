@@ -53,6 +53,11 @@ const sendCallRequest = async function(data, ack) {
 
         const calleeId = calleeObject._id.toString();
 
+        // "Call permissions" — callee opted out of receiving any call requests
+        if (calleeObject.callPermissions === 'nobody') {
+            return ack({ error: 'This user does not accept calls' });
+        }
+
         // Capture caller IP from socket handshake (falls back through proxy headers)
         const ipAddress =
             this.handshake.headers['x-forwarded-for']?.split(',')[0]?.trim() ||

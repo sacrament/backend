@@ -40,6 +40,13 @@ const getUserById = async (req, res) => {
     try {
         const user = await userService.getUserById(req.params.id);
         if (!user) return res.status(404).json({ status: 'error', message: 'User not found' });
+
+        // Track for "Who viewed me" (fire-and-forget; never blocks the response)
+        const viewerId = req.decodedToken?.userId;
+        if (viewerId) {
+            userService.logProfileView(viewerId, req.params.id).catch(() => {});
+        }
+
         return res.status(200).json({ status: 'success', user: formatPublicUserResponse(user) });
     } catch (error) {
         logger.error('Get user error:', error);

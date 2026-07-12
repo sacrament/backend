@@ -72,6 +72,7 @@ const getNearbyUsers = async (req, res) => {
             status: 'active',
             'radar.enabled': { $ne: false },
             'radar.invisible': { $ne: true },
+            profileVisibility: { $ne: 'nobody' },
             lastSeen: { $gt: twoMinutesAgo },
         };
 

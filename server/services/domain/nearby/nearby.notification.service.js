@@ -54,6 +54,7 @@ class NearbyNotificationService {
             if (!movingUser)                     return;
             if (movingUser.radar?.enabled === false) return; // opted out of radar
             if (movingUser.radar?.invisible)     return; // invisible — don't reveal presence
+            if (movingUser.profileVisibility === 'nobody') return; // profile hidden from everyone
 
             const [nearbyUsers, blockedIds, connectionIds] = await Promise.all([
                 this._findUsersNear(lon, lat, radiusKm, movingUserId),
@@ -145,6 +146,7 @@ class NearbyNotificationService {
                     'user.status':        'active',
                     'user.radar.enabled': { $ne: false },
                     'user.radar.invisible': { $ne: true },
+                    'user.profileVisibility': { $ne: 'nobody' },
                     'user.lastSeen':      { $gt: sixtyMinutesAgo },
                 },
             },
