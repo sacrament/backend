@@ -41,8 +41,18 @@ const getUserById = async (req, res) => {
         const user = await userService.getUserById(req.params.id);
         if (!user) return res.status(404).json({ status: 'error', message: 'User not found' });
 
-        // Track for "Who viewed me" (fire-and-forget; never blocks the response)
         const viewerId = req.decodedToken?.userId;
+
+        // "Who can see your profile: Nobody" — hidden from everyone except
+        // themselves and their accepted connections (open chats keep working).
+        if (user.profileVisibility === 'nobody' && viewerId && viewerId.toString() !== req.params.id.toString()) {
+            const connected = await userService.areConnected(viewerId, req.params.id);
+            if (!connected) {
+                return res.status(404).json({ status: 'error', message: 'User not found' });
+            }
+        }
+
+        // Track for "Who viewed me" (fire-and-forget; never blocks the response)
         if (viewerId) {
             userService.logProfileView(viewerId, req.params.id).catch(() => {});
         }

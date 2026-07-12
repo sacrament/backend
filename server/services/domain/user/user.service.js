@@ -1170,6 +1170,17 @@ class UserService {
     }
 
     /**
+     * Whether two users have an accepted connection.
+     */
+    async areConnected(userIdA, userIdB) {
+        const ucs = await UserConnectStatus.findOne({
+            users: { $all: [userIdA, userIdB] },
+            status: 'connected'
+        });
+        return !!ucs;
+    }
+
+    /**
      * "Who saved me" — users who added this user to their favorites.
      */
     async getSavers(userId, limit = 50) {
@@ -1588,7 +1599,8 @@ class UserService {
         const filter = {
             name: { $regex: name.trim(), $options: 'i' },
             status: 'active',
-            deleted: { $ne: true }
+            deleted: { $ne: true },
+            profileVisibility: { $ne: 'nobody' }
         };
         const [users, total] = await Promise.all([
             UserModel.find(filter).skip(skip).limit(size).sort({ name: 1 }),
