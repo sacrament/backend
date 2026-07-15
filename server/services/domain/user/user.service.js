@@ -791,25 +791,42 @@ class UserService {
      * @returns {Promise<Object>} Result object with title and request
      */
     async sendConnectionRequest(from, to) {
-        const existing = await UserRequestModel.findOne({ from, to });
+        if (String(from) === String(to)) {
+            throw new Error('Cannot send a request to yourself');
+        }
 
-        if (existing) {
-            if (existing.status === 'new') {
-                return { title: 'Request already pending', request: existing.toObject() };
-            }
-            if (existing.status === 'accepted') {
-                throw new Error('Already connected');
-            }
+        const block = await this._BlockUser.findOne({
+            $or: [{ blocker: from, blocked: to }, { blocker: to, blocked: from }],
+            status: 'active'
+        }).lean();
+        if (block) {
+            throw new Error('Cannot send a request to this user');
+        }
+
+        const existing = await UserRequestModel.find({
+            $or: [{ from, to }, { from: to, to: from }]
+        });
+
+        if (existing.some(r => r.status === 'new')) {
+            throw new Error('Request already pending');
+        }
+        if (existing.some(r => r.status === 'accepted')) {
+            throw new Error('Already connected');
+        }
+
+        const own = existing.find(r => String(r.from) === String(from));
+        if (own) {
             // for declined we need to not allow resend for 24 hours, for cancelled we can allow resend immediately, for disconnected we can allow resend immediately
-            if (existing.status === 'declined' && (Date.now() - existing.updatedOn) < 24 * 60 * 60 * 1000) {
+            if (own.status === 'declined' && (Date.now() - own.updatedOn) < 24 * 60 * 60 * 1000) {
                 throw new Error('Cannot re-send request. Please wait 24 hours');
             }
             // declined / cancelled / disconnected — allow re-send
-            existing.status = 'new';
-            existing.howMany += 1;
-            await existing.save();
+            own.status = 'new';
+            own.howMany += 1;
+            own.updatedOn = Date.now();
+            await own.save();
 
-            const populated = await existing.populate({ path: 'from to', select: utils.userColumnsToShow() });
+            const populated = await own.populate({ path: 'from to', select: utils.userColumnsToShow() });
             return { title: 'Request resent', request: populated.toObject() };
         }
 
@@ -838,8 +855,11 @@ class UserService {
      */
     async respondConnectionRequest(from, to, response) {
 
+        // Only the recipient of the request may respond: the responder (`from`)
+        // must be the request's `to`, and `to` is the original sender.
         const request = await UserRequestModel.findOne({
-            $or: [{ from: from, to: to }, { from: to, to: from }],
+            from: to,
+            to: from,
             status: 'new'
         })
             .populate({
@@ -848,6 +868,13 @@ class UserService {
             });
 
         if (!request) {
+            // The iOS client calls both the socket and REST paths for reliability —
+            // a request already settled with the same response is a no-op, not an error.
+            const settled = await UserRequestModel.findOne({ from: to, to: from, status: response })
+                .populate({ path: 'to from', select: utils.userColumnsToShow() });
+            if (settled) {
+                return { title: `Request already ${response}`, request: settled.toObject(), duplicate: true };
+            }
             throw new Error('No request found');
         }
 
@@ -882,17 +909,7 @@ class UserService {
                 });
         }
 
-        const result = { title: 'Existing request updated', request: request.toObject() };
-
-        try {
-            getIO().to(to).emit('connection request response', {
-                response,
-                from,
-                request: result.request
-            });
-        } catch (_) {}
-
-        return result;
+        return { title: 'Existing request updated', request: request.toObject() };
     }
 
     /**
@@ -974,7 +991,9 @@ class UserService {
         }
 
         request.updatedOn = Date.now();
-        request.status = 'disconnected';
+        // The client only understands new/pending, accepted, declined, cancelled —
+        // the pair-level "disconnected" state lives on UserConnectStatus below.
+        request.status = 'cancelled';
         request.reason = reason;
 
         await request.save();
@@ -1062,11 +1081,24 @@ class UserService {
      * @returns {Promise<Object>} Updated user object
      */
     async updatePresence(userId) {
-        return await UserModel.findByIdAndUpdate(
+        const now = new Date();
+
+        const user = await UserModel.findByIdAndUpdate(
             userId,
-            { $set: { lastSeen: new Date() } },
+            { $set: { lastSeen: now } },
             { new: true }
         ).lean();
+
+        // Keep the user's current location fresh so the location:expire-stale job
+        // (server/jobs/location.js) doesn't flip isCurrent false between location
+        // pings — a heartbeat alone should be enough to stay visible on radar.
+        const LocationModel = mongoose.model('Location');
+        await LocationModel.updateMany(
+            { user: userId, isCurrent: true },
+            { $set: { recordedAt: now } }
+        );
+
+        return user;
     }
 
     async updateRadarEnabled(userId, enabled) {
@@ -1109,7 +1141,7 @@ class UserService {
     }
 
     async updateNotificationPreferences(userId, prefs) {
-        const fields = ['newMessages', 'chatRequests', 'connectionRequests', 'nearbyWinks', 'sound', 'vibration', 'badge'];
+        const fields = ['newMessages', 'chatRequests', 'connectionRequests', 'nearbyWinks', 'profileViews', 'systemUpdates', 'sound', 'vibration', 'badge'];
         const update = {};
         for (const key of fields) {
             if (typeof prefs[key] === 'boolean') update[`notificationPreferences.${key}`] = prefs[key];
@@ -1118,6 +1150,97 @@ class UserService {
         const user = await UserModel.findByIdAndUpdate(userId, { $set: update }, { new: true });
         if (!user) throw new Error('User not found');
         return user.notificationPreferences;
+    }
+
+    /**
+     * "Who can see your profile" — everyone | nobody.
+     */
+    async updateProfileVisibility(userId, visibility) {
+        if (!['everyone', 'nobody'].includes(visibility)) throw new Error('Invalid visibility');
+        const user = await UserModel.findByIdAndUpdate(userId, { $set: { profileVisibility: visibility } }, { new: true });
+        if (!user) throw new Error('User not found');
+        return user.profileVisibility;
+    }
+
+    /**
+     * How long (minutes) this user stays visible on others' radar after their
+     * last location ping, per distance preset — { here, nearby, walkable, local }.
+     * Any preset omitted from `durations` is left untouched; `null` clears a preset
+     * back to the server default. Values are capped by the caller (nearby.controller.js).
+     */
+    async updateRadarDurations(userId, durations) {
+        const PRESETS = ['here', 'nearby', 'walkable', 'local'];
+        const update = {};
+        for (const preset of Object.keys(durations || {})) {
+            if (!PRESETS.includes(preset)) throw new Error('Invalid preset');
+            const value = durations[preset];
+            if (value !== null && !(typeof value === 'number' && value > 0)) throw new Error('Invalid duration');
+            update[`radar.presetDurations.${preset}`] = value;
+        }
+
+        const user = await UserModel.findByIdAndUpdate(userId, { $set: update }, { new: true });
+        if (!user) throw new Error('User not found');
+        return user.radar.presetDurations;
+    }
+
+    /**
+     * "Call permissions" — everyone | nobody.
+     */
+    async updateCallPermissions(userId, permissions) {
+        if (!['everyone', 'nobody'].includes(permissions)) throw new Error('Invalid permissions');
+        const user = await UserModel.findByIdAndUpdate(userId, { $set: { callPermissions: permissions } }, { new: true });
+        if (!user) throw new Error('User not found');
+        return user.callPermissions;
+    }
+
+    /**
+     * Upsert a profile view (viewer looked at viewed's profile).
+     * Self-views are ignored.
+     */
+    async logProfileView(viewerId, viewedId) {
+        if (viewerId.toString() === viewedId.toString()) return;
+        const ProfileViewModel = require('../../../models/profile.view');
+        await ProfileViewModel.findOneAndUpdate(
+            { viewer: viewerId, viewed: viewedId },
+            { $set: { viewedAt: new Date() } },
+            { upsert: true }
+        );
+    }
+
+    /**
+     * "Who viewed me" — unique recent viewers, newest first.
+     */
+    async getProfileViewers(userId, limit = 50) {
+        const ProfileViewModel = require('../../../models/profile.view');
+        const views = await ProfileViewModel
+            .find({ viewed: userId })
+            .sort({ viewedAt: -1 })
+            .limit(limit)
+            .populate('viewer');
+        return views
+            .filter(v => v.viewer && !v.viewer.deleted)
+            .map(v => ({ user: v.viewer, viewedAt: v.viewedAt }));
+    }
+
+    /**
+     * Whether two users have an accepted connection.
+     */
+    async areConnected(userIdA, userIdB) {
+        const ucs = await UserConnectStatus.findOne({
+            users: { $all: [userIdA, userIdB] },
+            status: 'connected'
+        });
+        return !!ucs;
+    }
+
+    /**
+     * "Who saved me" — users who added this user to their favorites.
+     */
+    async getSavers(userId, limit = 50) {
+        return UserModel
+            .find({ favorites: userId, deleted: { $ne: true } })
+            .sort({ updatedOn: -1 })
+            .limit(limit);
     }
 
     async updateProfilePrivacy(userId, prefs) {
@@ -1273,7 +1396,7 @@ class UserService {
         const user = await UserModel.findById(userId);
         if (!user) throw new Error('User not found');
 
-        const { name, email, imageUrl, isPublic, bio, gender, dateOfBirth, interestedIn } = fields;
+        const { name, email, imageUrl, isPublic, bio, gender, dateOfBirth, interestedIn, interests, age } = fields;
         if (name !== undefined)        user.name        = name;
         if (email !== undefined)       user.email       = email;
         if (imageUrl !== undefined)    user.imageUrl    = imageUrl;
@@ -1283,6 +1406,8 @@ class UserService {
         if (interestedIn !== undefined) {
             user.interestedIn = this.#normalizeInterestedIn(interestedIn);
         }
+        if (interests !== undefined) user.interests = interests;
+        if (age !== undefined && dateOfBirth === undefined) user.age = age;
         if (dateOfBirth !== undefined) {
             user.dateOfBirth = new Date(dateOfBirth);
             // keep age in sync
@@ -1527,7 +1652,8 @@ class UserService {
         const filter = {
             name: { $regex: name.trim(), $options: 'i' },
             status: 'active',
-            deleted: { $ne: true }
+            deleted: { $ne: true },
+            profileVisibility: { $ne: 'nobody' }
         };
         const [users, total] = await Promise.all([
             UserModel.find(filter).skip(skip).limit(size).sort({ name: 1 }),

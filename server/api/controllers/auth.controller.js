@@ -423,18 +423,13 @@ function checkRateLimit(key, maxRequests, windowSeconds) {
 
 /**
  * A profile is considered complete when the user has supplied the minimum
- * fields required to participate in the app as a dater.  These are the
- * fields the onboarding flow collects; anything less means onboarding is
- * still pending regardless of whether the account record already existed.
+ * fields required to participate in the app.  Signup only collects a
+ * Display Name (photo, birthday, gender, and interests moved out of
+ * onboarding); anything less means onboarding is still pending regardless
+ * of whether the account record already existed.
  */
 function isProfileComplete(user) {
-  return !!(
-    user.name &&
-    user.imageUrl &&
-    user.gender &&
-    (user.age || user.dateOfBirth) &&
-    user.interestedIn
-  );
+  return !!user.name;
 }
 
 function formatUserResponse(user) {

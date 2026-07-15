@@ -31,6 +31,9 @@ router.put('/radar', meController.updateRadarStatus);
 // PUT  /me/radar/invisible
 router.put('/radar/invisible', meController.updateRadarInvisible);
 
+// PUT  /me/radar/durations — how long the user stays visible on radar, per distance preset
+router.put('/radar/durations', meController.updateRadarDurations);
+
 // PUT  /me/notifications/preferences
 router.put('/notifications/preferences', meController.updateNotificationPreferences);
 
@@ -39,6 +42,16 @@ router.put('/visibility/preferences', meController.updateVisibilityPreferences);
 
 // PUT  /me/privacy
 router.put('/privacy', meController.updateProfilePrivacy);
+
+// "Who can see your profile" (everyone | nobody)
+router.put('/visibility', meController.updateProfileVisibility);
+
+// "Call permissions" (everyone | nobody)
+router.put('/call-permissions', meController.updateCallPermissions);
+
+// History & Activity
+router.get('/viewers', meController.getProfileViewers);
+router.get('/savers', meController.getSavers);
 
 // DELETE /me
 router.delete('/', meController.deleteCurrentUserAccount);
