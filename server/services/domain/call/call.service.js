@@ -1,8 +1,17 @@
 const config = require('../../../utils/config');
 const twilio = require('twilio');
-const client = twilio(config.TWILIO.ACCOUNTSID, config.TWILIO.AUTHTOKEN);
 const AccessToken = twilio.jwt.AccessToken;
 const VideoGrant = AccessToken.VideoGrant;
+
+let _client;
+const client = new Proxy({}, {
+    get(_target, prop) {
+        if (!_client) {
+            _client = twilio(config.TWILIO.ACCOUNTSID, config.TWILIO.AUTHTOKEN);
+        }
+        return _client[prop];
+    }
+});
 
 const mongoose = require('mongoose');
 const ObjectId = mongoose.Types.ObjectId;

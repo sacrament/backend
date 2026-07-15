@@ -484,6 +484,25 @@ const updateProfileVisibility = async (req, res) => {
 };
 
 /**
+ * PUT /me/radar/durations
+ * How long the user stays visible on others' radar per distance preset —
+ * body: { durations: { here?, nearby?, walkable?, local? } } (minutes, or null to reset)
+ */
+const updateRadarDurations = async (req, res) => {
+  try {
+    const presetDurations = await userService.updateRadarDurations(req.decodedToken.userId, req.body.durations);
+    return res.status(200).json({ status: 'success', presetDurations });
+  } catch (error) {
+    if (error.message === 'Invalid preset' || error.message === 'Invalid duration') {
+      return res.status(400).json({ status: 'error', message: error.message });
+    }
+    if (error.message === 'User not found') return res.status(404).json({ status: 'error', message: 'User not found' });
+    logger.error('Update radar durations error:', error);
+    return res.status(500).json({ status: 'error', message: 'Failed to update radar durations' });
+  }
+};
+
+/**
  * PUT /me/call-permissions
  * "Call permissions" — { permissions: 'everyone' | 'nobody' }
  */
@@ -895,6 +914,12 @@ function formatUserResponse(user) {
     radar: {
       enabled:   user.radar?.enabled   ?? true,
       invisible: user.radar?.invisible ?? false,
+      presetDurations: {
+        here:     user.radar?.presetDurations?.here     ?? null,
+        nearby:   user.radar?.presetDurations?.nearby   ?? null,
+        walkable: user.radar?.presetDurations?.walkable ?? null,
+        local:    user.radar?.presetDurations?.local    ?? null,
+      },
     },
     lastSeen:     user.lastSeen     ?? null,
     registeredOn: user.registeredOn ?? null,
@@ -904,9 +929,10 @@ function formatUserResponse(user) {
     notificationPreferences: user.notificationPreferences ?? null,
     privacySettings:         user.privacySettings         ?? null,
     visibilityPreferences: user.visibilityPreferences ? {
-      womenOnly: user.visibilityPreferences.womenOnly ?? false,
-      menOnly:   user.visibilityPreferences.menOnly   ?? false,
-      photoBlur: user.visibilityPreferences.photoBlur ?? false,
+      womenOnly:     user.visibilityPreferences.womenOnly     ?? false,
+      menOnly:       user.visibilityPreferences.menOnly       ?? false,
+      nonBinaryOnly: user.visibilityPreferences.nonBinaryOnly ?? false,
+      photoBlur:     user.visibilityPreferences.photoBlur     ?? false,
     } : null,
   };
 }
@@ -967,6 +993,7 @@ async function syncActionLogs(req, res) {
 module.exports = {
   getCurrentUserProfile,
   updateProfileVisibility,
+  updateRadarDurations,
   updateCallPermissions,
   getProfileViewers,
   getSavers,

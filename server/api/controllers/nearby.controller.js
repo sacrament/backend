@@ -12,6 +12,9 @@ const DISTANCE_PRESETS = {
     'local':    0.5  * 1.60934     // 0.5 miles → km
 };
 
+const RADAR_DEFAULT_DURATION_MIN = 30;
+const RADAR_MAX_DURATION_MIN = 30;
+
 /**
  * GET /users-nearby
  */
@@ -54,18 +57,16 @@ const getNearbyUsers = async (req, res) => {
 
         // Resolve radius in km
         let radiusInKm;
+        const resolvedPreset = preset && DISTANCE_PRESETS[preset] ? preset : 'nearby';
         if (preset && DISTANCE_PRESETS[preset]) {
             radiusInKm = DISTANCE_PRESETS[preset];
         } else if (radius && !isNaN(parseFloat(radius))) {
-            const r = parseFloat(radius);
-            radiusInKm = unit === 'mile' ? r * 1.60934 : unit === 'feet' ? r * 0.0003048 : r;
+            radiusInKm = unit === 'mile' ? parseFloat(radius) * 1.60934 : unit === 'feet' ? parseFloat(radius) * 0.0003048 : parseFloat(radius);
         } else {
             radiusInKm = DISTANCE_PRESETS['nearby'];
         }
 
         // logger.info(`[getNearbyUsers] Search params - userId: ${currentUserId}, lat: ${searchLat}, lon: ${searchLon}, radiusKm: ${radiusInKm}, interestedIn: ${currentUser.interestedIn}`);
-
-        const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000);
 
         const filters = {
             _id: { $ne: currentUserId },
@@ -73,23 +74,20 @@ const getNearbyUsers = async (req, res) => {
             'radar.enabled': { $ne: false },
             'radar.invisible': { $ne: true },
             profileVisibility: { $ne: 'nobody' },
-            lastSeen: { $gt: twoMinutesAgo },
         };
 
-        // Filter by what the current user wants to see
-        if (currentUser.interestedIn === 'women') {
-            filters.gender = 'female';
-        } else if (currentUser.interestedIn === 'men') {
-            filters.gender = 'male';
-        } else if (currentUser.interestedIn === 'everyone') {
-            filters.gender = { $in: ['male', 'female', 'non-binary'] };
-        } else if (currentUser.interestedIn === 'non-binary') {
-            filters.gender = 'non-binary';
-        }
+        // Each user controls how long *they* stay visible on others' radar per
+        // distance preset (Settings > Radar). Unset presets fall back to
+        // RADAR_DEFAULT_DURATION_MIN; every preset is capped at RADAR_MAX_DURATION_MIN.
+        const visibilityOptions = {
+            preset: resolvedPreset,
+            defaultDurationMin: RADAR_DEFAULT_DURATION_MIN,
+            maxDurationMin: RADAR_MAX_DURATION_MIN,
+        };
 
         const DisappearedUser = mongoose.model('DisappearedUser');
         const [rawUsers, blockedIds, disappearedRecords] = await Promise.all([
-            nearbyService.findUsersNear(searchLon, searchLat, radiusInKm, filters),
+            nearbyService.findUsersNear(searchLon, searchLat, radiusInKm, filters, visibilityOptions),
             nearbyService.getBlockedUserIds(currentUserId),
             DisappearedUser.find({ target: currentUserId }).select('user').lean(),
         ]);
@@ -98,21 +96,9 @@ const getNearbyUsers = async (req, res) => {
 
         logger.info(`[getNearbyUsers] Found ${rawUsers.length} raw users, ${blockedIds.size} blocked, ${disappearedIds.size} disappeared - userId: ${currentUserId}`);
 
-        const currentGender = currentUser.gender; // 'male' | 'female' | 'non-binary' | null
-
         const response = rawUsers
             .filter(u => !blockedIds.has(u._id.toString()))
             .filter(u => !disappearedIds.has(u._id.toString()))
-            // Respect each user's visibility preferences:
-            // womenOnly=true  → only female viewers can see this user
-            // menOnly=true    → only male viewers can see this user
-            .filter(u => {
-                const prefs = u.visibilityPreferences || {};
-                if (prefs.womenOnly && currentGender !== 'female') return false;
-                if (prefs.menOnly   && currentGender !== 'male')   return false;
-                if (prefs.nonBinaryOnly && currentGender !== 'non-binary') return false; 
-                return true;
-            })
             .map(u => {
                 const distanceKm = u.distanceKm;
 

@@ -3,11 +3,14 @@ const config = require('../../../utils/config');
 
 let client;
 
-class SMSService {
-    constructor() {
-        client = twilio(config.TWILIO.ACCOUNTSID, config.TWILIO.AUTHTOKEN)
+const getClient = () => {
+    if (!client) {
+        client = twilio(config.TWILIO.ACCOUNTSID, config.TWILIO.AUTHTOKEN);
     }
+    return client;
+};
 
+class SMSService {
     async send(from, phones) {
         return sendSMS(from, phones);
     }
@@ -31,7 +34,7 @@ const sendSMS = async (from, phones) => {
 }
 
 const inviteToJoin = async (from, phone) => {
-    return client.messages.create({
+    return getClient().messages.create({
         body: `${from.name} invited you to join Winky. Follow the link: https://www.winky.com`,
         from: 'Winky',
         to: phone

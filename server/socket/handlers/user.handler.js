@@ -57,7 +57,7 @@ const sendRequest = async function (data, cb) {
         cb({ request: res.request });
     } catch (ex) {
         console.error('Error while sending connection requests', ex);
-        cb(ex);
+        cb({ status: 'error', message: ex.message });
     }
 }
 
@@ -78,21 +78,24 @@ const respondRequest = async function (data, cb) {
             throw new Error('Failed to process connection request response');
         }
 
-        const fromUser = await UserModel.findById(fromId).lean().select(utils.userColumnsToShow());
-        const toUser = await UserModel.findById(toId).lean();
+        // Skip notifying on a duplicate of an already processed response
+        // (the iOS client calls both the socket and REST paths for reliability).
+        if (!res.duplicate) {
+            const fromUser = await UserModel.findById(fromId).lean().select(utils.userColumnsToShow());
+            const toUser = await UserModel.findById(toId).lean();
 
-        const memberIsOnline = await chatSocketService.isUserConnected(toId);
+            const memberIsOnline = await chatSocketService.isUserConnected(toId);
 
-        if (memberIsOnline) {
-            this.to(toId).emit('connection request response', { 
-                from: fromUser, 
-                request: res.request, 
-                response,
-                status: 'accepted'
-            });
-        } else {
-            if (toUser) {
-                await push.respondConnectionRequest(fromUser, toUser, res.request, response);
+            if (memberIsOnline) {
+                this.to(toId).emit('connection request response', {
+                    from: fromUser,
+                    request: res.request,
+                    response
+                });
+            } else {
+                if (toUser) {
+                    await push.respondConnectionRequest(fromUser, toUser, res.request, response);
+                }
             }
         }
 
@@ -169,10 +172,12 @@ const checkConnectionRequest = async function (data, cb) {
 
 const allRequests = async function (data, cb) {
     try {
-        const requests = await userService.allRequests(this.user.id);
+        // The client expects a bare array of ConnectionRequest objects here;
+        // connections are only returned by GET /users/connectionRequests.
+        const { requests } = await userService.allRequests(this.user.id);
         cb(requests);
     } catch (ex) {
-        cb(ex);
+        cb({ status: 'error', message: ex.message });
     }
 }
 

@@ -18,11 +18,31 @@ class NearbyService {
      * @param {number} lat
      * @param {number} radiusKm
      * @param {Object} extraFilters  Additional User match conditions
+     * @param {Object} [visibilityOptions]  Per-candidate radar duration:
+     *   { preset, defaultDurationMin, maxDurationMin } — each candidate's own
+     *   `radar.presetDurations[preset]` (capped at maxDurationMin, falling back
+     *   to defaultDurationMin when unset) determines how far back their
+     *   `lastSeen` may be and still count as visible.
      */
-    async findUsersNear(lon, lat, radiusKm, extraFilters = {}) {
+    async findUsersNear(lon, lat, radiusKm, extraFilters = {}, visibilityOptions = null) {
         const userMatch = {};
         for (const [key, val] of Object.entries(extraFilters)) {
             userMatch[`user.${key}`] = val;
+        }
+
+        let visibilityMatch = null;
+        if (visibilityOptions) {
+            const { preset, defaultDurationMin, maxDurationMin } = visibilityOptions;
+            const configuredDuration = { $ifNull: [`$user.radar.presetDurations.${preset}`, defaultDurationMin] };
+            const durationMs = {
+                $multiply: [
+                    { $min: [{ $cond: [{ $gt: [configuredDuration, 0] }, configuredDuration, defaultDurationMin] }, maxDurationMin] },
+                    60 * 1000
+                ]
+            };
+            visibilityMatch = {
+                $expr: { $gt: [{ $toLong: '$user.lastSeen' }, { $subtract: [Date.now(), durationMs] }] }
+            };
         }
 
         // console.log('[NearbyService] findUsersNear', { lon, lat, radiusKm, userMatch });
@@ -47,6 +67,7 @@ class NearbyService {
             },
             { $unwind: '$user' },
             { $match: userMatch },
+            ...(visibilityMatch ? [{ $match: visibilityMatch }] : []),
             { 
                 $replaceRoot: {
                     newRoot: {

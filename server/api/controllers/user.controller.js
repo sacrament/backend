@@ -6,6 +6,7 @@ const chatService = new ChatService();
 const reportService = new ReportService();
 const logger = require('../../utils/logger');
 const { getChatService } = require('../../socket/services');
+const { getIO } = require('../../socket/io');
 const push = require('../../notifications');
 
 /**
@@ -209,6 +210,15 @@ const getUnreadMessagesForUser = async (req, res) => {
     }
 };
 
+const CONNECTION_REQUEST_ERROR_STATUS = {
+    'Cannot send a request to yourself': 400,
+    'Cannot send a request to this user': 403,
+    'Request already pending': 409,
+    'Already connected': 409,
+    'Cannot re-send request. Please wait 24 hours': 429,
+    'No request found': 404,
+};
+
 /**
  * Send a Connection Request
  * POST /users/sendConnectionRequest
@@ -221,14 +231,16 @@ const sendConnectionRequest = async (req, res) => {
         const result = await userService.sendConnectionRequest(req.decodedToken.userId, to);
 
         const recipientIsOnline = await getChatService().isUserConnected(to);
-        if (!recipientIsOnline) {
+        if (recipientIsOnline) {
+            getIO().to(to).emit('new connection request', { from: result.request.from, request: result.request });
+        } else {
             await push.newConnectionRequest(result.request);
         }
 
         return res.status(201).json({ status: 'success', request: result.request });
     } catch (error) {
         logger.error('Send connection request error:', error);
-        const status = error.message === 'Already connected' ? 409 : 500;
+        const status = CONNECTION_REQUEST_ERROR_STATUS[error.message] ?? 500;
         return res.status(status).json({ status: 'error', message: error.message });
     }
 };
@@ -243,10 +255,18 @@ const cancelConnectionRequest = async (req, res) => {
         if (!to) return res.status(400).json({ status: 'error', message: 'to is required' });
 
         const result = await userService.cancelConnectionRequest(req.decodedToken.userId, to);
+
+        const recipientIsOnline = await getChatService().isUserConnected(to);
+        if (recipientIsOnline) {
+            getIO().to(to).emit('connection request cancelled', { from: result.request.from, request: result.request });
+        } else {
+            await push.cancellConnectionRequest(result.request);
+        }
+
         return res.status(200).json({ status: 'success', request: result.request });
     } catch (error) {
         logger.error('Cancel connection request error:', error);
-        const status = error.message === 'No request found' ? 404 : 500;
+        const status = CONNECTION_REQUEST_ERROR_STATUS[error.message] ?? 500;
         return res.status(status).json({ status: 'error', message: error.message });
     }
 };
@@ -268,10 +288,27 @@ const respondConnectionRequest = async (req, res) => {
         }
 
         const result = await userService.respondConnectionRequest(req.decodedToken.userId, to, response);
+
+        // Notify the original sender, unless this was a duplicate of an already
+        // processed response (the iOS client calls both the socket and REST paths).
+        if (!result.duplicate) {
+            const senderIsOnline = await getChatService().isUserConnected(to);
+            if (senderIsOnline) {
+                getIO().to(to).emit('connection request response', {
+                    from: result.request.to,
+                    request: result.request,
+                    response
+                });
+            } else {
+                await push.respondConnectionRequest(result.request.to, result.request.from, result.request, response);
+            }
+        }
+
         return res.status(200).json({ status: 'success', result });
     } catch (error) {
         logger.error('Respond connection request error:', error);
-        return res.status(500).json({ status: 'error', message: error.message });
+        const status = CONNECTION_REQUEST_ERROR_STATUS[error.message] ?? 500;
+        return res.status(status).json({ status: 'error', message: error.message });
     }
 };
 
@@ -321,7 +358,7 @@ const checkConnectionRequest = async (req, res) => {
         const { to } = req.query;
         if (!to) return res.status(400).json({ status: 'error', message: 'Missing required query param: to' });
         const request = await userService.getConnectionRequest(req.decodedToken.userId, to);
-        return res.status(200).json(request);
+        return res.status(200).json({ request: request ?? null });
     } catch (error) {
         logger.error('Check connection request error:', error);
         return res.status(500).json({ status: 'error', message: 'Failed to check connection request' });

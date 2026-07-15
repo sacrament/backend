@@ -44,6 +44,15 @@ const User = new Schema({
         enabled:   { type: Boolean, default: true },
         invisible: { type: Boolean, default: false },
         updatedOn: { type: Date, default: null },
+        // How long (minutes) this user stays visible on others' radar after their
+        // last location ping, per distance preset. Missing/unset presets fall back
+        // to RADAR_DEFAULT_DURATION_MIN (30) in nearby.controller.js.
+        presetDurations: {
+            here:     { type: Number, default: null },
+            nearby:   { type: Number, default: null },
+            walkable: { type: Number, default: null },
+            local:    { type: Number, default: null },
+        },
     },
     // Who can see this profile at all ("Who can see your profile" in Visibility)
     profileVisibility: { type: String, enum: ['everyone', 'nobody'], default: 'everyone' },
