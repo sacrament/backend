@@ -81,6 +81,7 @@ function formatUserResponse(user) {
   return {
     id: user._id?.toString(),
     name: user.name || '',
+    username: user.username || null,
     pictureUrl: user.imageUrl || null,
     bio: user.bio || null,
     gender: user.gender || null,

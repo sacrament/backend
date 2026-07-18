@@ -1396,8 +1396,21 @@ class UserService {
         const user = await UserModel.findById(userId);
         if (!user) throw new Error('User not found');
 
-        const { name, email, imageUrl, isPublic, bio, gender, dateOfBirth, interestedIn, interests, age } = fields;
+        const { name, username, email, imageUrl, isPublic, bio, gender, dateOfBirth, interestedIn, interests, age } = fields;
         if (name !== undefined)        user.name        = name;
+        if (username !== undefined) {
+            const normalizedUsername = username ? username.toLowerCase().trim() : null;
+            if (normalizedUsername && normalizedUsername !== user.username) {
+                // First-time set (from null) is free; any subsequent change is allowed once.
+                if (user.username && user.usernameChangedOnce) {
+                    throw new Error('Username can only be changed once');
+                }
+                const existing = await UserModel.findOne({ username: normalizedUsername, _id: { $ne: user._id } });
+                if (existing) throw new Error('Username already taken');
+                if (user.username) user.usernameChangedOnce = true;
+                user.username = normalizedUsername;
+            }
+        }
         if (email !== undefined)       user.email       = email;
         if (imageUrl !== undefined)    user.imageUrl    = imageUrl;
         if (bio !== undefined)         user.bio         = bio;

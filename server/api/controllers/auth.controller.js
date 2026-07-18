@@ -437,6 +437,7 @@ function formatUserResponse(user) {
     id: user._id.toString(),
     status: user.status || 'active',
     name: user.name || '',
+    username: user.username || null,
     email: user.email || null,
     fbId: user.facebookId || null,
     appleId: user.appleId || null,
