@@ -8,6 +8,7 @@ const ContentStorage = mongoose.model('ContentStorage');
 
 const UserRequestModel = require('../../../models/user.request').UserRequest;
 const UserConnectStatus = require('../../../models/user.connect').UserConnectStatus;
+const SavedUserModel = require('../../../models/user.saved').SavedUser;
 
 const utils = require('../../../utils/index');
 const { getIO } = require('../../../socket/io');
@@ -1714,6 +1715,35 @@ class UserService {
 
     async removeFavorite(userId, targetUserId) {
         await UserModel.findByIdAndUpdate(userId, { $pull: { favorites: targetUserId } });
+    }
+
+    // ─── Saved (Quick Info) ────────────────────────────────────────────────────
+    // Fully separate from Favorites — own model/table, no shared state.
+
+    async getSaved(userId) {
+        const saved = await SavedUserModel.find({ user: userId })
+            .sort({ createdOn: -1 })
+            .populate({
+                path: 'savedUser',
+                select: '_id name imageUrl bio gender age interestedIn isPublic status'
+            })
+            .lean();
+
+        return saved.map(s => s.savedUser).filter(Boolean);
+    }
+
+    async addSaved(userId, savedUserId) {
+        const targetExists = await UserModel.exists({ _id: savedUserId, deleted: { $ne: true } });
+        if (!targetExists) throw new Error('User not found');
+        await SavedUserModel.updateOne(
+            { user: userId, savedUser: savedUserId },
+            { $setOnInsert: { user: userId, savedUser: savedUserId, createdOn: new Date() } },
+            { upsert: true }
+        );
+    }
+
+    async removeSaved(userId, targetUserId) {
+        await SavedUserModel.deleteOne({ user: userId, savedUser: targetUserId });
     }
 }
 
