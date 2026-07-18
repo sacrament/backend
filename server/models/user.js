@@ -9,6 +9,9 @@ const User = new Schema({
     // Users get exactly one free change after their initial username is set.
     // Setting it for the first time (from null) does not count against this.
     usernameChangedOnce: { type: Boolean, default: false },
+    // Preferred display language for future localized push/email content —
+    // the app UI itself isn't localized yet, this just persists the choice.
+    language: { type: String, default: null },
     email: { type: String, default: null, index: true },
     // Raw phone number is never stored in plain text.
     // partition  — HMAC-SHA256 keyed hash, used for fast indexed lookups.

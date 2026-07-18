@@ -1396,8 +1396,9 @@ class UserService {
         const user = await UserModel.findById(userId);
         if (!user) throw new Error('User not found');
 
-        const { name, username, email, imageUrl, isPublic, bio, gender, dateOfBirth, interestedIn, interests, age } = fields;
+        const { name, username, language, email, imageUrl, isPublic, bio, gender, dateOfBirth, interestedIn, interests, age } = fields;
         if (name !== undefined)        user.name        = name;
+        if (language !== undefined)    user.language    = language;
         if (username !== undefined) {
             const normalizedUsername = username ? username.toLowerCase().trim() : null;
             if (normalizedUsername && normalizedUsername !== user.username) {

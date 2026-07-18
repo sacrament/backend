@@ -246,7 +246,7 @@ const updateCurrentUserProfile = async (req, res) => {
     // Accept both field name variants from the spec
     const {
       name, username, bio, email, isPublic, interestedIn, pictureUrl,
-      gender, age, birthday, dateOfBirth, interests
+      gender, age, birthday, dateOfBirth, interests, language
     } = req.body;
 
     logger.info(
@@ -273,6 +273,10 @@ const updateCurrentUserProfile = async (req, res) => {
         return res.status(400).json({ status: 'error', message: 'username must be 3-30 characters and contain only letters, numbers, underscores, or periods' });
       }
     }
+    const SUPPORTED_LANGUAGES = ['en', 'es', 'fr', 'de', 'pt'];
+    if (language !== undefined && language !== null && !SUPPORTED_LANGUAGES.includes(language)) {
+      return res.status(400).json({ status: 'error', message: `language must be one of: ${SUPPORTED_LANGUAGES.join(', ')}` });
+    }
     // if (gender !== undefined && !['male', 'female', 'other', 'non-binary', 'prefer-not-to-say', 'none'].includes(gender)) {
     //   return res.status(400).json({ status: 'error', message: 'gender must be male, female, other, non-binary, prefer-not-to-say, or none' });
     // }
@@ -288,6 +292,7 @@ const updateCurrentUserProfile = async (req, res) => {
     const fields = {};
     if (name         !== undefined) fields.name        = name;
     if (username     !== undefined) fields.username    = trimmedUsername;
+    if (language     !== undefined) fields.language    = language;
     if (bio          !== undefined) fields.bio         = bio;
     if (email        !== undefined) fields.email       = email;
     if (isPublic     !== undefined) fields.isPublic    = isPublic;
@@ -921,6 +926,7 @@ function formatUserResponse(user) {
     name:         user.name     ?? null,
     username:     user.username ?? null,
     usernameChangedOnce: user.usernameChangedOnce ?? false,
+    language:     user.language ?? null,
     email:        user.email    ?? null,
     phone:        phoneNumber,
     phoneNumber,
