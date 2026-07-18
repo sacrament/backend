@@ -8,6 +8,7 @@ const logger = require('../../utils/logger');
 const { getChatService } = require('../../socket/services');
 const { getIO } = require('../../socket/io');
 const push = require('../../notifications');
+const { isUserOnline } = require('../../utils');
 
 /**
  * Search Users by Name
@@ -332,6 +333,8 @@ function formatPublicUserResponse(user) {
         gender:       user.gender       ?? null,
         interestedIn: user.interestedIn ?? null,
         showRadar:    user.radar?.show  ?? true,
+        lastActiveAt: user.lastSeen     ?? null,
+        isOnline:     isUserOnline(user.lastSeen),
     };
 }
 
@@ -339,10 +342,26 @@ function formatPublicUserResponse(user) {
  * Get Connection Requests
  * GET /users/connectionRequests
  */
+const withPresence = (user) => {
+    if (!user || typeof user !== 'object') return user;
+    return { ...user, isOnline: isUserOnline(user.lastSeen), lastActiveAt: user.lastSeen ?? null };
+};
+
 const getConnectionRequests = async (req, res) => {
     try {
         const { requests, connections } = await userService.allRequests(req.decodedToken.userId);
-        return res.status(200).json({ status: 'success', data: { requests, connections } });
+
+        const requestsWithPresence = requests.map(r => ({
+            ...r,
+            to: withPresence(r.to),
+            from: withPresence(r.from),
+        }));
+        const connectionsWithPresence = connections.map(c => ({
+            ...c,
+            users: (c.users || []).map(withPresence),
+        }));
+
+        return res.status(200).json({ status: 'success', data: { requests: requestsWithPresence, connections: connectionsWithPresence } });
     } catch (error) {
         logger.error('Get connection requests error:', error);
         return res.status(500).json({ status: 'error', message: 'Failed to get connection requests' });

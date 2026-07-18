@@ -142,6 +142,7 @@ const onConnected = async (socket, io) => {
 
         if (!user) {
             logger.warn(`[Auth Error] User not found: ${userId}`);
+            socket.emit('logout', { reason: 'user_not_found' });
             socket.emit('error', 'User not found');
             socket.disconnect(true);
             return;
@@ -178,51 +179,49 @@ const onConnected = async (socket, io) => {
         };
 
         // Check if user already has an active socket connection
-        if (userSessions.has(userId)) {
-            const previousSession = userSessions.get(userId);
-            
-            // If this is the same socket (reconnection from recovery), allow it
-            if (previousSession.socketId === socket.id) {
-                logger.info(`User reconnected: ${userId} (${socket.user.type}) socket: ${socket.id}`);
-                previousSession.lastSeen = Date.now();
-            } else {
-                // Different socket - disconnect the old one
-                logger.info(`Disconnecting previous socket for user ${userId}: ${previousSession.socketId}, new socket: ${socket.id}`);
-                
-                // Get the actual socket object and disconnect it
-                const previousSocket = io.sockets.sockets.get(previousSession.socketId);
-                if (previousSocket) {
-                    previousSocket.emit('forcibly disconnected', { 
-                        reason: 'New connection established from another device',
-                        newSocketId: socket.id 
-                    });
-                    previousSocket.disconnect(true);
-                    logger.info(`Previous socket disconnected for user: ${userId}`);
-                }
-                
-                // Now register the new socket
-                logger.info(`User connected: ${userId} (${socket.user.type}) socket: ${socket.id}, deviceId: ${socket.deviceId || 'none'}`);
-                userSessions.set(userId, {
-                    userId,
-                    socketId: socket.id,
-                    type: socket.user.type,
-                    deviceId: socket.deviceId || null,
-                    connectedAt: Date.now(),
-                    lastSeen: Date.now()
+        const previousSession = userSessions.get(userId);
+        const isSameDeviceReconnect = previousSession
+            && socket.deviceId
+            && previousSession.deviceId === socket.deviceId;
+
+        if (previousSession && !isSameDeviceReconnect) {
+            // Different device - disconnect the old one
+            logger.info(`Disconnecting previous socket for user ${userId}: ${previousSession.socketId}, new socket: ${socket.id}`);
+
+            if (previousSession.gracePeriodTimer) clearTimeout(previousSession.gracePeriodTimer);
+
+            // Get the actual socket object and disconnect it
+            const previousSocket = io.sockets.sockets.get(previousSession.socketId);
+            if (previousSocket) {
+                previousSocket.emit('forcibly disconnected', {
+                    reason: 'New connection established from another device',
+                    newSocketId: socket.id
                 });
+                previousSocket.disconnect(true);
+                logger.info(`Previous socket disconnected for user: ${userId}`);
             }
-        } else {
-            // First connection for this user
-            logger.info(`User connected: ${userId} (${socket.user.type}) socket: ${socket.id}, deviceId: ${socket.deviceId || 'none'}`);
-            userSessions.set(userId, {
-                userId,
-                socketId: socket.id,
-                type: socket.user.type,
-                deviceId: socket.deviceId || null,
-                connectedAt: Date.now(),
-                lastSeen: Date.now()
-            });
         }
+
+        if (isSameDeviceReconnect) {
+            // Same device reconnecting after a network blip/backgrounding - resume, don't recreate
+            logger.info(`User reconnected: ${userId} (${socket.user.type}) socket: ${socket.id} (was: ${previousSession.socketId})`);
+            if (previousSession.gracePeriodTimer) clearTimeout(previousSession.gracePeriodTimer);
+            socket._sessionId = previousSession.dbSessionId || null;
+            socket._sessionConnectedAt = previousSession.connectedAt ? new Date(previousSession.connectedAt) : new Date();
+        } else {
+            // First connection for this user, or a different device taking over
+            logger.info(`User connected: ${userId} (${socket.user.type}) socket: ${socket.id}, deviceId: ${socket.deviceId || 'none'}`);
+        }
+
+        userSessions.set(userId, {
+            userId,
+            socketId: socket.id,
+            type: socket.user.type,
+            deviceId: socket.deviceId || null,
+            dbSessionId: isSameDeviceReconnect ? previousSession.dbSessionId : null,
+            connectedAt: isSameDeviceReconnect ? previousSession.connectedAt : Date.now(),
+            lastSeen: Date.now()
+        });
 
         // Join user-specific room
         socket.join(userId);
@@ -233,20 +232,37 @@ const onConnected = async (socket, io) => {
 
         // All post-connect work is fire-and-forget so it never blocks the handshake
         setImmediate(async () => {
-            // Record session in DB
-            socket._sessionConnectedAt = new Date();
-            UserSession.create({
-                userId,
-                socketId: socket.id,
-                ip: socket.handshake.headers['x-forwarded-for']?.split(',')[0].trim()
-                    || socket.handshake.address,
-                userAgent: socket.handshake.headers['user-agent'] || null,
-                deviceId: socket.deviceId || null,
-                transport: socket.conn?.transport?.name || null,
-                connectedAt: socket._sessionConnectedAt,
-            }).then(session => {
-                socket._sessionId = session._id;
-            }).catch(err => logger.error(`Failed to record user session: ${err.message}`));
+            // Touch lastSeen so "Active now" presence reflects the connect
+            UserModel.updateOne({ _id: userId }, { $set: { lastSeen: new Date() } })
+                .catch(err => logger.error(`Failed to update lastSeen on connect for ${userId}: ${err.message}`));
+
+            // Record/resume session in DB
+            if (socket._sessionId) {
+                // Same-device reconnect - update the existing open session, don't create a new row
+                UserSession.findByIdAndUpdate(socket._sessionId, {
+                    socketId: socket.id,
+                    transport: socket.conn?.transport?.name || null,
+                    disconnectedAt: null,
+                    disconnectReason: null,
+                    durationMs: null,
+                }).catch(err => logger.error(`Failed to resume user session: ${err.message}`));
+            } else {
+                socket._sessionConnectedAt = new Date();
+                UserSession.create({
+                    userId,
+                    socketId: socket.id,
+                    ip: socket.handshake.headers['x-forwarded-for']?.split(',')[0].trim()
+                        || socket.handshake.address,
+                    userAgent: socket.handshake.headers['user-agent'] || null,
+                    deviceId: socket.deviceId || null,
+                    transport: socket.conn?.transport?.name || null,
+                    connectedAt: socket._sessionConnectedAt,
+                }).then(session => {
+                    socket._sessionId = session._id;
+                    const entry = userSessions.get(userId);
+                    if (entry) entry.dbSessionId = session._id;
+                }).catch(err => logger.error(`Failed to record user session: ${err.message}`));
+            }
 
             // Replay pending events and mark messages delivered in parallel
             await Promise.allSettled([
@@ -288,17 +304,12 @@ const onDisconnected = (socket, io) => {
         if (userId) {
             logger.info(`User disconnected: ${userId} (socket: ${socket.id}) reason: ${reason}`);
 
-            // Close the session record
-            if (socket._sessionId) {
-                const now = new Date();
-                UserSession.findByIdAndUpdate(socket._sessionId, {
-                    disconnectedAt: now,
-                    disconnectReason: reason,
-                    durationMs: now - (socket._sessionConnectedAt || now),
-                }).catch(err => logger.error(`Failed to close user session: ${err.message}`));
-            }
-            
-            // For temporary disconnections (network issues), keep session alive
+            // Touch lastSeen so "Active now" presence reflects the disconnect
+            mongoose.model('User').updateOne({ _id: userId }, { $set: { lastSeen: new Date() } })
+                .catch(err => logger.error(`Failed to update lastSeen on disconnect for ${userId}: ${err.message}`));
+
+            // For temporary disconnections (network issues), keep the session open and give the
+            // client a chance to resume it - don't close the DB row until the grace period expires
             if (reason === 'transport error' || reason === 'ping timeout' || reason === 'transport close') {
                 logger.info(`Reconnection grace period started for user: ${userId} (${RECONNECTION_GRACE_PERIOD / 1000}s)`);
 
@@ -318,6 +329,16 @@ const onDisconnected = (socket, io) => {
                         if (session.socketId === socket.id) {
                             userSessions.delete(userId);
                             logger.info(`Session cleaned up for user: ${userId} (grace period expired)`);
+
+                            if (socket._sessionId) {
+                                const now = new Date();
+                                UserSession.findByIdAndUpdate(socket._sessionId, {
+                                    disconnectedAt: now,
+                                    disconnectReason: reason,
+                                    durationMs: now - (socket._sessionConnectedAt || now),
+                                }).catch(err => logger.error(`Failed to close user session: ${err.message}`));
+                            }
+
                             // Notify others that user is truly offline
                             socket.broadcast.emit('user disconnected', { userId });
                         }
@@ -336,6 +357,16 @@ const onDisconnected = (socket, io) => {
                 }
                 userSessions.delete(userId);
                 logger.info(`Session ended for user: ${userId}`);
+
+                if (socket._sessionId) {
+                    const now = new Date();
+                    UserSession.findByIdAndUpdate(socket._sessionId, {
+                        disconnectedAt: now,
+                        disconnectReason: reason,
+                        durationMs: now - (socket._sessionConnectedAt || now),
+                    }).catch(err => logger.error(`Failed to close user session: ${err.message}`));
+                }
+
                 socket.broadcast.emit('user disconnected', { userId });
             }
         } else {

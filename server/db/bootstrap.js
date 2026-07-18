@@ -30,6 +30,7 @@ module.exports = {
     require('../models/user.action.log');
     require('../models/deleted.user');
     require('../models/pending.socket.event');
+    require('../models/user.saved');
   },
 
   async connectDatabase() {

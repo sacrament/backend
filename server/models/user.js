@@ -3,6 +3,15 @@ const Schema = mongoose.Schema;
 
 const User = new Schema({ 
     name: { type: String, default: null, index: true },
+    // Optional unique handle, distinct from display `name`. sparse: true so
+    // users who haven't set one yet don't collide on the unique index.
+    username: { type: String, default: null, index: true, unique: true, sparse: true, lowercase: true, trim: true },
+    // Users get exactly one free change after their initial username is set.
+    // Setting it for the first time (from null) does not count against this.
+    usernameChangedOnce: { type: Boolean, default: false },
+    // Preferred display language for future localized push/email content —
+    // the app UI itself isn't localized yet, this just persists the choice.
+    language: { type: String, default: null },
     email: { type: String, default: null, index: true },
     // Raw phone number is never stored in plain text.
     // partition  — HMAC-SHA256 keyed hash, used for fast indexed lookups.

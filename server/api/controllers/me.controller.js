@@ -159,18 +159,26 @@ const getCurrentUserProfile = async (req, res) => {
 /**
  * PATCH /me/setup
  * Onboarding profile setup (A.5 in the auth flow).
- * Accepts any combination of: name, dateOfBirth, gender, imageUrl,
+ * Accepts any combination of: name, username, dateOfBirth, gender, imageUrl,
  * latitude + longitude, and a device object to register the device.
  */
 const setupProfile = async (req, res) => {
   try {
     const userId = req.decodedToken.userId;
-    const { name, dateOfBirth, gender, interestedIn, imageUrl, latitude, longitude, deviceId } = req.body;
+    const { name, username, dateOfBirth, gender, interestedIn, imageUrl, latitude, longitude, deviceId } = req.body;
 
     const profileUpdates = {};
 
     if (name !== undefined)      profileUpdates.name = name;
     if (imageUrl !== undefined)  profileUpdates.imageUrl = imageUrl;
+
+    if (username !== undefined) {
+      const trimmedUsername = username === null ? null : String(username).trim();
+      if (trimmedUsername && !/^[a-zA-Z0-9_.]{3,30}$/.test(trimmedUsername)) {
+        return res.status(400).json({ status: 'error', message: 'username must be 3-30 characters and contain only letters, numbers, underscores, or periods' });
+      }
+      profileUpdates.username = trimmedUsername;
+    }
 
     if (dateOfBirth !== undefined) {
       const dob = new Date(dateOfBirth);
@@ -218,6 +226,12 @@ const setupProfile = async (req, res) => {
     if (error.message === 'User not found') {
       return res.status(404).json({ status: 'error', message: 'User not found' });
     }
+    if (error.message === 'Username already taken') {
+      return res.status(409).json({ status: 'error', message: 'Username already taken' });
+    }
+    if (error.message === 'Username can only be changed once') {
+      return res.status(409).json({ status: 'error', message: 'Username can only be changed once' });
+    }
     logger.error('Profile setup error:', error);
     return res.status(500).json({ status: 'error', message: 'Failed to setup profile' });
   }
@@ -231,8 +245,8 @@ const updateCurrentUserProfile = async (req, res) => {
     const userId = req.decodedToken.userId;
     // Accept both field name variants from the spec
     const {
-      name, bio, email, isPublic, interestedIn, pictureUrl,
-      gender, age, birthday, dateOfBirth, interests
+      name, username, bio, email, isPublic, interestedIn, pictureUrl,
+      gender, age, birthday, dateOfBirth, interests, language
     } = req.body;
 
     logger.info(
@@ -252,6 +266,17 @@ const updateCurrentUserProfile = async (req, res) => {
     )) {
       return res.status(400).json({ status: 'error', message: 'interests must be an array of up to 20 short strings' });
     }
+    let trimmedUsername;
+    if (username !== undefined) {
+      trimmedUsername = username === null ? null : String(username).trim();
+      if (trimmedUsername && !/^[a-zA-Z0-9_.]{3,30}$/.test(trimmedUsername)) {
+        return res.status(400).json({ status: 'error', message: 'username must be 3-30 characters and contain only letters, numbers, underscores, or periods' });
+      }
+    }
+    const SUPPORTED_LANGUAGES = ['en', 'es', 'fr', 'de', 'pt'];
+    if (language !== undefined && language !== null && !SUPPORTED_LANGUAGES.includes(language)) {
+      return res.status(400).json({ status: 'error', message: `language must be one of: ${SUPPORTED_LANGUAGES.join(', ')}` });
+    }
     // if (gender !== undefined && !['male', 'female', 'other', 'non-binary', 'prefer-not-to-say', 'none'].includes(gender)) {
     //   return res.status(400).json({ status: 'error', message: 'gender must be male, female, other, non-binary, prefer-not-to-say, or none' });
     // }
@@ -266,6 +291,8 @@ const updateCurrentUserProfile = async (req, res) => {
 
     const fields = {};
     if (name         !== undefined) fields.name        = name;
+    if (username     !== undefined) fields.username    = trimmedUsername;
+    if (language     !== undefined) fields.language    = language;
     if (bio          !== undefined) fields.bio         = bio;
     if (email        !== undefined) fields.email       = email;
     if (isPublic     !== undefined) fields.isPublic    = isPublic;
@@ -315,6 +342,8 @@ const updateCurrentUserProfile = async (req, res) => {
     return res.status(200).json({ status: 'success', user: formatUserResponse(user) });
   } catch (error) {
     if (error.message === 'User not found') return res.status(404).json({ status: 'error', message: 'User not found' });
+    if (error.message === 'Username already taken') return res.status(409).json({ status: 'error', message: 'Username already taken' });
+    if (error.message === 'Username can only be changed once') return res.status(409).json({ status: 'error', message: 'Username can only be changed once' });
     logger.error('Update current user error:', error);
     return res.status(500).json({ status: 'error', message: 'Failed to update profile' });
   }
@@ -895,6 +924,9 @@ function formatUserResponse(user) {
     id:           resolvedId,
     status:       user.status   ?? null,
     name:         user.name     ?? null,
+    username:     user.username ?? null,
+    usernameChangedOnce: user.usernameChangedOnce ?? false,
+    language:     user.language ?? null,
     email:        user.email    ?? null,
     phone:        phoneNumber,
     phoneNumber,

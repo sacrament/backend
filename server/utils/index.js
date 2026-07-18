@@ -1,8 +1,13 @@
 
 // const uuid = require('uuid/v1');
 const { v1: uuidv1 } = require('uuid');
+const config = require('./config');
 
 module.exports = {
+    isUserOnline: (lastSeen) => {
+        if (!lastSeen) return false;
+        return Date.now() - new Date(lastSeen).getTime() < config.ONLINE_THRESHOLD_MS;
+    },
     timeStampUTC: () => {
         return timeUTC();
     },
@@ -37,7 +42,7 @@ module.exports = {
 
 const chatColumnsToShow = "_id uniqueId members lastMessage active publicKey summary createdOn";
 const messageColumnsToShow = "_id content status from chatId kind sentOn deleted reactions media replyTo encrypted senderCopy";
-const userColumnsToShow = "_id name email phone imageUrl device";
+const userColumnsToShow = "_id name email phone imageUrl device lastSeen";
 const lastMessageColumnsToShow = "_id content status reply from chatId kind sentOn deleted reactions media replyTo encrypted senderCopy";
 const replyMessageColumnsToShow = "_id content from chatId kind sentOn deleted reactions media encrypted";
 

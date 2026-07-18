@@ -7,6 +7,7 @@ const express             = require('express');
 const router              = express.Router();
 const { verifyToken }     = require('../../middleware/verify');
 const favoritesController = require('../controllers/favorites.controller');
+const savedController     = require('../controllers/saved.controller');
 const {
     searchUsers,
     getUserById,
@@ -81,6 +82,15 @@ router.post('/favorites', verifyToken, favoritesController.addFavorite);
 
 // DELETE /users/favorites/:userId
 router.delete('/favorites/:userId', verifyToken, favoritesController.removeFavorite);
+
+// GET  /users/saved
+router.get('/saved', verifyToken, savedController.getSaved);
+
+// POST /users/saved
+router.post('/saved', verifyToken, savedController.addSaved);
+
+// DELETE /users/saved/:userId
+router.delete('/saved/:userId', verifyToken, savedController.removeSaved);
 
 // ── Reports ───────────────────────────────────────────────────────────────────
 // GET  /users/report

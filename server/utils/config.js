@@ -9,6 +9,7 @@ module.exports = {
     PORT: parseInt(process.env.PORT) || 3000,
     HEARTBEAT_TIMEOUT: parseInt(process.env.HEARTBEAT_TIMEOUT) || 40000,
     HEARTBEAT_INTERVAL: parseInt(process.env.HEARTBEAT_INTERVAL) || 27000,
+    ONLINE_THRESHOLD_MS: parseInt(process.env.ONLINE_THRESHOLD_MS) || 5 * 60 * 1000,
     UPGRADE: parseInt(process.env.UPGRADE_TIMEOUT) || 30000,
     REGION: process.env.AWS_REGION,
     URL: process.env.URL || `http://localhost:${process.env.PORT || 3000}`,
