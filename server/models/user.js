@@ -4,8 +4,10 @@ const Schema = mongoose.Schema;
 const User = new Schema({ 
     name: { type: String, default: null, index: true },
     // Optional unique handle, distinct from display `name`. sparse: true so
-    // users who haven't set one yet don't collide on the unique index.
-    username: { type: String, default: null, index: true, unique: true, sparse: true, lowercase: true, trim: true },
+    // users who haven't set one yet don't collide on the unique index — this
+    // only works if the field is left unset (no `default`), since sparse
+    // indexes still index explicit `null` values.
+    username: { type: String, index: true, unique: true, sparse: true, lowercase: true, trim: true },
     // Users get exactly one free change after their initial username is set.
     // Setting it for the first time (from null) does not count against this.
     usernameChangedOnce: { type: Boolean, default: false },
