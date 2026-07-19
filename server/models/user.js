@@ -18,8 +18,9 @@ const User = new Schema({
     // Raw phone number is never stored in plain text.
     // partition  — HMAC-SHA256 keyed hash, used for fast indexed lookups.
     // phone — AES-256-GCM ciphertext, used when the plaintext is needed.
-    // sparse: true so the unique constraint ignores Apple/Facebook-only users.
-    partition: { type: String, default: null, index: true, unique: true, sparse: true },
+    // sparse: true so the unique constraint ignores Apple/Facebook-only users —
+    // requires the field to be left unset (no `default`), same as `username` above.
+    partition: { type: String, index: true, unique: true, sparse: true },
     phone: { type: String, default: null },
     imageUrl: { type: String, default: null },
     bio: { type: String, default: null },

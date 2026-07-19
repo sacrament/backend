@@ -5,7 +5,7 @@ const Device = new Schema({
     // Populated later when the user completes onboarding (PATCH /me/setup)
     user: { type: Schema.Types.ObjectId, ref: 'User', default: null },
     platform: { type: String, enum: ['iOS', 'Android'], required: true },
-    uniqueId: { type: String, default: null }, // Optional unique identifier for the device (e.g. UUID)
+    uniqueId: { type: String }, // Optional unique identifier for the device (e.g. UUID); left unset (not null) so the sparse unique index below doesn't collide across devices without one
     os: { type: String, default: null },
     version: { type: String, default: null },
     appVersion: { type: String, default: null },

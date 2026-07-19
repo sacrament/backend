@@ -1293,7 +1293,7 @@ class UserService {
                 appleId: appleUser.id,
                 name: appleUser.name || 'Apple User',
                 email: normalizedEmail,
-                partition: normalizedEmail ? this.#hashPartitionValue(normalizedEmail) : null,
+                ...(normalizedEmail ? { partition: this.#hashPartitionValue(normalizedEmail) } : {}),
                 status: 'active',
                 registeredOn: new Date(),
                 isPublic: false,

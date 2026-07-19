@@ -17,7 +17,7 @@ const MemberSchema = new Schema({
 }, { _id: false });
 
 const ChatSchema = new Schema({
-    uniqueId:    { type: String, default: null, unique: true, sparse: true },
+    uniqueId:    { type: String, unique: true, sparse: true },
     members:     {
         type: [MemberSchema],
         validate: {

@@ -17,7 +17,6 @@ class DeviceService {
         const payload = {
             platform,
             os: os || null,
-            uniqueId: uniqueId || null,
             model: model || null,
             version: version || null,
             appVersion: appVersion || null,
@@ -29,10 +28,10 @@ class DeviceService {
         };
 
         // Deduplicate by physical-device identifier when provided.
-        if (payload.uniqueId) {
+        if (uniqueId) {
             return DeviceModel.findOneAndUpdate(
-                { uniqueId: payload.uniqueId },
-                { $set: payload },
+                { uniqueId },
+                { $set: { ...payload, uniqueId } },
                 { upsert: true, new: true, setDefaultsOnInsert: true }
             );
         }
