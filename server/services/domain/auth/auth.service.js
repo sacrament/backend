@@ -500,9 +500,13 @@ class AuthService {
 
     async authenticateGoogle(idToken, deviceId = null) {
         const clientId = process.env.GOOGLE_CLIENT_ID;
-        if (!clientId) throw new Error('GOOGLE_CLIENT_ID is not configured');
-        const client = new OAuth2Client(clientId);
-        const ticket = await client.verifyIdToken({ idToken, audience: clientId });
+        const iosClientId = process.env.GOOGLE_CLIENT_ID_IOS;
+        if (!clientId && !iosClientId) throw new Error('GOOGLE_CLIENT_ID / GOOGLE_CLIENT_ID_IOS is not configured');
+        // ID tokens carry an `aud` claim matching whichever OAuth client requested them,
+        // so Android and iOS tokens need to both be accepted here.
+        const audience = [clientId, iosClientId].filter(Boolean);
+        const client = new OAuth2Client();
+        const ticket = await client.verifyIdToken({ idToken, audience });
         const payload = ticket.getPayload();
         if (!payload?.sub) {
             const err = new Error('Invalid Google token');

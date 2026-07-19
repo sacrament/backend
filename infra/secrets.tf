@@ -140,7 +140,8 @@ resource "aws_secretsmanager_secret" "google" {
 resource "aws_secretsmanager_secret_version" "google" {
   secret_id = aws_secretsmanager_secret.google.id
   secret_string = jsonencode({
-    GOOGLE_CLIENT_ID = "REPLACE_ME"
+    GOOGLE_CLIENT_ID     = "REPLACE_ME"
+    GOOGLE_CLIENT_ID_IOS = "REPLACE_ME"
   })
 
   lifecycle {

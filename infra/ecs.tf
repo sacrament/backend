@@ -82,6 +82,8 @@ resource "aws_ecs_task_definition" "app" {
       { name = "IOS_BUNDLE",                            valueFrom = "${aws_secretsmanager_secret.push.arn}:IOS_BUNDLE::" },
       { name = "IOS_KEY_TOKEN",                         valueFrom = "${aws_secretsmanager_secret.push.arn}:IOS_KEY_TOKEN::" },
       { name = "IOS_TEAM_ID",                           valueFrom = "${aws_secretsmanager_secret.push.arn}:IOS_TEAM_ID::" },
+      { name = "GOOGLE_CLIENT_ID",                      valueFrom = "${aws_secretsmanager_secret.google.arn}:GOOGLE_CLIENT_ID::" },
+      { name = "GOOGLE_CLIENT_ID_IOS",                  valueFrom = "${aws_secretsmanager_secret.google.arn}:GOOGLE_CLIENT_ID_IOS::" },
     ]
 
     logConfiguration = {
