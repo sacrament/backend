@@ -12,8 +12,8 @@ const DISTANCE_PRESETS = {
     'local':    0.5  * 1.60934     // 0.5 miles → km
 };
 
-const RADAR_DEFAULT_DURATION_MIN = 30;
-const RADAR_MAX_DURATION_MIN = 30;
+const RADAR_DEFAULT_DURATION_MIN = 5;
+const RADAR_MAX_DURATION_MIN = 5;
 
 /**
  * GET /users-nearby

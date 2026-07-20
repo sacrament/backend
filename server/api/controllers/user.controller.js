@@ -300,7 +300,8 @@ const respondConnectionRequest = async (req, res) => {
                     request: result.request,
                     response
                 });
-            } else {
+            } else if (response !== 'declined') {
+                // Declined responses are silenced for now — do not push on decline.
                 await push.respondConnectionRequest(result.request.to, result.request.from, result.request, response);
             }
         }

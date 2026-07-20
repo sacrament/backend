@@ -92,7 +92,8 @@ const respondRequest = async function (data, cb) {
                     request: res.request,
                     response
                 });
-            } else {
+            } else if (response !== 'declined') {
+                // Declined responses are silenced for now — do not push on decline.
                 if (toUser) {
                     await push.respondConnectionRequest(fromUser, toUser, res.request, response);
                 }
