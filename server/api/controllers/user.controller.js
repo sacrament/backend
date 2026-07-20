@@ -216,7 +216,7 @@ const CONNECTION_REQUEST_ERROR_STATUS = {
     'Cannot send a request to this user': 403,
     'Request already pending': 409,
     'Already connected': 409,
-    'Cannot re-send request. Please wait 24 hours': 429,
+    // 'Cannot re-send request. Please wait 24 hours': 429, // disabled along with the 24h resend cooldown
     'No request found': 404,
 };
 

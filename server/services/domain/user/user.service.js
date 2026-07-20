@@ -818,9 +818,10 @@ class UserService {
         const own = existing.find(r => String(r.from) === String(from));
         if (own) {
             // for declined we need to not allow resend for 24 hours, for cancelled we can allow resend immediately, for disconnected we can allow resend immediately
-            if (own.status === 'declined' && (Date.now() - own.updatedOn) < 24 * 60 * 60 * 1000) {
-                throw new Error('Cannot re-send request. Please wait 24 hours');
-            }
+            // Disabled per product request — resend is currently allowed immediately for all statuses.
+            // if (own.status === 'declined' && (Date.now() - own.updatedOn) < 24 * 60 * 60 * 1000) {
+            //     throw new Error('Cannot re-send request. Please wait 24 hours');
+            // }
             // declined / cancelled / disconnected — allow re-send
             own.status = 'new';
             own.howMany += 1;
