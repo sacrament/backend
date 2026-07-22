@@ -232,6 +232,9 @@ const setupProfile = async (req, res) => {
     if (error.message === 'Username can only be changed once') {
       return res.status(409).json({ status: 'error', message: 'Username can only be changed once' });
     }
+    if (error.message === 'Device not found') {
+      return res.status(404).json({ status: 'error', message: 'Device not found' });
+    }
     logger.error('Profile setup error:', error);
     return res.status(500).json({ status: 'error', message: 'Failed to setup profile' });
   }
