@@ -115,6 +115,13 @@ class UserService {
      */
     decryptPhone(stored) {
         const [versionTag, ivB64, tagB64, dataB64] = stored.split(':');
+
+        // Legacy records predate encryption and hold a plain E.164 number —
+        // not the "v{n}:iv:tag:data" shape, so pass it through unchanged.
+        if (!/^v\d+$/.test(versionTag) || !ivB64 || !tagB64 || !dataB64) {
+            return stored;
+        }
+
         const version = versionTag.slice(1); // strip the leading 'v'
         const keyHex  = process.env[`PHONE_ENC_KEY_${version}`];
         if (!keyHex) throw new Error(`PHONE_ENC_KEY_${version} is not set — cannot decrypt`);
