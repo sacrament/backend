@@ -897,7 +897,11 @@ const deleteKeyBackup = async (req, res) => {
 function formatUserResponse(user) {
   let phoneNumber = null;
   if (user.phone) {
-    try { phoneNumber = userService.decryptPhone(user.phone); } catch (_) {}
+    try {
+      phoneNumber = userService.decryptPhone(user.phone);
+    } catch (err) {
+      logger.error(`decryptPhone failed for user ${user._id}: ${err.message}`);
+    }
   }
 
   let location = null;
