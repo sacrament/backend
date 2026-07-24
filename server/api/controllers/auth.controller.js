@@ -433,12 +433,23 @@ function isProfileComplete(user) {
 }
 
 function formatUserResponse(user) {
+  let phoneNumber = null;
+  if (user.phone) {
+    try {
+      phoneNumber = userService.decryptPhone(user.phone);
+    } catch (err) {
+      logger.error(`decryptPhone failed for user ${user._id}: ${err.message}`);
+    }
+  }
+
   return {
     id: user._id.toString(),
     status: user.status || 'active',
     name: user.name || '',
     username: user.username || null,
     email: user.email || null,
+    phone: phoneNumber,
+    phoneNumber,
     fbId: user.facebookId || null,
     appleId: user.appleId || null,
     pictureUrl: user.imageUrl || null,
