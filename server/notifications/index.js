@@ -541,12 +541,22 @@ class PushNotificationService {
 
                 const muted = member.options?.muted || false;
 
-                const totalUnread = await getUnreadMessagesForUser(user._id.toString());
-                const badge = totalUnread + (data.custom.isReact || data.custom.isConnectionRequest || data.custom.respondConnetionRequest ? 1 : 0);
+                const isNearbyWink = data.custom.newUsersNearby || data.custom.connectionNearby;
 
-                iOSContent.badge = badge;
-                iOSContent.aps.badge = badge;
-                androidContent.addData('badge', badge);
+                if (isNearbyWink) {
+                    // Nearby wink pushes are ambient discovery pings, not unread items —
+                    // don't let them bump the app icon badge.
+                    delete iOSContent.aps.badge;
+                    delete iOSContent.badge;
+                    androidContent.addData('badge', 0);
+                } else {
+                    const totalUnread = await getUnreadMessagesForUser(user._id.toString());
+                    const badge = totalUnread + (data.custom.isReact || data.custom.isConnectionRequest || data.custom.respondConnetionRequest ? 1 : 0);
+
+                    iOSContent.badge = badge;
+                    iOSContent.aps.badge = badge;
+                    androidContent.addData('badge', badge);
+                }
 
                 if (muted) {
                     iOSContent.priority = 5;
