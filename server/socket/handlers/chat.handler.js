@@ -4,6 +4,7 @@ const { UserService, ChatService, MessageService } = require('../../services');
 const { getChatService } = require('../services');
 const pushNotificationService = require('../../notifications');
 const e2eeService = require('../../services/domain/e2ee/e2ee.service');
+const { isValidObjectId } = require('../../utils/user.utils');
 const chatService = new ChatService();
 // Instantiate a message service
 const messageService = new MessageService();
@@ -407,11 +408,11 @@ const newMessage = async function(data, ack) {
             throw new Error('Invalid message data');
         }
 
-        const { chatId, tempId, content, type } = data;
+        const { chatId: rawChatId, tempId, content, type, chat: chatObject } = data;
 
-        if (!chatId || !content) {
-            logger.warn('newMessage: missing required fields', { chatId, hasContent: !!content, userId: this.user?.id });
-            return ack({ error: 'chatId and content are required', code: 'VALIDATION_ERROR' });
+        if (!content) {
+            logger.warn('newMessage: missing required fields', { hasContent: !!content, userId: this.user?.id });
+            return ack({ error: 'content is required', code: 'VALIDATION_ERROR' });
         }
 
         // Validate message type
@@ -420,14 +421,54 @@ const newMessage = async function(data, ack) {
             throw new Error(`Invalid message type: ${type}`);
         }
 
-        logger.debug(`New message: ${chatId}`);
-
         const from = this.user;
-        
+
         // Validate sender
         if (!from || !from.id) {
             throw new Error('Sender identification failed');
         }
+
+        let chatId = rawChatId;
+        let chat = null;
+
+        // A chatId was given — look it up rather than assuming it's valid just because
+        // it's a well-formed ObjectId (it may be stale, deleted, or belong to a chat the
+        // sender isn't a member of).
+        if (chatId) {
+            if (!isValidObjectId(chatId)) {
+                logger.warn(`newMessage: invalid chatId "${chatId}"`, { userId: from.id });
+                return ack({ error: 'Invalid chatId', code: 'VALIDATION_ERROR' });
+            }
+
+            try {
+                chat = await chatService.getById(chatId, from.id);
+            } catch (err) {
+                chat = null;
+            }
+        }
+
+        if (!chat) {
+            // Either no chatId was given, or the one given doesn't resolve to a real,
+            // accessible chat — create it here from the inline chat payload instead of
+            // rejecting, so the client doesn't need a separate round-trip before it can
+            // send its first message.
+            if (!chatObject || !Array.isArray(chatObject.users) || chatObject.users.length < 2) {
+                logger.warn('newMessage: no accessible chat for chatId and no valid chat payload to create one', { chatId: rawChatId, userId: from.id });
+                return ack({ error: rawChatId ? 'Chat not found' : 'chatId or chat is required', code: rawChatId ? 'CHAT_NOT_FOUND' : 'VALIDATION_ERROR' });
+            }
+
+            try {
+                const created = await chatService.create({ chat: chatObject, userId: from.id });
+                chat = created.chat;
+                chatId = chat._id.toString();
+                logger.info(`newMessage: created chat ${chatId} on first message`, { previousChatId: rawChatId, userId: from.id });
+            } catch (err) {
+                logger.error(`newMessage: failed to create chat inline: ${err.message}`, { userId: from.id });
+                return ack({ error: `Failed to create chat: ${err.message}`, code: 'CHAT_CREATE_FAILED' });
+            }
+        }
+
+        logger.debug(`New message: ${chatId}`);
 
         // Check for duplicate message (idempotency)
         if (tempId) {
@@ -436,18 +477,6 @@ const newMessage = async function(data, ack) {
                 logger.warn(`Duplicate message detected: tempId=${tempId}`);
                 return ack({ warning: 'Duplicate message', isDuplicate: true });
             }
-        }
-
-        // Get chat and verify sender is member with permissions
-        let chat;
-        try {
-            chat = await chatService.getById(chatId, from.id);
-        } catch (err) {
-            throw new Error(`Unable to verify chat membership: ${err.message}`);
-        }
-
-        if (!chat) {
-            throw new Error('Chat not found or access denied');
         }
 
         let members = chat.members;

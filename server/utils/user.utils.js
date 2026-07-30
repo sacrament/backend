@@ -125,7 +125,15 @@ async function getUserByIntId(userId, select = null) {
  * isValidObjectId(123); // false
  */
 function isValidObjectId(value) {
-    return typeof value === 'string' && mongoose.Types.ObjectId.isValid(value);
+    if (typeof value !== 'string') return false;
+    try {
+        // mongoose.Types.ObjectId.isValid() alone also accepts any raw 12-byte string
+        // (not just 24-char hex), silently treating garbage as "valid". Casting and
+        // comparing the re-stringified hex back to the input rules that out.
+        return new mongoose.Types.ObjectId(value).toString() === value;
+    } catch {
+        return false;
+    }
 }
 
 /**
