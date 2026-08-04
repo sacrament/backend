@@ -121,7 +121,9 @@ resource "aws_secretsmanager_secret" "ops" {
 resource "aws_secretsmanager_secret_version" "ops" {
   secret_id = aws_secretsmanager_secret.ops.id
   secret_string = jsonencode({
-    ALERT_EMAIL = "REPLACE_ME"
+    ALERT_EMAIL                = "REPLACE_ME"
+    SES_FROM_EMAIL             = "info@winky.com"
+    SUPPORT_NOTIFICATION_EMAIL = "info@winky.com"
   })
 
   lifecycle {

@@ -31,6 +31,7 @@ module.exports = {
     require('../models/deleted.user');
     require('../models/pending.socket.event');
     require('../models/user.saved');
+    require('../models/contact.us');
   },
 
   async connectDatabase() {

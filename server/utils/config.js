@@ -58,5 +58,11 @@ module.exports = {
         SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY,
         API_ENDPOINT: process.env.AWS_API_ENDPOINT,
         REGION: process.env.AWS_REGION
-    }
+    },
+
+    SES: {
+        FROM: process.env.SES_FROM_EMAIL || 'info@winky.com',
+    },
+
+    SUPPORT_NOTIFICATION_EMAIL: process.env.SUPPORT_NOTIFICATION_EMAIL || 'info@winky.com',
 };
