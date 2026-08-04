@@ -545,9 +545,10 @@ class PushNotificationService {
 
                 if (isNearbyWink) {
                     // Nearby wink pushes are ambient discovery pings, not unread items —
-                    // don't let them bump the app icon badge.
-                    delete iOSContent.aps.badge;
-                    delete iOSContent.badge;
+                    // explicitly zero the badge (omitting the key leaves any existing
+                    // badge count on the device unchanged, per APNs semantics).
+                    iOSContent.badge = 0;
+                    iOSContent.aps.badge = 0;
                     androidContent.addData('badge', 0);
                 } else {
                     const totalUnread = await getUnreadMessagesForUser(user._id.toString());
