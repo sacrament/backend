@@ -94,9 +94,16 @@ const logger = require('../../utils/logger');
 // Store for rate limiting (in production, use Redis)
 const rateLimitStore = new Map();
 
-// Global SMS budget: max OTPs per hour across all IPs/phones
+// Global SMS budget: max OTPs per hour across all IPs/phones. This is the last
+// backstop on Twilio spend, so the default is a number we can afford to pay for
+// rather than a number we expect to reach — raise it deliberately via env as
+// real signup volume grows.
 const globalOtpBudget = { count: 0, resetAt: Date.now() + 60 * 60 * 1000 };
-const GLOBAL_OTP_MAX_PER_HOUR = parseInt(process.env.OTP_GLOBAL_HOURLY_LIMIT) || 100000;
+const GLOBAL_OTP_MAX_PER_HOUR = parseInt(process.env.OTP_GLOBAL_HOURLY_LIMIT) || 2000;
+
+// Short-window per-phone cap, layered under the hourly limiter in routes/index.js.
+// Stops a burst against one victim's handset between hourly window resets.
+const OTP_MAX_PER_PHONE_PER_10MIN = parseInt(process.env.OTP_MAX_PER_PHONE_PER_10MIN) || 3;
 
 /**
  * Apple Authentication
@@ -191,7 +198,7 @@ const requestPhoneOtp = async (req, res) => {
 
     logger.info(`[requestPhoneOtp] Incoming OTP request - phone: ${phoneNumber}, ip: ${clientIp}, userAgent: ${userAgent}`);
 
-    const currentClientCode = process.env.OTP_CLIENT_KEY_CODE;
+    const currentClientCode = otpClientKeyCodes();
 
     if (!phoneNumber || phoneNumber.trim() === '') {
       logger.warn('[requestPhoneOtp] Rejected: missing phone number');
@@ -214,23 +221,49 @@ const requestPhoneOtp = async (req, res) => {
       return res.status(400).json({ status: 'error', code: 1002, message: 'Missing signature header' });
     }
 
-    // HMAC-SHA256 with time window when OTP_SIGNATURE_SECRET is set (requires mobile update).
-    // Falls back to legacy SHA1 if secret is not configured.
-    const sigSecret = process.env.OTP_SIGNATURE_SECRET;
+    // HMAC-SHA256 over `phone:minute`, accepting the previous minute for clock skew.
+    //
+    // The legacy branch below is a SHA1 of a hardcoded string plus the phone number,
+    // with no secret in it at all — anyone who has seen the source or one request can
+    // compute it. It therefore only runs when explicitly opted into via
+    // OTP_ALLOW_LEGACY_SIGNATURE, for draining traffic from old mobile builds. With
+    // no secret configured and no opt-in we fail closed rather than silently serving
+    // an endpoint that has no signature protection.
+    const sigSecrets = otpSignatureSecrets();
+    const allowLegacySignature = process.env.OTP_ALLOW_LEGACY_SIGNATURE === 'true';
     let signatureValid = false;
-    if (sigSecret) {
+
+    if (sigSecrets.length > 0) {
       const minute = Math.floor(Date.now() / 60000);
-      const expected = crypto.createHmac('sha256', sigSecret).update(`${phoneNumber}:${minute}`).digest('hex');
-      const expectedPrev = crypto.createHmac('sha256', sigSecret).update(`${phoneNumber}:${minute - 1}`).digest('hex');
-      signatureValid = signature === expected || signature === expectedPrev;
-      logger.info(`[requestPhoneOtp] Signature check (HMAC-SHA256) - valid: ${signatureValid}, phone: ${phoneNumber}`);
-    } else {
+      // Try each accepted secret against this minute and the previous one (clock skew).
+      // Index 0 is the current secret; anything beyond it is a retiring secret still in
+      // circulation. `matchedIndex` tells us which, so the logs show when old builds
+      // have drained and the retiring secret can safely be dropped.
+      let matchedIndex = -1;
+      for (let i = 0; i < sigSecrets.length; i++) {
+        const expected     = crypto.createHmac('sha256', sigSecrets[i]).update(`${phoneNumber}:${minute}`).digest('hex');
+        const expectedPrev = crypto.createHmac('sha256', sigSecrets[i]).update(`${phoneNumber}:${minute - 1}`).digest('hex');
+        if (timingSafeEqualHex(signature, expected) || timingSafeEqualHex(signature, expectedPrev)) {
+          matchedIndex = i;
+          signatureValid = true;
+          break;
+        }
+      }
+      if (matchedIndex > 0) {
+        logger.warn(`[requestPhoneOtp] Signature matched a RETIRING secret (slot ${matchedIndex}) — an old client build is still in use. phone: ${phoneNumber}`);
+      } else {
+        logger.info(`[requestPhoneOtp] Signature check (HMAC-SHA256) - valid: ${signatureValid}, phone: ${phoneNumber}`);
+      }
+    } else if (allowLegacySignature) {
       const legacyExpected = crypto
         .createHash('sha1')
         .update(`VerifySignatureCodeWithWithClientKeyFor=${phoneNumber}`)
         .digest('hex');
-      signatureValid = signature === legacyExpected;
-      logger.info(`[requestPhoneOtp] Signature check (legacy SHA1) - valid: ${signatureValid}, phone: ${phoneNumber}`);
+      signatureValid = timingSafeEqualHex(signature, legacyExpected);
+      logger.warn(`[requestPhoneOtp] Signature check (legacy SHA1, NO SECRET) - valid: ${signatureValid}, phone: ${phoneNumber}`);
+    } else {
+      logger.error('[requestPhoneOtp] OTP_SIGNATURE_SECRET is not configured and legacy signatures are not enabled — rejecting all OTP requests');
+      return res.status(503).json({ status: 'error', code: 5001, message: 'Service temporarily unavailable, please try again later' });
     }
 
     if (!signatureValid) {
@@ -243,9 +276,13 @@ const requestPhoneOtp = async (req, res) => {
       return res.status(400).json({ status: 'error', code: 1005, message: 'Missing client key code header' });
     }
 
-    if (clientKeyCode !== currentClientCode) {
+    const clientCodeMatch = currentClientCode.findIndex((code) => timingSafeEqualUtf8(clientKeyCode, code));
+    if (clientCodeMatch === -1) {
       logger.warn(`[requestPhoneOtp] Rejected: invalid client key code - phone: ${phoneNumber}`);
       return res.status(400).json({ status: 'error', code: 1106, message: 'Invalid client key code' });
+    }
+    if (clientCodeMatch > 0) {
+      logger.warn(`[requestPhoneOtp] Client key code matched a RETIRING value (slot ${clientCodeMatch}) — an old client build is still in use. phone: ${phoneNumber}`);
     }
 
     // skip for development/testing environments to allow easy OTP requests without strict client headers
@@ -262,14 +299,17 @@ const requestPhoneOtp = async (req, res) => {
     const phoneHash = crypto.createHash('sha256').update(phoneNumber).digest('hex');
     const rateLimitKey = `phone_${phoneHash}`;
 
+    // Per-phone check runs first: checkGlobalOtpBudget() consumes budget on every
+    // call, so checking it ahead of the phone cap would let rejected abuse burn
+    // through the global allowance and lock out legitimate signups.
+    if (!checkRateLimit(rateLimitKey, OTP_MAX_PER_PHONE_PER_10MIN, 10 * 60).allowed) {
+      logger.warn(`[requestPhoneOtp] Rejected: phone rate limit exceeded - phone: ${phoneNumber}`);
+      return res.status(429).json({ status: 'error', code: 3129, message: 'Rate limit exceeded for phone number' });
+    }
+
     if (!checkGlobalOtpBudget()) {
       logger.warn(`[requestPhoneOtp] Rejected: global OTP budget exhausted - phone: ${phoneNumber}`);
       return res.status(429).json({ status: 'error', code: 3132, message: 'Service temporarily unavailable, please try again later' });
-    }
-
-    if (!checkRateLimit(rateLimitKey, 1000, 10 * 60).allowed) {
-      logger.warn(`[requestPhoneOtp] Rejected: phone rate limit exceeded - phone: ${phoneNumber}`);
-      return res.status(429).json({ status: 'error', code: 3129, message: 'Rate limit exceeded for phone number' });
     }
 
     logger.info(`[requestPhoneOtp] All checks passed, sending OTP - phone: ${phoneNumber}`);
@@ -384,6 +424,75 @@ const logout = async (req, res) => {
 
 function isValidUserAgent(userAgent) {
   return /iOS|Android/i.test(userAgent);
+}
+
+// ─── OTP credential rotation ──────────────────────────────────────────────────
+//
+// A mobile build and a backend deploy cannot be swapped at the same instant: an
+// App Store release rolls out over days, and users update whenever they feel like
+// it. So a single-valued secret cannot actually be rotated — changing it breaks
+// every client that has not updated yet.
+//
+// Both credentials are therefore read as an ordered list: the current value first,
+// then any number of retiring values that are still accepted. Rotation becomes:
+//
+//   1. Generate a new secret (`npm run otp:gen-secret`).
+//   2. Deploy the backend with OTP_SIGNATURE_SECRET=<new> and
+//      OTP_SIGNATURE_SECRET_RETIRING=<old>. Both old and new clients work.
+//   3. Ship the mobile build carrying <new>.
+//   4. Watch for "matched a RETIRING secret" in the logs. When it stops, the old
+//      builds are gone.
+//   5. Deploy again with OTP_SIGNATURE_SECRET_RETIRING removed.
+//
+// Step 5 is the one that actually completes the rotation — until then the old
+// secret is still valid, so a leak is not yet contained. The same applies to
+// OTP_CLIENT_KEY_CODE / OTP_CLIENT_KEY_CODE_RETIRING.
+
+/** Parse a comma-separated env var into a trimmed, non-empty list. */
+function parseSecretList(value) {
+  if (!value) return [];
+  return value.split(',').map((v) => v.trim()).filter((v) => v.length > 0);
+}
+
+/** Accepted OTP signing secrets, current first, then any retiring ones. */
+function otpSignatureSecrets() {
+  return [
+    ...parseSecretList(process.env.OTP_SIGNATURE_SECRET),
+    ...parseSecretList(process.env.OTP_SIGNATURE_SECRET_RETIRING),
+  ];
+}
+
+/** Accepted client key codes, current first, then any retiring ones. */
+function otpClientKeyCodes() {
+  return [
+    ...parseSecretList(process.env.OTP_CLIENT_KEY_CODE),
+    ...parseSecretList(process.env.OTP_CLIENT_KEY_CODE_RETIRING),
+  ];
+}
+
+/**
+ * Constant-time comparison of two hex strings. Returns false rather than throwing
+ * on malformed or mismatched input, so a caller can pass an untrusted header
+ * straight in. Length is compared first and is not itself secret here — both
+ * sides are fixed-width digests.
+ */
+function timingSafeEqualHex(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  if (a.length !== b.length) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(a, 'hex'), Buffer.from(b, 'hex'));
+  } catch {
+    return false;
+  }
+}
+
+/** Constant-time comparison of two UTF-8 strings, for shared secrets that are not hex. */
+function timingSafeEqualUtf8(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const bufA = Buffer.from(a, 'utf8');
+  const bufB = Buffer.from(b, 'utf8');
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
 }
 
 function checkGlobalOtpBudget() {

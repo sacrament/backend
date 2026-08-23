@@ -40,15 +40,37 @@ const authLimiter = rateLimit({
     legacyHeaders: false,
 });
 
-const otpLimiter = rateLimit({
+// OTP abuse controls. The request signature is HMAC'd with a secret that ships
+// inside the mobile binary, so it is extractable and cannot be treated as proof
+// the caller is our app. These limits — not the signature — are what actually
+// caps SMS spend and protects a victim's phone from being bombed.
+//
+// Two independent buckets, because they stop different attacks:
+//   otpPhoneLimiter — caps how many texts any single number can be sent.
+//   otpIpLimiter    — caps a single origin rotating through many numbers, which
+//                     the phone-keyed bucket alone cannot see.
+
+const OTP_MAX_PER_PHONE_PER_HOUR = parseInt(process.env.OTP_MAX_PER_PHONE_PER_HOUR) || 5;
+const OTP_MAX_PER_IP_PER_HOUR    = parseInt(process.env.OTP_MAX_PER_IP_PER_HOUR)    || 20;
+
+const otpPhoneLimiter = rateLimit({
     windowMs: 60 * 60 * 1000,
-    max: 1000,
+    max: OTP_MAX_PER_PHONE_PER_HOUR,
     keyGenerator: (req) => {
         const phone = req.body?.phoneNumber || '';
-        if (!phone) return ipKeyGenerator(req);
+        if (!phone) return ipKeyGenerator(req.ip);
         // Hash the phone number to use as rate limit key
-        return crypto.createHash('sha256').update(phone).digest('hex');
+        return `otp_phone:${crypto.createHash('sha256').update(phone).digest('hex')}`;
     },
+    message: { status: 'error', code: 429, message: 'Too many OTP requests, please try again later' },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
+const otpIpLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: OTP_MAX_PER_IP_PER_HOUR,
+    keyGenerator: (req) => `otp_ip:${ipKeyGenerator(req.ip)}`,
     message: { status: 'error', code: 429, message: 'Too many OTP requests, please try again later' },
     standardHeaders: true,
     legacyHeaders: false,
@@ -58,7 +80,7 @@ const appleRevokeLimiter = rateLimit({
     windowMs: 60 * 1000,
     max: 30,
     keyGenerator: (req) => {
-        const userId = req.decodedToken?.userId || req.body?.appleUserId || ipKeyGenerator(req);
+        const userId = req.decodedToken?.userId || req.body?.appleUserId || ipKeyGenerator(req.ip);
         return `revoke:${userId}`;
     },
     skip: (req) => !req.decodedToken?.userId && !req.body?.appleUserId,
@@ -80,7 +102,7 @@ router.post('/api/auth/apple/revoke', appleRevokeLimiter, optionalVerifyToken, a
 router.use('/api/webhook', webhookRoutes); // For Twilio status callbacks that don't have client token
 
 // Rate limiters
-router.post('/api/auth/phone/secured', otpLimiter);
+router.post('/api/auth/phone/secured', otpIpLimiter, otpPhoneLimiter);
 router.use('/api/users/login',        authLimiter);
 router.use('/api/users/register',     authLimiter);
 

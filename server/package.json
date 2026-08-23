@@ -45,7 +45,10 @@
     "start:dev": "ENV_NAME=development PORT=3001 node_modules/.bin/nodemon --trace-warnings app.js",
     "calls:cleanup-stale": "node scripts/cleanup-stale-active-calls.js",
     "audit": "npm audit",
-    "audit:fix": "npm audit fix"
+    "audit:fix": "npm audit fix",
+    "test:otp-ratelimits": "node scripts/test-otp-ratelimits.js",
+    "otp:gen-secret": "node scripts/gen-otp-secret.js",
+    "test:otp-rotation": "node scripts/test-otp-rotation.js"
   },
   "repository": {
     "type": "git",
