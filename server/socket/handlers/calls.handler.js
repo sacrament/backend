@@ -301,7 +301,7 @@ const initiateCall = async function(data, ack) {
 
         // Guard: only the caller (from) may initiate
         const resolvedCallId = callRecord.roomId;
-        const resolvedCallerId = callRecord.from._id.toString();
+        const resolvedCallerId = callRecord.from?._id?.toString() ?? null;
         const resolvedCalleeId = callRecord.to._id.toString();
 
         const callerObject = await resolveUserByAnyId(userService, callerId);
@@ -378,7 +378,7 @@ const endCall = async function(data, ack) {
         // Use the server-resolved room SID for all subsequent operations
         const resolvedRoomSid = callRecord.roomId;
 
-        const callerId = callRecord.from._id.toString();
+        const callerId = callRecord.from?._id?.toString() ?? null;
         const calleeId = callRecord.to._id.toString();
         const otherPartyId = senderId === callerId ? calleeId : callerId;
 
@@ -444,7 +444,7 @@ const joinRoom = async function(data, ack) {
         // Notify the caller that the receiver has joined
         const callRecord = await callService.getCall(callId);
         if (callRecord) {
-            const callerId = callRecord.from._id.toString();
+            const callerId = callRecord.from?._id?.toString() ?? null;
             this.to(callerId).emit('call joined', {
                 callId,
                 roomName: call.uniqueName || roomName,

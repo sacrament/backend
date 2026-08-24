@@ -81,11 +81,12 @@ const getReportById = async (req, res) => {
 
     const report = await reportService.getReportById(reportId);
 
-    // Only reporter, reported user, or admin can view
-    const isInvolved = report.reporter._id.toString() === userId ||
-                       report.reported._id.toString() === userId;
+    // Only reporter, reported user, or admin can view. `reporter` is null when the
+    // reporting account has been deleted (spec B6).
+    const isInvolved = report.reporter?._id?.toString() === userId ||
+                       report.reported?._id?.toString() === userId;
 
-    if (!isInvolved) {
+    if (!isInvolved && !req.isAdmin) {
       return res.status(403).json({
         status: 'error',
         message: 'Access denied'

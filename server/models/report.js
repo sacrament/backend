@@ -7,10 +7,12 @@ const Schema = mongoose.Schema;
  */
 const ReportSchema = new Schema({
     // User who filed the report
+    // Nulled when the reporter deletes their account — the report stays on the
+    // accused's record with an anonymous reporter. See spec B6.
     reporter: {
         type: Schema.Types.ObjectId,
         ref: 'User',
-        required: true,
+        default: null,
         index: true
     },
     // User being reported
@@ -26,6 +28,9 @@ const ReportSchema = new Schema({
         enum: [
             'harassment',
             'inappropriate_content',
+            // Matches ReportReason.outsidePressure in the iOS client
+            // ("Excessive Pressure to Chat or Call").
+            'outside_pressure',
             'spam',
             'fake_profile',
             'inappropriate_behavior',
@@ -84,6 +89,16 @@ const ReportSchema = new Schema({
     // Review notes
     reviewNotes: {
         type: String,
+        default: null
+    },
+    // Repeat reports of the same target by the same reporter are collapsed into
+    // one record with a counter rather than inflating the pattern count. See A6.
+    occurrences: {
+        type: Number,
+        default: 1
+    },
+    lastReportedOn: {
+        type: Date,
         default: null
     },
     // Timestamps

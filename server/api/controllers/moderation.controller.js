@@ -16,10 +16,14 @@ const logger = require('../../utils/logger');
  * Body: { event, userId, targetId?, details?, timestamp }
  */
 const logModerationEvent = async (req, res) => {
-    const { event, userId, targetId = null, details = null, timestamp } = req.body;
+    const { event, targetId = null, details = null, timestamp } = req.body;
+
+    // Attribution comes from the token, not the body — otherwise any caller could
+    // log events against an arbitrary user.
+    const userId = req.decodedToken?.userId;
 
     if (!event) return res.status(400).json({ status: 'error', message: 'event is required' });
-    if (!userId) return res.status(400).json({ status: 'error', message: 'userId is required' });
+    if (!userId) return res.status(401).json({ status: 'error', message: 'User not authenticated' });
 
     try {
         const ModerationLog = mongoose.model('ModerationLog');

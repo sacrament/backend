@@ -41,6 +41,34 @@ function isAccountDeletionRequest(request) {
 
 module.exports = {
     /**
+     * Gate a route to admins only. Must run after verifyToken.
+     */
+    requireAdmin: async (request, response, next) => {
+        const userId = request.decodedToken?.userId;
+        if (!userId) {
+            return response.status(401).json({ status: 'error', code: 'NO_TOKEN', message: 'Authentication required.' });
+        }
+
+        try {
+            // Admin identity lives in its own model — the User model is never
+            // extended with moderation concerns. Until that model exists, deny.
+            let Admin;
+            try { Admin = mongoose.model('Admin'); } catch { Admin = null; }
+
+            const admin = Admin ? await Admin.findOne({ user: userId, active: true }).lean() : null;
+            if (!admin) {
+                logger.warn(`requireAdmin: denied for userId=${userId} on ${request.method} ${request.originalUrl}`);
+                return response.status(403).json({ status: 'error', code: 'FORBIDDEN', message: 'Admin access required.' });
+            }
+            request.isAdmin = true;
+            return next();
+        } catch (err) {
+            logger.error('requireAdmin lookup failed:', err);
+            return response.status(500).json({ status: 'error', message: 'Authorization check failed.' });
+        }
+    },
+
+    /**
      * Verify user authentication token (per-request JWT, 30-day lifetime).
      * Checks token validity then verifies the user's current account status.
      */
@@ -71,14 +99,20 @@ module.exports = {
             const user = await mongoose.model('User').findById(decoded.userId).select('status deleted').lean();
 
             if (!user) {
-                return response.status(401).json({ status: 'error', code: 'ACCOUNT_NOT_FOUND', message: 'Account not found. Please log in again.' });
+                // The account is now genuinely removed rather than flagged, so a
+                // repeat deletion call finds nothing. iOS calls DELETE /me and
+                // DELETE /user/me/deleteAccount in sequence — failing the second
+                // would leave the app showing an error and skipping its local wipe.
+                if (!isAccountDeletionRequest(request)) {
+                    return response.status(401).json({ status: 'error', code: 'ACCOUNT_NOT_FOUND', message: 'Account not found. Please log in again.' });
+                }
             }
 
-            if (user.status === 'blocked') {
+            if (user?.status === 'blocked') {
                 return response.status(403).json({ status: 'error', code: 'ACCOUNT_BLOCKED', message: 'Your account has been suspended. Please contact support.' });
             }
 
-            if (user.status === 'inactive' || user.status === 'deleted' || user.deleted) {
+            if (user && (user.status === 'inactive' || user.status === 'deleted' || user.deleted)) {
                 if (!isAccountDeletionRequest(request)) {
                     return response.status(403).json({ status: 'error', code: 'ACCOUNT_INACTIVE', message: 'Your account is no longer active.' });
                 }

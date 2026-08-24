@@ -387,7 +387,7 @@ const checkConnectionRequest = async (req, res) => {
 
 // ─── Reports ──────────────────────────────────────────────────────────────────
 
-const REPORT_TYPE_ENUM = ['harassment', 'inappropriate_content', 'spam', 'fake_profile', 'inappropriate_behavior', 'other'];
+const REPORT_TYPE_ENUM = ['harassment', 'inappropriate_content', 'outside_pressure', 'spam', 'fake_profile', 'inappropriate_behavior', 'other'];
 
 /**
  * Get user's filed reports
@@ -450,6 +450,9 @@ const fileReport = async (req, res) => {
             reportStatus: report.status
         });
     } catch (error) {
+        if (error.code === 'REPORT_RATE_LIMIT') {
+            return res.status(429).json({ status: 'error', message: error.message });
+        }
         logger.error('File report error:', error);
         return res.status(500).json({ status: 'error', message: error.message || 'Failed to file report' });
     }

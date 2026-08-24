@@ -3,7 +3,6 @@ const SMSService = require('../../external/twilio/sms.service');
 const mongoose = require('mongoose');
 const UserModel = mongoose.model('User');
 const DeviceModel = mongoose.model('Device');
-const DeletedUserModel = mongoose.model('DeletedUser');
 const ContentStorage = mongoose.model('ContentStorage');
 
 const UserRequestModel = require('../../../models/user.request').UserRequest;
@@ -1133,8 +1132,7 @@ class UserService {
      * @returns {Promise<Object>} Result object with status and deleted user
      */
     async deleteAccount(userId) {
-        const deletedUser = await this.softDeleteAccount(userId, 'User initiated');
-        return { status: 'deleted', deletedUser };
+        return this.hardDeleteAccount(userId);
     }
 
     async updateVisibilityPreferences(userId, prefs) {
@@ -1512,105 +1510,15 @@ class UserService {
         return user;
     }
 
-    async hardDeleteAccount(userId) {
-        return this.softDeleteAccount(userId, 'User initiated');
-    }
-
-    async softDeleteAccount(userId, reason = 'User initiated') {
-        const now = new Date();
-
-        const user = await UserModel.findById(userId)
-            .select('name email phone partition status deleted registeredOn lastLogin device appleId googleId gender age interestedIn')
-            .lean();
-
-        if (!user) {
-            throw new Error('User not found');
-        }
-
-        const hadDevice = !!user.device;
-        let devicePlatform = null;
-
-        const activeDevice = await DeviceModel.findOne({ user: userId }).select('platform').lean();
-        if (activeDevice?.platform) {
-            devicePlatform = activeDevice.platform;
-        }
-
-        const maskedName = `Deleted User ${String(user._id).slice(-6)}`;
-        const maskedEmail = user.email ? `deleted+${String(user._id)}@winky.deleted` : null;
-        const maskedAppleId = user.appleId ? `deleted-${String(user._id).slice(-6)}` : null;
-
-        const accountAgeDays = user.registeredOn
-            ? Math.max(0, Math.floor((now.getTime() - new Date(user.registeredOn).getTime()) / (1000 * 60 * 60 * 24)))
-            : null;
-
-        await Promise.all([
-            UserModel.findByIdAndUpdate(
-                userId,
-                {
-                    $set: {
-                        deleted: true,
-                        status: 'deleted',
-                        deletedOn: now,
-                        deletedReason: reason,
-                        name: maskedName,
-                        email: maskedEmail,
-                        phone: null,
-                        bio: null,
-                        imageUrl: null,
-                        refreshToken: null,
-                        device: null,
-                        location: null,
-                        updatedOn: now,
-                        appleId: maskedAppleId,
-                    },
-                    $unset: {
-                        partition: 1,
-                    },
-                },
-                { new: true }
-            ),
-            DeviceModel.updateMany(
-                { user: userId, status: { $in: ['active', 'disabled'] } },
-                {
-                    $set: {
-                        status: 'deleted',
-                        token: null,
-                        voipToken: null,
-                        state: 'background',
-                        updatedAt: now,
-                    },
-                }
-            ),
-            DeletedUserModel.updateOne(
-                { user: userId },
-                {
-                    $setOnInsert: {
-                        user: userId,
-                        deletedOn: now,
-                        reason,
-                        statusBefore: user.status || null,
-                        hadDevice,
-                        devicePlatform,
-                        registrationDate: user.registeredOn || null,
-                        lastLogin: user.lastLogin || null,
-                        accountAgeDays,
-                        authProvider: {
-                            apple: !!user.appleId,
-                            google: !!user.googleId,
-                            phone: !!user.partition || !!user.phone,
-                        },
-                        profileSnapshot: {
-                            gender: user.gender || null,
-                            age: user.age || null,
-                            interestedIn: user.interestedIn || null,
-                        },
-                    },
-                },
-                { upsert: true }
-            ),
-        ]);
-
-        return await UserModel.findById(userId).lean();
+    /**
+     * Real account deletion — see AccountDeletionService and
+     * docs/SAFETY_REPORTING_AND_ACCOUNT_DELETION_SPEC.md (Part B).
+     *
+     * Both DELETE /me and DELETE /user/me/deleteAccount route here. Idempotent.
+     */
+    async hardDeleteAccount(userId, reason = 'User initiated') {
+        const AccountDeletionService = require('./account.deletion.service');
+        return new AccountDeletionService().deleteAccount(userId, reason);
     }
 
     // ─── Device ────────────────────────────────────────────────────────────────
