@@ -621,8 +621,10 @@ class MessageService {
 
         if (messages.length > 0) {
             const messageOwners = messages
-                .map(m => m.from._id.toString())
-                .filter(fromUser => fromUser !== userId);
+                // `from` is null when the sender deleted their account; the message
+                // itself is retained for the recipient. See spec B5.
+                .map(m => m.from?._id?.toString())
+                .filter(fromUser => fromUser && fromUser !== userId);
 
             const uniqueSenders = [...new Set(messageOwners)];
 

@@ -2,6 +2,10 @@ const mongoose = require('mongoose');
 const Report = mongoose.model('Report');
 const User = mongoose.model('User');
 
+// Reports one account may file per rolling 24h. Caps the input to the automated
+// pattern action in checkHarassmentPatterns.
+const MAX_REPORTS_PER_DAY = 10;
+
 /**
  * ReportService
  * Handles harassment reporting and moderation
@@ -46,6 +50,40 @@ class ReportService {
 
         if (!reported) {
             throw new Error('Reported user not found');
+        }
+
+        const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+        // Rate limit — without this, automated action (A7) becomes a brigading vector.
+        const recentByReporter = await Report.countDocuments({
+            reporter: reporterId,
+            createdOn: { $gte: dayAgo }
+        });
+        if (recentByReporter >= MAX_REPORTS_PER_DAY) {
+            const err = new Error('Daily report limit reached. Please try again tomorrow.');
+            err.code = 'REPORT_RATE_LIMIT';
+            throw err;
+        }
+
+        // Collapse repeat reports of the same target by the same reporter into one
+        // record rather than inflating the count that drives A7.
+        const duplicate = await Report.findOne({
+            reporter: reporterId,
+            reported: reportedId,
+            status: { $in: ['pending', 'reviewing'] }
+        });
+
+        if (duplicate) {
+            duplicate.occurrences = (duplicate.occurrences || 1) + 1;
+            duplicate.lastReportedOn = new Date();
+            if (description) {
+                duplicate.description = duplicate.description
+                    ? `${duplicate.description}\n---\n${description}`
+                    : description;
+            }
+            await duplicate.save();
+            await this.checkHarassmentPatterns(reportedId);
+            return duplicate;
         }
 
         // Create report
@@ -183,7 +221,54 @@ class ReportService {
 
         await report.save();
 
+        // An action is only a record until it is applied to the account.
+        await this.applyAction(report.reported, actionTaken, `report:${report._id}`, reviewerId);
+
         return report;
+    }
+
+    /**
+     * Apply a moderation action to an account.
+     *
+     * `warning_issued` is recorded only; restrictions and bans are persisted as
+     * UserBan rows, which is what the rest of the system reads.
+     */
+    async applyAction(userId, actionTaken, source, reviewerId = null) {
+        if (!actionTaken || actionTaken === 'none' || actionTaken === 'dismissed') return null;
+
+        const ModerationLog = mongoose.model('ModerationLog');
+        const UserBan = mongoose.model('UserBan');
+
+        await ModerationLog.create({
+            event: `action:${actionTaken}`,
+            userId,
+            targetId: reviewerId || null,
+            details: source,
+            timestamp: new Date(),
+        });
+
+        if (actionTaken === 'warning_issued') return null;
+
+        const restrictions = actionTaken === 'permanent_ban'
+            ? ['restricted_calling', 'shadow_banned']
+            : ['restricted_calling'];
+
+        const ban = await UserBan.create({
+            userId,
+            reason: `${actionTaken} (${source})`,
+            restrictions,
+            active: true,
+        });
+
+        // Tell the account immediately if it is connected.
+        try {
+            const { getIO } = require('../../../socket/io');
+            getIO().to(String(userId)).emit('userFlagged', { userId: String(userId), restrictions });
+        } catch (err) {
+            // Non-fatal — the ban is already persisted.
+        }
+
+        return ban;
     }
 
     /**
@@ -211,14 +296,32 @@ class ReportService {
             highRisk: reportCount >= 10 || harassmentReports >= 5
         };
 
-        // Log pattern (for future automated action)
         console.log(`Harassment pattern check for user ${userId}:`, {
             reportCount,
             harassmentReports,
             ...patterns
         });
 
-        // Return pattern analysis (can be used for automated warnings/restrictions)
+        // High risk restricts automatically and queues for human review. Never an
+        // automatic permanent ban — that stays a reviewed decision.
+        if (patterns.highRisk) {
+            const UserBan = mongoose.model('UserBan');
+            const alreadyRestricted = await UserBan.findOne({ userId, active: true });
+
+            if (!alreadyRestricted) {
+                await this.applyAction(
+                    userId,
+                    'temporary_restriction',
+                    `auto:pattern(reports=${reportCount},harassment=${harassmentReports})`
+                );
+            }
+
+            await Report.updateMany(
+                { reported: userId, status: 'pending' },
+                { $set: { status: 'reviewing' } }
+            );
+        }
+
         return {
             userId,
             reportCount,
