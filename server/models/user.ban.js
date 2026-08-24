@@ -16,6 +16,9 @@ const UserBanSchema = new Schema({
         default: ['shadow_banned'],
     },
     active: { type: Boolean, default: true, index: true },
+    // Null means the ban does not lapse on its own. Temporary restrictions carry a
+    // date; the moderation:expire-bans job deactivates them once it passes.
+    expiresAt: { type: Date, default: null, index: true },
 });
 
 UserBanSchema.index({ userId: 1, active: 1 });

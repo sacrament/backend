@@ -6,6 +6,13 @@ const User = mongoose.model('User');
 // pattern action in checkHarassmentPatterns.
 const MAX_REPORTS_PER_DAY = 10;
 
+// Retention windows (spec B6).
+const RESOLVED_RETENTION_DAYS = 365;
+const DISMISSED_RETENTION_DAYS = 90;
+
+// How long an automatic or reviewed temporary restriction lasts.
+const TEMPORARY_RESTRICTION_DAYS = 7;
+
 /**
  * ReportService
  * Handles harassment reporting and moderation
@@ -215,8 +222,19 @@ class ReportService {
         report.reviewNotes = reviewNotes;
         report.reviewedOn = new Date();
 
+        const now = new Date();
+
+        // Retention clock runs from resolution, not creation, so an open
+        // investigation is never purged mid-review. See spec B6.
         if (status === 'resolved') {
-            report.resolvedOn = new Date();
+            report.resolvedOn = now;
+            report.purgeAt = new Date(now.getTime() + RESOLVED_RETENTION_DAYS * 86400000);
+        } else if (status === 'dismissed') {
+            // Already judged unfounded — held briefly, not for a year.
+            report.purgeAt = new Date(now.getTime() + DISMISSED_RETENTION_DAYS * 86400000);
+        } else {
+            // Reopened: cancel any pending purge.
+            report.purgeAt = null;
         }
 
         await report.save();
@@ -258,6 +276,9 @@ class ReportService {
             reason: `${actionTaken} (${source})`,
             restrictions,
             active: true,
+            expiresAt: actionTaken === 'temporary_restriction'
+                ? new Date(Date.now() + TEMPORARY_RESTRICTION_DAYS * 86400000)
+                : null,
         });
 
         // Tell the account immediately if it is connected.

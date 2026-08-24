@@ -98,9 +98,35 @@ class AuthService {
             err.httpStatus = verification.reason === 'locked' ? 429 : 401;
             throw err;
         }
+        await this.assertNotBanEvading(partition);
+
         const { user, accountExisted } = await userService.findOrCreateByPhone(phoneNumber);
         await this.markOTPUsed(partition);
         return { user, accountExisted, ...(await this.issueTokens(user, deviceId)) };
+    }
+
+    /**
+     * Refuse re-registration while a ban from a deleted account is still live.
+     *
+     * Deletion removes the account but keeps a DeletedUser record holding the same
+     * keyed phone hash, so a banned user cannot clear their record by deleting and
+     * signing up again. See docs/SAFETY_REPORTING_AND_ACCOUNT_DELETION_SPEC.md (B6).
+     */
+    async assertNotBanEvading(phoneHash) {
+        const mongoose = require('mongoose');
+        const deleted = await mongoose.model('DeletedUser').findOne({ phoneHash }).select('userId').lean();
+        if (!deleted) return;
+
+        const ban = await mongoose.model('UserBan')
+            .findOne({ userId: deleted.userId, active: true })
+            .select('_id')
+            .lean();
+        if (!ban) return;
+
+        const err = new Error('This number cannot be used to create an account.');
+        err.code = 3140;
+        err.httpStatus = 403;
+        throw err;
     }
 
     async markOTPUsed(partition) {

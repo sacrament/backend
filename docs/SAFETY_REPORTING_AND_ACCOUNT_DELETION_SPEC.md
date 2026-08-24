@@ -20,11 +20,12 @@ Open for legal only: indefinite vs fixed 5-year retention for permanent bans (B6
 
 Build order: A0, A3, A1, A6, A7 (backend done), B (backend done) → A2, A4, A5, A8 (iOS).
 
+Backend is complete and covered by `npm run test:account-deletion`, which runs the
+cascade and the retention rules against an isolated database (39 checks).
+
 Not yet built, tracked separately:
 
 - iOS rendering of a deleted user as a masked "Deleted user" (B5).
-- TTL purge jobs for retained reports and bans (B6).
-- Ban-evasion check at signup against `DeletedUser.phoneHash` (B6).
 - `DeletedUser.country` — Location stores coordinates only; needs a geocode step.
 - The `Admin` model that `requireAdmin` resolves against. Until it exists every
   `/api/moderation/*` admin route denies, so the review queue is mounted but locked.

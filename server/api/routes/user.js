@@ -25,7 +25,6 @@ const {
     respondConnectionRequest,
     getConnectionRequests,
     checkConnectionRequest,
-    getMyReports,
     fileReport,
 } = require('../controllers/user.controller');
 
@@ -93,8 +92,6 @@ router.post('/saved', verifyToken, savedController.addSaved);
 router.delete('/saved/:userId', verifyToken, savedController.removeSaved);
 
 // ── Reports ───────────────────────────────────────────────────────────────────
-// GET  /users/report
-router.get('/report', verifyToken, getMyReports);
 // POST /users/report
 router.post('/report', verifyToken, fileReport);
 

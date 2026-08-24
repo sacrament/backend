@@ -39,6 +39,7 @@ const initAgenda = async () => {
     require('../jobs/notifications')(_agenda);
     require('../jobs/location')(_agenda);
     require('../jobs/call.maintenance')(_agenda);
+    require('../jobs/moderation')(_agenda);
 
     await _agenda.start();
 

@@ -8,7 +8,13 @@ const Schema = mongoose.Schema;
 const ModerationLogSchema = new Schema({
     event: {
         type: String,
-        enum: ['first_message', 'warning', 'ban', 'disappear', 'report', 'excessive_calls', 'permission_violation'],
+        enum: [
+            // Client-reported signals (POST /api/moderation/log)
+            'first_message', 'warning', 'ban', 'disappear', 'report',
+            'excessive_calls', 'permission_violation',
+            // Applied moderation actions (ReportService.applyAction)
+            'action:warning_issued', 'action:temporary_restriction', 'action:permanent_ban',
+        ],
         required: true,
         index: true,
     },

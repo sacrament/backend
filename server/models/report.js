@@ -114,8 +114,18 @@ const ReportSchema = new Schema({
     resolvedOn: {
         type: Date,
         default: null
+    },
+    // When the TTL index removes this report. Null while it is still open.
+    purgeAt: {
+        type: Date,
+        default: null
     }
 });
+
+// Retention (spec B6): resolved reports are kept 12 months from resolution as
+// evidence; reports dismissed as unfounded go after 90 days. `purgeAt` is set by
+// ReportService.updateReportStatus and this TTL index does the deleting.
+ReportSchema.index({ purgeAt: 1 }, { expireAfterSeconds: 0, sparse: true });
 
 // Compound index for efficient queries
 ReportSchema.index({ reporter: 1, reported: 1, createdOn: -1 });

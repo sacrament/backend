@@ -393,25 +393,6 @@ const REPORT_TYPE_ENUM = ['harassment', 'inappropriate_content', 'outside_pressu
  * Get user's filed reports
  * GET /users/report
  */
-const getMyReports = async (req, res) => {
-    try {
-        const reports = await reportService.getReportsByReporter(req.decodedToken.userId);
-        const data = reports.map(r => ({
-            _id:            r._id?.toString(),
-            reportedUserId: r.reported?._id?.toString() ?? r.reported?.toString(),
-            userName:       r.reported?.name     ?? null,
-            userImageUrl:   r.reported?.imageUrl ?? null,
-            reason:         r.type               ?? r.reason ?? null,
-            status:         r.status             ?? null,
-            reportedAt:     r.createdOn          ?? null,
-        }));
-        return res.status(200).json({ status: 'success', data });
-    } catch (error) {
-        logger.error('Get my reports error:', error);
-        return res.status(500).json({ status: 'error', message: 'Failed to get reports' });
-    }
-};
-
 /**
  * File a report against a user
  * POST /users/report
@@ -475,6 +456,5 @@ module.exports = {
     respondConnectionRequest,
     getConnectionRequests,
     checkConnectionRequest,
-    getMyReports,
     fileReport,
 };
