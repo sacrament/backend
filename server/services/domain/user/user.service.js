@@ -10,6 +10,7 @@ const UserConnectStatus = require('../../../models/user.connect').UserConnectSta
 const SavedUserModel = require('../../../models/user.saved').SavedUser;
 
 const utils = require('../../../utils/index');
+const { countryFromPhone } = require('../../../utils/phone.country');
 const { getIO } = require('../../../socket/io');
 const _ = require('lodash');
 
@@ -1376,6 +1377,9 @@ class UserService {
             user = await new UserModel({
                 partition: phoneHash,
                 phone: this.#encryptPhone(phoneNumber),
+                // Recorded once, at signup — the number cannot change afterwards,
+                // so there is nothing to refresh on later logins.
+                country: countryFromPhone(phoneNumber),
                 status: 'active',
                 registeredOn: new Date(),
                 isPublic: false

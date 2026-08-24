@@ -115,9 +115,8 @@ class AccountDeletionService {
                     lastLogin:      user.lastLogin || null,
                     accountAgeDays,
                     devicePlatform: device?.platform || null,
-                    // Location holds coordinates only; country needs a geocode step
-                    // that does not exist yet, so this stays null for now.
-                    country:        null,
+                    // Recorded at signup from the phone's calling code.
+                    country:        user.country || null,
 
                     authProvider: {
                         apple:  !!user.appleId,
