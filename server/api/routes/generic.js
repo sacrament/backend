@@ -34,10 +34,33 @@ router.get('/rules', async (req, res) => {
     }
 });
 
-// GET /api/generic/content — public; returns FAQ, Privacy Policy, Terms of Service from DB
+// GET /api/generic/content — public; returns FAQ, Privacy Policy, Terms of Service from DB.
+// Legal copy only changes when the seed script runs, so the built payload is cached in-process and
+// rebuilt only when a document's updatedAt moves. Express generates the ETag from the response body
+// and answers matching If-None-Match requests with a body-less 304 on its own.
+let contentCache = null; // { fingerprint, payload }
+
+function legalContentFingerprint(stamps) {
+    return stamps
+        .map(d => `${d.type}:${new Date(d.updatedAt).getTime()}`)
+        .sort()
+        .join('|');
+}
+
 router.get('/content', async (req, res) => {
     try {
         const LegalContent = mongoose.model('LegalContent');
+
+        // Cheap query first: just the timestamps needed to tell whether anything changed.
+        const stamps = await LegalContent.find({}, 'type updatedAt').lean();
+        const fingerprint = legalContentFingerprint(stamps);
+
+        res.set('Cache-Control', 'public, max-age=3600');
+
+        if (contentCache && contentCache.fingerprint === fingerprint) {
+            return res.json(contentCache.payload);
+        }
+
         const docs = await LegalContent.find({}, '-_id -__v -createdAt -updatedAt').lean();
 
         const faqDoc      = docs.find(d => d.type === 'faq');
@@ -46,7 +69,7 @@ router.get('/content', async (req, res) => {
 
         const lastUpdated = faqDoc?.lastUpdated || privacyDoc?.lastUpdated || tosDoc?.lastUpdated || null;
 
-        res.json({
+        const payload = {
             lastUpdated,
             faq: faqDoc
                 ? faqDoc.categories.map(c => ({ category: c.category, items: c.items }))
@@ -57,7 +80,10 @@ router.get('/content', async (req, res) => {
             termsOfService: tosDoc
                 ? { lastUpdated: tosDoc.lastUpdated, sections: tosDoc.sections }
                 : { lastUpdated: null, sections: [] }
-        });
+        };
+
+        contentCache = { fingerprint, payload };
+        res.json(payload);
     } catch (error) {
         logger.error('Error fetching legal content:', error);
         res.status(500).json({ status: 'error', message: 'Failed to fetch content' });

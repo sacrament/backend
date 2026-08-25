@@ -57,6 +57,7 @@ async function main() {
         email: 'Leaves@Example.com ',
         partition: 'hash-leaves',
         appleId: 'apple-123',
+        country: 'XK',
         gender: 'female',
         age: 29,
         interestedIn: 'everyone',
@@ -128,6 +129,12 @@ async function main() {
     check('no name retained', !('name' in (tomb?.toObject() ?? {})));
     check('messagesSent counted', tomb?.activity?.messagesSent === 1, `got ${tomb?.activity?.messagesSent}`);
     check('accountAgeDays computed', tomb?.accountAgeDays === 100, `got ${tomb?.accountAgeDays}`);
+    check('country carried onto tombstone', tomb?.country === 'XK', `got ${tomb?.country}`);
+
+    const { countryFromPhone } = require('../utils/phone.country');
+    check('country derived from calling code', countryFromPhone('+38344123456') === 'XK');
+    check('longest prefix wins over +1', countryFromPhone('+12425550100') === 'BS');
+    check('unknown code yields null', countryFromPhone('+999123') === null);
 
     console.log('\nsafety records:');
     const filedAfter = await M('Report').findById(filed._id);

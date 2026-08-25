@@ -26,6 +26,10 @@ const User = new Schema({
     bio: { type: String, default: null },
     // Interest tags shown on the profile ("My interests" in Personal info)
     interests: [{ type: String }],
+    // ISO 3166-1 alpha-2, derived from the phone's calling code at signup and
+    // carried onto the DeletedUser tombstone so cohort stats survive deletion.
+    // Approximate by nature — a foreign number misattributes. Statistics only.
+    country: { type: String, default: null, index: true },
     registeredOn: { type: Date, default: Date.now() },
     updatedOn: { type: Date, default: null }, 
     appleId: { type: String, default: null },
