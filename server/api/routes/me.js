@@ -31,6 +31,9 @@ router.put('/radar', meController.updateRadarStatus);
 // PUT  /me/radar/invisible
 router.put('/radar/invisible', meController.updateRadarInvisible);
 
+// PUT  /me/radar/distance — the user's chosen nearby-search radius
+router.put('/radar/distance', meController.updateRadarDistance);
+
 // PUT  /me/radar/durations — how long the user stays visible on radar, per distance preset
 router.put('/radar/durations', meController.updateRadarDurations);
 

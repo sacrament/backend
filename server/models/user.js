@@ -60,6 +60,12 @@ const User = new Schema({
         enabled:   { type: Boolean, default: true },
         invisible: { type: Boolean, default: false },
         updatedOn: { type: Date, default: null },
+        // The user's chosen nearby-search radius in km. Persisted server-side so
+        // the preference survives a reinstall or a move to a new device — the
+        // client has always sent this (NetworkClient.updateSearchRadius) and
+        // always read it back (User.searchRadiusKm), but there was no endpoint
+        // or field behind it, so the value was silently local-only.
+        radiusKm:  { type: Number, default: null },
         // How long (minutes) this user stays visible on others' radar after their
         // last location ping, per distance preset. Missing/unset presets fall back
         // to RADAR_DEFAULT_DURATION_MIN (30) in nearby.controller.js.
