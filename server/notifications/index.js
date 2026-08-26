@@ -500,19 +500,28 @@ class PushNotificationService {
 
                 // Check all relevant notification preferences for push eligibility
                 const prefs = user.notificationPreferences ?? (await getUserPreferences(user._id.toString()));
-                const requiredPrefs = [
-                    'newMessages',
-                    'chatRequests',
-                    'connectionRequests',
-                    'nearbyWinks',
-                    'sound',
-                    'vibration',
-                    'badge'
-                ];
-                const missingPref = requiredPrefs.find((key) => prefs?.[key] === false);
-                if (missingPref) {
-                    console.log(`push:_send — User ${user._id?.toString()} has ${missingPref} disabled, skipping push notification`);
-                    return { skipped: true, reason: `preference_disabled:${missingPref}` };
+
+                // Gate delivery on THIS push's own category only. Every #send call
+                // site declares which preference it belongs to via `data.pref`.
+                // This used to require all of newMessages/chatRequests/
+                // connectionRequests/nearbyWinks/sound/vibration/badge to be
+                // non-false, so switching off a single unrelated toggle — badge,
+                // vibration, nearby winks — silently disabled EVERY push for that
+                // user, call requests and messages included.
+                //
+                // Pushes with no `pref` (incoming call, missed call, end call) are
+                // never suppressed: they are time-critical call signalling.
+                if (data.pref && prefs?.[data.pref] === false) {
+                    console.log(`push:_send — User ${user._id?.toString()} has ${data.pref} disabled, skipping push notification`);
+                    return { skipped: true, reason: `preference_disabled:${data.pref}` };
+                }
+
+                // sound / vibration / badge are PRESENTATION preferences — they
+                // shape the payload, they do not suppress delivery.
+                const soundEnabled = prefs?.sound !== false;
+                const badgeEnabled = prefs?.badge !== false;
+                if (!soundEnabled) {
+                    delete iOSContent.aps.sound;
                 }
 
                 // Validate device exists
@@ -543,10 +552,12 @@ class PushNotificationService {
 
                 const isNearbyWink = data.custom.newUsersNearby || data.custom.connectionNearby;
 
-                if (isNearbyWink) {
+                if (isNearbyWink || !badgeEnabled) {
                     // Nearby wink pushes are ambient discovery pings, not unread items —
                     // explicitly zero the badge (omitting the key leaves any existing
                     // badge count on the device unchanged, per APNs semantics).
+                    // Users who turned the badge preference off get the same treatment,
+                    // rather than losing the notification entirely.
                     iOSContent.badge = 0;
                     iOSContent.aps.badge = 0;
                     androidContent.addData('badge', 0);
