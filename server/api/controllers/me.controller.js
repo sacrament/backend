@@ -516,6 +516,27 @@ const updateProfileVisibility = async (req, res) => {
 };
 
 /**
+ * PUT /me/radar/distance
+ * The user's nearby-search radius — body: { radiusKm: number|null }.
+ */
+const updateRadarDistance = async (req, res) => {
+  try {
+    const radiusKm = await userService.updateRadarDistance(
+      req.decodedToken.userId,
+      req.body.radiusKm === undefined ? null : req.body.radiusKm
+    );
+    return res.status(200).json({ status: 'success', radiusKm });
+  } catch (error) {
+    if (error.message === 'Invalid radius') {
+      return res.status(400).json({ status: 'error', message: 'radiusKm must be a number in (0, 100] or null' });
+    }
+    if (error.message === 'User not found') return res.status(404).json({ status: 'error', message: 'User not found' });
+    logger.error('Update radar distance error:', error);
+    return res.status(500).json({ status: 'error', message: 'Failed to update radar distance' });
+  }
+};
+
+/**
  * PUT /me/radar/durations
  * How long the user stays visible on others' radar per distance preset —
  * body: { durations: { here?, nearby?, walkable?, local? } } (minutes, or null to reset)
@@ -950,9 +971,11 @@ function formatUserResponse(user) {
     interests:    user.interests ?? [],
     profileVisibility: user.profileVisibility ?? 'everyone',
     callPermissions:   user.callPermissions   ?? 'everyone',
+    searchRadiusKm: user.radar?.radiusKm ?? null,
     radar: {
       enabled:   user.radar?.enabled   ?? true,
       invisible: user.radar?.invisible ?? false,
+      radiusKm:  user.radar?.radiusKm  ?? null,
       presetDurations: {
         here:     user.radar?.presetDurations?.here     ?? null,
         nearby:   user.radar?.presetDurations?.nearby   ?? null,
@@ -1043,6 +1066,7 @@ module.exports = {
   updatePresence,
   updateRadarStatus,
   updateRadarInvisible,
+  updateRadarDistance,
   updateNotificationPreferences,
   updateVisibilityPreferences,
   updateProfilePrivacy,

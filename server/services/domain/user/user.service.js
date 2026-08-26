@@ -1192,6 +1192,25 @@ class UserService {
     }
 
     /**
+     * Nearby-search radius in km. `null` resets to the client default.
+     * Bounded generously (client presets today are 0.023–0.805 km) so a future
+     * preset does not need a server change, while still rejecting nonsense.
+     */
+    async updateRadarDistance(userId, radiusKm) {
+        if (radiusKm !== null && !(typeof radiusKm === 'number' && radiusKm > 0 && radiusKm <= 100)) {
+            throw new Error('Invalid radius');
+        }
+
+        const user = await UserModel.findByIdAndUpdate(
+            userId,
+            { $set: { 'radar.radiusKm': radiusKm, 'radar.updatedOn': new Date() } },
+            { new: true }
+        ).lean();
+        if (!user) throw new Error('User not found');
+        return user.radar?.radiusKm ?? null;
+    }
+
+    /**
      * "Call permissions" — everyone | nobody.
      */
     async updateCallPermissions(userId, permissions) {
