@@ -488,7 +488,15 @@ const sendMessage = async (req, res) => {
     const startTime = Date.now();
     try {
         logger.info(`API: Send message: ${Date()}`);
-        const { content, chatId, type, messageId: tempId, date, senderCopy, publicKey, bytes } = req.body;
+        // The client sends `tempId` on both transports (ChatService+Emit and
+        // NetworkClient.sendTextMessageREST), and this file's own socket sibling
+        // reads `tempId` too. Only this controller read `messageId`, so the REST
+        // path never saw a tempId: the duplicate check below could not fire, and
+        // the client could not reconcile its optimistic message with the saved
+        // one, leaving a duplicate in the chat. Accept `messageId` as a fallback
+        // for any older caller.
+        const { content, chatId, type, date, senderCopy, publicKey, bytes, replyTo } = req.body;
+        const tempId = req.body.tempId || req.body.messageId;
 
         if (!chatId || !content) {
             return res.status(400).json({ status: 'error', message: 'chatId and content are required' });
@@ -571,6 +579,10 @@ const sendMessage = async (req, res) => {
             sentOnTimestamp: Math.floor(Date.now() / 1000),
             members,
             from,
+            // Dropped entirely before: the socket handler spreads ...data so
+            // replyTo survives there, but this controller builds messageData
+            // explicitly, so a reply sent over the REST fallback lost its target.
+            ...(replyTo ? { replyTo } : {}),
             tempId: tempId || new mongoose.Types.ObjectId().toString()
         };
 
