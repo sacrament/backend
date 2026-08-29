@@ -15,10 +15,14 @@ module.exports = {
     // Transport order: polling first so clients behind VPNs or HTTP proxies that
     // block WebSocket can still connect, then upgrade to WebSocket when available.
     //
-    // Sticky sessions: mobile clients don't persist cookies, so use source IP
-    // affinity on the load balancer (ALB target group → stickiness → "source IP")
-    // rather than cookie-based stickiness. All polling + upgrade requests from a
-    // device share the same source IP and will be routed to the same instance.
+    // Sticky sessions: the engine.io polling handshake is per-process, so every
+    // polling request and the WebSocket upgrade must land on the same task. The ALB
+    // target group uses lb_cookie stickiness (infra/alb.tf). Socket.IO-Client-Swift
+    // builds its URLSession with configuration `.default`, which stores the AWSALB
+    // cookie in the shared HTTPCookieStorage and replays it on later polls, and it
+    // explicitly copies those cookies onto the upgrade request — so affinity holds
+    // even after scale-out. Note ALB supports only lb_cookie/app_cookie stickiness;
+    // "source IP" affinity is an NLB feature and is not available here.
     const io = socketIO(server, {
       transports: ['polling', 'websocket'],
       allowUpgrades: true,
