@@ -230,6 +230,17 @@ const onConnected = async (socket, io) => {
         socket.emit('connected', { userId, sessionValid: true, socketId: socket.id });
         socket.broadcast.emit('new user connected', { userId });
 
+        // engine.io reports the transport at connect time, which is always "polling"
+        // for clients that handshake on polling and upgrade a moment later. Without
+        // this the stored transport under-reports WebSocket and a successful upgrade
+        // is indistinguishable from a client stuck on polling.
+        socket.conn?.on('upgrade', (transport) => {
+            // If the row isn't written yet the create path reconciles it instead.
+            if (!socket._sessionId) return;
+            UserSession.findByIdAndUpdate(socket._sessionId, { transport: transport.name })
+                .catch(err => logger.error(`Failed to record transport upgrade: ${err.message}`));
+        });
+
         // All post-connect work is fire-and-forget so it never blocks the handshake
         setImmediate(async () => {
             // Touch lastSeen so "Active now" presence reflects the connect
@@ -261,6 +272,13 @@ const onConnected = async (socket, io) => {
                     socket._sessionId = session._id;
                     const entry = userSessions.get(userId);
                     if (entry) entry.dbSessionId = session._id;
+                    // The upgrade can land while this row is being written, or before
+                    // _sessionId existed for the listener above to use.
+                    const settled = socket.conn?.transport?.name || null;
+                    if (settled && settled !== session.transport) {
+                        UserSession.findByIdAndUpdate(session._id, { transport: settled })
+                            .catch(err => logger.error(`Failed to reconcile transport: ${err.message}`));
+                    }
                 }).catch(err => logger.error(`Failed to record user session: ${err.message}`));
             }
 

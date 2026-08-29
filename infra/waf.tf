@@ -61,6 +61,21 @@ resource "aws_wafv2_web_acl" "main" {
       managed_rule_group_statement {
         name        = "AWSManagedRulesCommonRuleSet"
         vendor_name = "AWS"
+
+        # NoUserAgent_HEADER was blocking the Socket.IO WebSocket upgrade. The polling
+        # transport goes out through URLSession, which supplies a default User-Agent,
+        # but the upgrade is issued by Starscream, which sends none — and the engine
+        # wipes all headers (req.allHTTPHeaderFields = ...) before re-adding only
+        # extraHeaders. The upgrade got a 403 from the ALB, Starscream reported
+        # notAnUpgrade, and every client silently stayed on 27s HTTP long-polling.
+        # Counted rather than blocked so already-shipped clients recover without an
+        # App Store release; the client also sends a User-Agent now (ChatService.swift).
+        rule_action_override {
+          name = "NoUserAgent_HEADER"
+          action_to_use {
+            count {}
+          }
+        }
       }
     }
 
