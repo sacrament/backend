@@ -516,9 +516,8 @@ class ChatService {
             },
             {
                 $project: {
-                    total: {
-                        _id: 0
-                    }
+                    _id: 0,
+                    total: 1
                 }
             }
         ]);

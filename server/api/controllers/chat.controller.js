@@ -556,9 +556,11 @@ const sendMessage = async (req, res) => {
                 const receiverIsOnline = await socketService.isUserConnected(receiverId);
                 if (receiverIsOnline) {
                     IO.to(receiverId).emit('new chat created', { chat });
-                } else {
-                    pushNotificationService.newChatCreated({ chat, from: { id: from }, offlineReceivers: [receiverMember] });
                 }
+                // No push for the offline case — see the matching comment in
+                // socket/handlers/chat.handler.js: the 'new message' push right
+                // behind this one already carries the chat, and a second push here
+                // bumped the badge twice for a single message.
                 logger.info(`Re-enabled receiver ${receiverId} in chat ${chatId} on new message`);
             } catch (reactivateErr) {
                 logger.error(`Failed to re-enable receiver in chat ${chatId}: ${reactivateErr.message}`);
