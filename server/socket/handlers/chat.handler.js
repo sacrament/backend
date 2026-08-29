@@ -500,13 +500,11 @@ const newMessage = async function(data, ack) {
                 const receiverIsOnline = await chatSocketService.isUserConnected(receiverId);
                 if (receiverIsOnline) {
                     this.to(receiverId).emit('new chat created', { chat });
-                } else {
-                    pushNotificationService.newChatCreated({
-                        chat,
-                        from,
-                        offlineReceivers: [receiverMember]
-                    });
                 }
+                // No push for the offline case: the 'new message' push that follows
+                // milliseconds later already carries the chat, so a newChatCreated
+                // push here only added a second badge-bumping delivery (and a bogus
+                // "New chat created" banner) for what the user sees as one message.
 
                 logger.info(`Re-enabled receiver ${receiverId} in chat ${chatId} on new message`);
             } catch (reactivateErr) {

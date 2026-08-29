@@ -562,7 +562,10 @@ class PushNotificationService {
                     iOSContent.aps.badge = 0;
                     androidContent.addData('badge', 0);
                 } else {
-                    const totalUnread = await getUnreadMessagesForUser(user._id.toString());
+                    // Unread CHATS, not unread messages: the client resyncs the badge
+                    // from its own unread-chat count on foreground, so counting
+                    // messages here made the two disagree after every resync.
+                    const totalUnread = await getUnreadChatsForUser(user._id.toString());
                     const badge = totalUnread + (data.custom.isReact || data.custom.isConnectionRequest || data.custom.respondConnetionRequest ? 1 : 0);
 
                     iOSContent.badge = badge;
@@ -644,7 +647,12 @@ class PushNotificationService {
             return [];
         }
 
-        const { iOSContent, androidContent } = preparePayload(data);
+        // `silent: true` is what activates the background branch in preparePayload
+        // (pushType 'background', no aps.alert, no aps.badge). Without it these
+        // "silent" pushes went out as ordinary priority-10 alerts carrying a badge,
+        // which woke the iOS notification-service extension and bumped the app
+        // badge once per delivery receipt.
+        const { iOSContent, androidContent } = preparePayload({ ...data, silent: true });
 
         const promises = users.map(async (id) => {
             try {
@@ -745,9 +753,9 @@ class PushNotificationService {
 
 // ─── Module-level helpers ─────────────────────────────────────────────────────
 
-const getUnreadMessagesForUser = (userId) => {
+const getUnreadChatsForUser = (userId) => {
     const chatService = new ChatService();
-    return chatService.countUnreadMessagesForUser(userId);
+    return chatService.countTotalUnreadChatsForUser(userId);
 };
 
 const getUserDetails = (userId) => {
