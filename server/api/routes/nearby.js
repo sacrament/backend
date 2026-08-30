@@ -1,9 +1,10 @@
 // Nearby Users Routes
+//
+// verifyClientToken + verifyToken are applied upstream in routes/index.js.
 const express = require('express');
 const router = express.Router();
 const rateLimit = require('express-rate-limit');
 const { ipKeyGenerator } = require('express-rate-limit');
-const { verifyToken } = require('../../middleware/verify');
 
 // Per-user limiter for the polling endpoint (~1 req/min expected → 30/15 min gives 2× headroom)
 const nearbyUsersLimiter = rateLimit({
@@ -34,14 +35,14 @@ router.get('/users', nearbyUsersLimiter, getNearbyUsers);
 
 // Get all nearby users history
 // GET /nearby/history/users
-router.get('/users/history', verifyToken, getNearbyUsersHistory);
+router.get('/users/history', getNearbyUsersHistory);
 
 // Get specific nearby user history
 // GET /nearby/history/users/{userId}
-router.get('/users/history/:userId', verifyToken, getNearbyUserSpecificHistory);
+router.get('/users/history/:userId', getNearbyUserSpecificHistory);
 
 // Delete nearby user history
 // DELETE /nearby/history/users/{userId}
-router.delete('/users/history/:userId', verifyToken, deleteNearbyUserHistory);
+router.delete('/users/history/:userId', deleteNearbyUserHistory);
 
 module.exports = router;
