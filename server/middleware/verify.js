@@ -84,9 +84,9 @@ module.exports = {
         let decoded;
         try {
             decoded = jwt.verify(token, config.APP_SECRET);
-            console.log(`verifyToken: Token verified successfully. userId=${decoded.userId}`);
+            logger.debug(`verifyToken: ok userId=${decoded.userId} ${request.method} ${request.originalUrl}`);
         } catch (err) {
-            console.error(`verifyToken: Token verification failed. ${err.name}: ${err.message}`);
+            logger.warn(`verifyToken: failed on ${request.method} ${request.originalUrl}. ${err.name}: ${err.message}`);
             if (err.name === 'TokenExpiredError') {
                 return response.status(401).json({ status: 'error', code: 'TOKEN_EXPIRED', message: 'Your session has expired. Please log in again.' });
             }

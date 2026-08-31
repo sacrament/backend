@@ -794,8 +794,15 @@ const preparePayload = (content) => {
             aps: {
                 alert: { title: content.title, body: content.body },
                 sound: 'ping.aiff',
+                // `mutable-content` routes the push through the notification
+                // service extension (needed to decrypt message bodies).
+                //
+                // `content-available` is deliberately NOT set here. It marks a
+                // push as a BACKGROUND update, so iOS hands it to the app's
+                // background handler instead of presenting it — an alert push
+                // carrying it arrives with no banner at all. The silent branch
+                // below sets it for the pushes that actually want that.
                 'mutable-content': 1,
-                'content-available': 1,
             },
             ...content.custom,
         },

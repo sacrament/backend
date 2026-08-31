@@ -12,8 +12,48 @@ const DISTANCE_PRESETS = {
     'local':    0.5  * 1.60934     // 0.5 miles → km
 };
 
-const RADAR_DEFAULT_DURATION_MIN = 5;
+const RADAR_DEFAULT_DURATION_MIN = 2;
 const RADAR_MAX_DURATION_MIN = 5;
+
+// A pair of users can accumulate several request rows over time (sent, cancelled,
+// re-sent, disconnected). When more than one exists, the radar should reflect the
+// most meaningful one rather than whichever the query happened to return first.
+const CONNECTION_RANK = { accepted: 3, new: 2, declined: 1, cancelled: 1, disconnected: 1 };
+const NO_CONNECTION = { status: 'none', direction: null, requestId: null };
+
+/**
+ * Build a userId → connection-state map for the given nearby users, so the radar
+ * can render the right action per user (send / cancel / accept / open chat)
+ * without a checkConnectionRequest round-trip for each one.
+ */
+const getConnectionStates = async (currentUserId, userIds) => {
+    const states = new Map();
+    if (userIds.length === 0) return states;
+
+    const { UserRequest } = require('../../models/user.request');
+    const requests = await UserRequest.find({
+        $or: [
+            { from: currentUserId, to: { $in: userIds } },
+            { from: { $in: userIds }, to: currentUserId },
+        ],
+    }).select('from to status').lean();
+
+    for (const r of requests) {
+        const outgoing = r.from.toString() === currentUserId.toString();
+        const otherId = outgoing ? r.to.toString() : r.from.toString();
+
+        const current = states.get(otherId);
+        if (current && CONNECTION_RANK[current.status] >= CONNECTION_RANK[r.status]) continue;
+
+        states.set(otherId, {
+            status: r.status,
+            direction: outgoing ? 'outgoing' : 'incoming',
+            requestId: r._id.toString(),
+        });
+    }
+
+    return states;
+};
 
 /**
  * GET /users-nearby
@@ -96,9 +136,13 @@ const getNearbyUsers = async (req, res) => {
 
         logger.info(`[getNearbyUsers] Found ${rawUsers.length} raw users, ${blockedIds.size} blocked, ${disappearedIds.size} disappeared - userId: ${currentUserId}`);
 
-        const response = rawUsers
+        const visibleUsers = rawUsers
             .filter(u => !blockedIds.has(u._id.toString()))
-            .filter(u => !disappearedIds.has(u._id.toString()))
+            .filter(u => !disappearedIds.has(u._id.toString()));
+
+        const connectionStates = await getConnectionStates(currentUserId, visibleUsers.map(u => u._id));
+
+        const response = visibleUsers
             .map(u => {
                 const distanceKm = u.distanceKm;
 
@@ -119,6 +163,7 @@ const getNearbyUsers = async (req, res) => {
                     distanceUnit: 'km',
                     locationUpdatedAt: privacy.showLocation !== false ? u.updatedOn : null,
                     interestedIn: u.showInterestedIn !== false ? u.interestedIn : null,
+                    connection: connectionStates.get(u._id.toString()) ?? NO_CONNECTION,
                 };
             })
             .sort((a, b) => a.distance - b.distance);

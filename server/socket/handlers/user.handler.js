@@ -46,15 +46,19 @@ const sendRequest = async function (data, cb) {
 
         const res = await userService.sendConnectionRequest(fromId, toId);
 
-        const memberIsOnline = await chatSocketService.isUserConnected(toId);
+        // A repeat send of an already-pending request returns the existing row
+        // instead of erroring, so don't notify the recipient a second time.
+        if (!res.alreadyPending) {
+            const memberIsOnline = await chatSocketService.isUserConnected(toId);
 
-        if (memberIsOnline) {
-            const fromUser = await UserModel.findById(fromId).lean().select(utils.userColumnsToShow());
-            this.to(toId).emit('new connection request', { from: fromUser, request: res.request });
-        } else {
-            await push.newConnectionRequest(res.request);
+            if (memberIsOnline) {
+                const fromUser = await UserModel.findById(fromId).lean().select(utils.userColumnsToShow());
+                this.to(toId).emit('new connection request', { from: fromUser, request: res.request });
+            } else {
+                await push.newConnectionRequest(res.request);
+            }
         }
-        cb({ request: res.request });
+        cb({ request: res.request, alreadyPending: res.alreadyPending === true });
     } catch (ex) {
         console.error('Error while sending connection requests', ex);
         cb({ status: 'error', message: ex.message });
