@@ -231,14 +231,20 @@ const sendConnectionRequest = async (req, res) => {
 
         const result = await userService.sendConnectionRequest(req.decodedToken.userId, to);
 
-        const recipientIsOnline = await getChatService().isUserConnected(to);
-        if (recipientIsOnline) {
-            getIO().to(to).emit('new connection request', { from: result.request.from, request: result.request });
-        } else {
-            await push.newConnectionRequest(result.request);
+        // A repeat send of an already-pending request returns the existing row
+        // instead of erroring, so don't notify the recipient a second time.
+        if (!result.alreadyPending) {
+            const recipientIsOnline = await getChatService().isUserConnected(to);
+            if (recipientIsOnline) {
+                getIO().to(to).emit('new connection request', { from: result.request.from, request: result.request });
+            } else {
+                await push.newConnectionRequest(result.request);
+            }
         }
 
-        return res.status(201).json({ status: 'success', request: result.request });
+        return res
+            .status(result.alreadyPending ? 200 : 201)
+            .json({ status: 'success', request: result.request, alreadyPending: result.alreadyPending === true });
     } catch (error) {
         logger.error('Send connection request error:', error);
         const status = CONNECTION_REQUEST_ERROR_STATUS[error.message] ?? 500;

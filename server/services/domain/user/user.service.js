@@ -815,6 +815,19 @@ class UserService {
             $or: [{ from, to }, { from: to, to: from }]
         });
 
+        // Re-sending your own still-pending request is a no-op, not an error. The
+        // client can double-fire (duplicate view-model instances, a retried socket
+        // emit), and the state it is asking for already holds. `alreadyPending`
+        // tells callers to skip re-notifying the recipient so a repeat send does
+        // not produce a second push.
+        const ownPending = existing.find(r => String(r.from) === String(from) && r.status === 'new');
+        if (ownPending) {
+            const populated = await ownPending.populate({ path: 'from to', select: utils.userColumnsToShow() });
+            return { title: 'Request already sent', request: populated.toObject(), alreadyPending: true };
+        }
+
+        // A pending request in the OTHER direction is a different situation — the
+        // caller should accept the one waiting for them rather than send their own.
         if (existing.some(r => r.status === 'new')) {
             throw new Error('Request already pending');
         }
