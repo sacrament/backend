@@ -32,6 +32,8 @@ resource "aws_secretsmanager_secret_version" "app" {
     OTP_SIGNATURE_SECRET    = "REPLACE_ME"
     OTP_CLIENT_KEY_CODE     = "REPLACE_ME"
     OTP_PHONE_HASH_SECRET   = "REPLACE_ME"
+    APP_REVIEW_TEST_PHONE   = "REPLACE_ME"  # e.g. +15555550199 — exact number given to Apple in review notes
+    APP_REVIEW_TEST_OTP     = "REPLACE_ME"  # e.g. 8204 — fixed 4-digit OTP for that number only
     PHONE_ENC_KEY_VERSION   = "1"
     PHONE_ENC_KEY_1         = "REPLACE_ME"
     CORS_ORIGIN             = "REPLACE_ME"

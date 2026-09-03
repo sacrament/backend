@@ -65,6 +65,8 @@ resource "aws_ecs_task_definition" "app" {
       { name = "OTP_CLIENT_KEY_CODE",                   valueFrom = "${aws_secretsmanager_secret.app.arn}:OTP_CLIENT_KEY_CODE::" },
       { name = "OTP_PHONE_HASH_SECRET",                 valueFrom = "${aws_secretsmanager_secret.app.arn}:OTP_PHONE_HASH_SECRET::" },
       { name = "OTP_GLOBAL_HOURLY_LIMIT",               valueFrom = "${aws_secretsmanager_secret.app.arn}:OTP_GLOBAL_HOURLY_LIMIT::" },
+      { name = "APP_REVIEW_TEST_PHONE",                 valueFrom = "${aws_secretsmanager_secret.app.arn}:APP_REVIEW_TEST_PHONE::" },
+      { name = "APP_REVIEW_TEST_OTP",                   valueFrom = "${aws_secretsmanager_secret.app.arn}:APP_REVIEW_TEST_OTP::" },
       { name = "PHONE_ENC_KEY_VERSION",                 valueFrom = "${aws_secretsmanager_secret.app.arn}:PHONE_ENC_KEY_VERSION::" },
       { name = "PHONE_ENC_KEY_1",                       valueFrom = "${aws_secretsmanager_secret.app.arn}:PHONE_ENC_KEY_1::" },
       { name = "CORS_ORIGIN",                           valueFrom = "${aws_secretsmanager_secret.app.arn}:CORS_ORIGIN::" },

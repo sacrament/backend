@@ -22,6 +22,18 @@ const { newToken, newClientToken } = require('../../../middleware/verify');
 
 const OTP_TTL_MS = 15 * 60 * 1000; // 15 minutes
 
+/**
+ * App Store review bypass: a single allowlisted phone number that always gets
+ * a fixed OTP instead of a random one sent over Twilio. Lets Apple's reviewers
+ * log into a real, fully-onboarded account without needing SMS access.
+ *
+ * Both values must be set together in the environment (never hardcoded here).
+ * Scope is intentionally a single exact number, not a pattern — do not widen
+ * this to a prefix or range.
+ */
+const REVIEW_TEST_PHONE = process.env.APP_REVIEW_TEST_PHONE || null;
+const REVIEW_TEST_OTP = process.env.APP_REVIEW_TEST_OTP || null;
+
 class AuthService {
 
     get PhoneAuthCollection() {
@@ -36,6 +48,7 @@ class AuthService {
 
 
     async requestOtp(phoneNumber, { userAgent, ip }) {
+        const isReviewTestPhone = !!(REVIEW_TEST_PHONE && REVIEW_TEST_OTP && phoneNumber === REVIEW_TEST_PHONE);
         const phoneHash = this.hashPhone(phoneNumber);
         const existing = await this.PhoneAuthCollection.findOne({ partition: phoneHash, usedAt: null });
         if (existing && existing.requestCount >= 3) {
@@ -46,16 +59,16 @@ class AuthService {
         }
         let otp;
         if (existing) {
-            otp = existing.otp;
+            otp = isReviewTestPhone ? REVIEW_TEST_OTP : existing.otp;
             await this.PhoneAuthCollection.updateOne(
                 { _id: existing._id },
                 {
-                    $set: { userAgent: userAgent || null, ip },
+                    $set: { userAgent: userAgent || null, ip, ...(isReviewTestPhone ? { otp } : {}) },
                     $inc: { requestCount: 1 },
                 }
             );
         } else {
-            otp = crypto.randomInt(1000, 10000).toString();
+            otp = isReviewTestPhone ? REVIEW_TEST_OTP : crypto.randomInt(1000, 10000).toString();
             await this.PhoneAuthCollection.create({
                 partition: phoneHash,
                 otp,
@@ -66,7 +79,11 @@ class AuthService {
                 expiresAt: new Date(Date.now() + OTP_TTL_MS),
             });
         }
-        await this._sendOtp(phoneNumber, otp);
+        if (isReviewTestPhone) {
+            // Never sent over Twilio spend, and never logged.
+        } else {
+            await this._sendOtp(phoneNumber, otp);
+        }
         return { requestCount: existing ? existing.requestCount + 1 : 1 };
     }
 
