@@ -1519,6 +1519,22 @@ class UserService {
         return user;
     }
 
+    /**
+     * Drop the user's current location so `findUsersNear` stops returning them
+     * immediately — the geoNear query only matches `Location` docs with
+     * `isCurrent: true`. Without this, a logged-out user stays on other users'
+     * radar until their `lastSeen` ages out of the visibility window (up to the
+     * radar duration, e.g. 30 min).
+     */
+    async removeFromRadar(userId) {
+        const LocationModel = mongoose.model('Location');
+        const thirtyDays = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+        await LocationModel.updateMany(
+            { user: userId, isCurrent: true },
+            { $set: { isCurrent: false, expiresAt: thirtyDays } }
+        );
+    }
+
     async updateLocation(userId, lat, lon) {
         const LocationModel = mongoose.model('Location');
         const thirtyDays = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
