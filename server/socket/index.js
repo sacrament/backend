@@ -413,7 +413,14 @@ const onDisconnected = (socket, io) => {
                 }
 
                 socket.broadcast.emit('user disconnected', { userId });
-                endActiveCallsOnDisconnect(userId, io);
+                // NOT calling endActiveCallsOnDisconnect here: this "intentional"
+                // branch also covers the client deliberately closing its own
+                // socket on backgrounding (see WinkyApp.swift's background
+                // handler), which happens unconditionally, active call or not —
+                // ending the call here would kill it just from backgrounding the
+                // app normally. Force-quit (the actual bug this is for) never
+                // gets a clean disconnect frame out in time, so it lands in the
+                // grace-period branch above instead, where this is safe to call.
             }
         } else {
             logger.info(`Socket disconnected before authentication: ${socket.id} reason: ${reason}`);
