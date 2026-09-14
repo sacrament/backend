@@ -409,6 +409,9 @@ const logout = async (req, res) => {
       await Promise.all([
         userService.clearRefreshToken(userId),
         deviceService.disableAllDevicesForUser(userId),
+        // Otherwise the user stays on others' radar until lastSeen ages out of
+        // the visibility window (up to ~30 min after logout).
+        userService.removeFromRadar(userId),
       ]);
     }
 
