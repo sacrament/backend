@@ -654,6 +654,41 @@ class CallService {
     }
 
     /**
+     * Ends every still-active call (ringing or answered) involving a user, for use
+     * when their socket drops for good (e.g. the app was force-quit) rather than
+     * a clean in-call "end" — nothing else tears the call down in that case, so it
+     * would otherwise sit "active" on both the DB and the other party's screen
+     * indefinitely.
+     *
+     * @param {string} userId - the user whose connection was lost
+     * @returns {Promise<Array<{ call: Object, otherPartyId: string }>>} ended calls
+     *          along with who should be notified.
+     */
+    async endActiveCallsForUser(userId) {
+        const activeCalls = await CallHistory.find({
+            $or: [{ from: userId }, { to: userId }],
+            status: { $in: ['ringing', 'answered'] },
+            endedAt: null,
+        }).lean();
+
+        const ended = [];
+        for (const call of activeCalls) {
+            const isStillActive = await this.normalizeActiveCallState(call);
+            if (!isStillActive) continue;
+
+            const callerId = call.from ? call.from.toString() : null;
+            const calleeId = call.to.toString();
+            const otherPartyId = userId === callerId ? calleeId : callerId;
+
+            const endedCall = await this.endCall(call.roomId, calleeId, callerId, { senderId: userId });
+            if (endedCall) {
+                ended.push({ call: endedCall, otherPartyId });
+            }
+        }
+        return ended;
+    }
+
+    /**
      * Record a call that was rejected because the callee was busy on another call.
      * @param {{ from, to, callType, ipAddress, networkInfo }} data
      * @returns {Promise<CallHistory>}
