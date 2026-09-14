@@ -14,6 +14,7 @@ const socketAuth = require('../middleware/socket.auth');
 const MessageService = require('../services/domain/chat/message.service');
 const logger = require('../utils/logger');
 const PendingSocketEventService = require('../services/domain/socket/pending.socket.event.service');
+const CallService = require('../services/domain/call/call.service');
 const UserSession = require('../models/user.session');
 
 // Import event handlers
@@ -315,6 +316,27 @@ const onConnected = async (socket, io) => {
  * @param {import("socket.io").Socket} socket
  * @param {import("socket.io").Server} io - Socket.IO instance
  */
+/**
+ * Ends any call the user was still active in when their connection was lost
+ * for good (grace period expired, or an intentional disconnect) — e.g. the app
+ * was force-quit mid-call. Without this the call record, and the other party's
+ * UI, never learn it ended; the next call attempt just gets rejected as "busy".
+ */
+const endActiveCallsOnDisconnect = async (userId, io) => {
+    try {
+        const callService = new CallService();
+        const ended = await callService.endActiveCallsForUser(userId);
+        for (const { call, otherPartyId } of ended) {
+            logger.info(`Ended active call ${call._id} for disconnected user ${userId}, notifying ${otherPartyId}`);
+            io.to(otherPartyId).emit('end call', {
+                call: { _id: call._id.toString(), sid: call.roomId },
+            });
+        }
+    } catch (err) {
+        logger.error(`Failed to end active calls for disconnected user ${userId}: ${err.message}`);
+    }
+};
+
 const onDisconnected = (socket, io) => {
     socket.on('disconnect', (reason) => {
         const userId = socket.user?.id;
@@ -359,6 +381,11 @@ const onDisconnected = (socket, io) => {
 
                             // Notify others that user is truly offline
                             socket.broadcast.emit('user disconnected', { userId });
+
+                            // Grace period expired without a reconnect — this is the
+                            // path a force-quit takes (OS never sends a clean close),
+                            // so any call this user was in never otherwise ends.
+                            endActiveCallsOnDisconnect(userId, io);
                         }
                     }
                 }, RECONNECTION_GRACE_PERIOD);
@@ -386,6 +413,7 @@ const onDisconnected = (socket, io) => {
                 }
 
                 socket.broadcast.emit('user disconnected', { userId });
+                endActiveCallsOnDisconnect(userId, io);
             }
         } else {
             logger.info(`Socket disconnected before authentication: ${socket.id} reason: ${reason}`);

@@ -161,9 +161,15 @@ const blockChat = async function(data, ack) {
         const blockStatus = data.status;
  
         const members = await chatService.getChatMembers(chatId, false)
-        const opponent = members.filter( m => m.user != userId)[0];
 
-        chatService.blockChat(opponent, chatId, blockStatus).then(async (result) => { 
+        // `options.blocked` is flagged on the *blocker's own* member subdocument
+        // (chatService.blockChat matches members.user === me.user) — pass the
+        // caller, not the opponent, or the flag lands on the wrong member and
+        // the blocker keeps receiving the opponent's messages. `me.token` is
+        // also used downstream for the external block API call.
+        const me = { user: userId, token: this.user.token };
+
+        chatService.blockChat(me, chatId, blockStatus).then(async (result) => {
             // ack(result)
             // Inform chat members about the block
             var offlineUsers = [];
