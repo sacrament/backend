@@ -34,6 +34,12 @@ const pendingSocketEventService = new PendingSocketEventService();
 // Reconnection grace period: keep session data for 30 seconds
 const RECONNECTION_GRACE_PERIOD = 30 * 1000;
 
+// A user in a live call gets a much shorter window: if their socket is gone and they have not
+// reconnected within this time (app killed, network lost), the call is ended for the other
+// party too — instead of leaving them on a dead call for the full 30s grace period above.
+// Matches the client, which ends a call after 5s without a network.
+const CALL_DISCONNECT_GRACE = 5 * 1000;
+
 // Reconnect rate limiter: track connect timestamps per user
 const connectTimestamps = new Map();
 const RECONNECT_WINDOW_MS = 60 * 1000; // 1 minute
@@ -360,6 +366,13 @@ const onDisconnected = (socket, io) => {
                         clearTimeout(existing.gracePeriodTimer);
                     }
                 }
+
+                // Short window for anyone in a live call (see CALL_DISCONNECT_GRACE).
+                setTimeout(() => {
+                    const current = userSessions.get(userId);
+                    if (current && current.socketId !== socket.id) return; // reconnected on a new socket
+                    endActiveCallsOnDisconnect(userId, io);
+                }, CALL_DISCONNECT_GRACE);
 
                 // Set a timer to clean up session if not reconnected within grace period
                 const timer = setTimeout(() => {
