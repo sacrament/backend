@@ -125,3 +125,7 @@ infra/terraform.tfstate
 infra/terraform.tfstate.*
 *.tfstate
 *.tfstate.*
+
+# Apple APNs / Sign in with Apple private keys — live in Secrets Manager (APPLE_PRIVATE_KEY), never in git
+*.p8
+server/certs/
