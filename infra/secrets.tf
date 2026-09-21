@@ -76,13 +76,8 @@ resource "aws_secretsmanager_secret_version" "twilio" {
   secret_id = aws_secretsmanager_secret.twilio.id
   secret_string = jsonencode({
     TWILIO_ACCOUNT_SID                  = "REPLACE_ME"
-    TWILIO_AUTH_TOKEN                   = "REPLACE_ME"
     TWILIO_API_KEY                      = "REPLACE_ME"
     TWILIO_API_KEY_SECRET               = "REPLACE_ME"
-    TWILIO_APP_SID                      = "REPLACE_ME"
-    TWILIO_NOTIFICATION_SERVICE_SID     = "REPLACE_ME"
-    TWILIO_IOS_PUSH_CREDENTIAL_SID      = "REPLACE_ME"
-    TWILIO_ANDROID_PUSH_CREDENTIAL_SID  = "REPLACE_ME"
   })
 
   lifecycle {

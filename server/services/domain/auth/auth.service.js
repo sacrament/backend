@@ -12,7 +12,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const twilio = require('twilio');
+const createTwilioClient = require('../../../utils/twilio.client');
 const mongoose = require('mongoose');
 const { OAuth2Client } = require('google-auth-library');
 const config = require('../../../utils/config');
@@ -574,7 +574,7 @@ class AuthService {
     }
 
     async _sendOtp(phoneNumber, otp) {
-        const client = twilio(config.TWILIO.ACCOUNTSID, config.TWILIO.AUTHTOKEN);
+        const client = createTwilioClient(config.TWILIO);
         try {
             await client.messages.create({
                 body: `Your Winky code is ${otp}. Valid for 15 minutes. Never share this code.`,

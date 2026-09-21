@@ -1,5 +1,6 @@
 const config = require('../../../utils/config');
 const twilio = require('twilio');
+const createTwilioClient = require('../../../utils/twilio.client');
 const AccessToken = twilio.jwt.AccessToken;
 const VideoGrant = AccessToken.VideoGrant;
 
@@ -7,7 +8,7 @@ let _client;
 const client = new Proxy({}, {
     get(_target, prop) {
         if (!_client) {
-            _client = twilio(config.TWILIO.ACCOUNTSID, config.TWILIO.AUTHTOKEN);
+            _client = createTwilioClient(config.TWILIO);
         }
         return _client[prop];
     }

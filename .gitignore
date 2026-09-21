@@ -119,3 +119,9 @@ docs/Winky-API.postman_collection.json
 docs/Winky-Backend-API-Spec.pdf
 .terraform/
 docs/IOS_CALL_METADATA_INTEGRATION.md
+
+# Terraform state (local only; can contain sensitive values)
+infra/terraform.tfstate
+infra/terraform.tfstate.*
+*.tfstate
+*.tfstate.*

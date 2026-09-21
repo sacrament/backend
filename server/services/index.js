@@ -25,7 +25,6 @@
  *   - S3Service: AWS S3 file storage
  *   - APIGatewayService: AWS API Gateway
  *   - SMSService: Twilio SMS
- *   - PushService: Push notifications
  */
 
 // ============================================================================
@@ -44,7 +43,6 @@ const CallService = require('./domain/call/call.service');
 
 const { S3Service, APIGatewayService } = require('./external/aws');
 const { SMSService } = require('./external/twilio');
-const { PushService } = require('./external/push');
 
 // ============================================================================
 // EXPORTS
@@ -62,5 +60,4 @@ module.exports = {
   S3Service,
   APIGatewayService,
   SMSService,
-  PushService,
 };
