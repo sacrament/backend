@@ -10,7 +10,19 @@ class E2EEService {
         userId = await normalizeUserId(userId);
         const E2EEDevice = mongoose.model('E2EEDevice');
 
-        // One device per user — upsert to allow re-registration
+        // One device per user — upsert to allow re-registration. When the identity
+        // key changes, this is a *replacement* (new device / fresh install without a
+        // backup restore, not just refreshing pre-keys on the same device): every
+        // peer's cached session for this user now points at a key that no longer
+        // exists anywhere. The client-side CryptoManager recovers from that on its
+        // own (ratchet-mismatch → sessionNotFound → exchange-info re-handshake), but
+        // that recovery is invisible server-side, so log it — it's the one signal
+        // an operator has if a user reports "my messages stopped arriving."
+        const existing = await E2EEDevice.findOne({ user: userId }).select('identityKey').lean();
+        if (existing && existing.identityKey !== identityKey) {
+            logger.warn(`E2EE: identity key replaced for user=${userId} — all peer sessions for this user are now stale and must re-handshake`);
+        }
+
         await E2EEDevice.findOneAndUpdate(
             { user: userId },
             {

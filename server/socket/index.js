@@ -14,6 +14,7 @@ const socketAuth = require('../middleware/socket.auth');
 const MessageService = require('../services/domain/chat/message.service');
 const logger = require('../utils/logger');
 const PendingSocketEventService = require('../services/domain/socket/pending.socket.event.service');
+const CallService = require('../services/domain/call/call.service');
 const UserSession = require('../models/user.session');
 
 // Import event handlers
@@ -32,6 +33,12 @@ const pendingSocketEventService = new PendingSocketEventService();
 
 // Reconnection grace period: keep session data for 30 seconds
 const RECONNECTION_GRACE_PERIOD = 30 * 1000;
+
+// A user in a live call gets a much shorter window: if their socket is gone and they have not
+// reconnected within this time (app killed, network lost), the call is ended for the other
+// party too — instead of leaving them on a dead call for the full 30s grace period above.
+// Matches the client, which ends a call after 5s without a network.
+const CALL_DISCONNECT_GRACE = 5 * 1000;
 
 // Reconnect rate limiter: track connect timestamps per user
 const connectTimestamps = new Map();
@@ -315,6 +322,27 @@ const onConnected = async (socket, io) => {
  * @param {import("socket.io").Socket} socket
  * @param {import("socket.io").Server} io - Socket.IO instance
  */
+/**
+ * Ends any call the user was still active in when their connection was lost
+ * for good (grace period expired, or an intentional disconnect) — e.g. the app
+ * was force-quit mid-call. Without this the call record, and the other party's
+ * UI, never learn it ended; the next call attempt just gets rejected as "busy".
+ */
+const endActiveCallsOnDisconnect = async (userId, io) => {
+    try {
+        const callService = new CallService();
+        const ended = await callService.endActiveCallsForUser(userId);
+        for (const { call, otherPartyId } of ended) {
+            logger.info(`Ended active call ${call._id} for disconnected user ${userId}, notifying ${otherPartyId}`);
+            io.to(otherPartyId).emit('end call', {
+                call: { _id: call._id.toString(), sid: call.roomId },
+            });
+        }
+    } catch (err) {
+        logger.error(`Failed to end active calls for disconnected user ${userId}: ${err.message}`);
+    }
+};
+
 const onDisconnected = (socket, io) => {
     socket.on('disconnect', (reason) => {
         const userId = socket.user?.id;
@@ -339,6 +367,13 @@ const onDisconnected = (socket, io) => {
                     }
                 }
 
+                // Short window for anyone in a live call (see CALL_DISCONNECT_GRACE).
+                setTimeout(() => {
+                    const current = userSessions.get(userId);
+                    if (current && current.socketId !== socket.id) return; // reconnected on a new socket
+                    endActiveCallsOnDisconnect(userId, io);
+                }, CALL_DISCONNECT_GRACE);
+
                 // Set a timer to clean up session if not reconnected within grace period
                 const timer = setTimeout(() => {
                     if (userSessions.has(userId)) {
@@ -359,6 +394,11 @@ const onDisconnected = (socket, io) => {
 
                             // Notify others that user is truly offline
                             socket.broadcast.emit('user disconnected', { userId });
+
+                            // Grace period expired without a reconnect — this is the
+                            // path a force-quit takes (OS never sends a clean close),
+                            // so any call this user was in never otherwise ends.
+                            endActiveCallsOnDisconnect(userId, io);
                         }
                     }
                 }, RECONNECTION_GRACE_PERIOD);
@@ -386,6 +426,14 @@ const onDisconnected = (socket, io) => {
                 }
 
                 socket.broadcast.emit('user disconnected', { userId });
+                // NOT calling endActiveCallsOnDisconnect here: this "intentional"
+                // branch also covers the client deliberately closing its own
+                // socket on backgrounding (see WinkyApp.swift's background
+                // handler), which happens unconditionally, active call or not —
+                // ending the call here would kill it just from backgrounding the
+                // app normally. Force-quit (the actual bug this is for) never
+                // gets a clean disconnect frame out in time, so it lands in the
+                // grace-period branch above instead, where this is safe to call.
             }
         } else {
             logger.info(`Socket disconnected before authentication: ${socket.id} reason: ${reason}`);

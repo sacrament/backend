@@ -1,11 +1,11 @@
-const twilio = require('twilio');
+const createTwilioClient = require('../../../utils/twilio.client');
 const config = require('../../../utils/config');
 
 let client;
 
 const getClient = () => {
     if (!client) {
-        client = twilio(config.TWILIO.ACCOUNTSID, config.TWILIO.AUTHTOKEN);
+        client = createTwilioClient(config.TWILIO);
     }
     return client;
 };

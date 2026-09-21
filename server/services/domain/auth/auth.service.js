@@ -12,7 +12,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const twilio = require('twilio');
+const createTwilioClient = require('../../../utils/twilio.client');
 const mongoose = require('mongoose');
 const { OAuth2Client } = require('google-auth-library');
 const config = require('../../../utils/config');
@@ -23,15 +23,22 @@ const { newToken, newClientToken } = require('../../../middleware/verify');
 const OTP_TTL_MS = 15 * 60 * 1000; // 15 minutes
 
 /**
- * App Store review bypass: a single allowlisted phone number that always gets
- * a fixed OTP instead of a random one sent over Twilio. Lets Apple's reviewers
- * log into a real, fully-onboarded account without needing SMS access.
+ * App Store review / QA bypass: a small allowlist of exact phone numbers that
+ * always get a fixed OTP instead of a random one sent over Twilio. Lets Apple's
+ * reviewers (and two-account QA automation) log into real, fully-onboarded
+ * accounts without needing SMS access.
  *
  * Both values must be set together in the environment (never hardcoded here).
- * Scope is intentionally a single exact number, not a pattern — do not widen
+ * APP_REVIEW_TEST_PHONE is a comma-separated list of exact numbers — scope is
+ * intentionally a fixed set of literal numbers, not a pattern — do not widen
  * this to a prefix or range.
  */
-const REVIEW_TEST_PHONE = process.env.APP_REVIEW_TEST_PHONE || null;
+const REVIEW_TEST_PHONES = new Set(
+    (process.env.APP_REVIEW_TEST_PHONE || '')
+        .split(',')
+        .map((p) => p.trim())
+        .filter(Boolean)
+);
 const REVIEW_TEST_OTP = process.env.APP_REVIEW_TEST_OTP || null;
 
 class AuthService {
@@ -48,7 +55,7 @@ class AuthService {
 
 
     async requestOtp(phoneNumber, { userAgent, ip }) {
-        const isReviewTestPhone = !!(REVIEW_TEST_PHONE && REVIEW_TEST_OTP && phoneNumber === REVIEW_TEST_PHONE);
+        const isReviewTestPhone = !!(REVIEW_TEST_OTP && REVIEW_TEST_PHONES.has(phoneNumber));
         const phoneHash = this.hashPhone(phoneNumber);
         const existing = await this.PhoneAuthCollection.findOne({ partition: phoneHash, usedAt: null });
         if (existing && existing.requestCount >= 3) {
@@ -567,7 +574,7 @@ class AuthService {
     }
 
     async _sendOtp(phoneNumber, otp) {
-        const client = twilio(config.TWILIO.ACCOUNTSID, config.TWILIO.AUTHTOKEN);
+        const client = createTwilioClient(config.TWILIO);
         try {
             await client.messages.create({
                 body: `Your Winky code is ${otp}. Valid for 15 minutes. Never share this code.`,

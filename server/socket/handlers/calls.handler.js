@@ -382,6 +382,10 @@ const endCall = async function(data, ack) {
         const calleeId = callRecord.to._id.toString();
         const otherPartyId = senderId === callerId ? calleeId : callerId;
 
+        // Was the call actually in progress (answered) when it ended? Decides whether an
+        // offline other party gets a VoIP push below — see the comment there.
+        const wasAnswered = callRecord.answered === true || callRecord.status === 'answered';
+
         const endedCall = await callService.endCall(resolvedRoomSid, calleeId, callerId, {
             senderId,
         });
@@ -402,6 +406,15 @@ const endCall = async function(data, ack) {
                 },
             });
         } else {
+            // An answered call that ended while the other party is offline (e.g. they killed the
+            // app mid-call): there is nothing left to ring or cancel on their device, and a VoIP
+            // push obliges iOS to show a CallKit incoming call for it — which appeared as an
+            // "Unknown" incoming call on their phone. Only a call that was still ringing needs
+            // the VoIP "end" push (to stop the ringing).
+            if (wasAnswered) {
+                console.log(`endCall: other party ${otherPartyId} offline and call was answered — no VoIP push`);
+                return;
+            }
             const otherObject = await resolveUserByAnyId(userService, otherPartyId);
             if (!otherObject) {
                 return;

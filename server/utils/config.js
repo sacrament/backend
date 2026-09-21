@@ -43,7 +43,6 @@ module.exports = {
     
     TWILIO: {
         ACCOUNTSID: process.env.TWILIO_ACCOUNT_SID,
-        AUTHTOKEN: process.env.TWILIO_AUTH_TOKEN,
         API_KEY: process.env.TWILIO_API_KEY,
         API_KEY_SECRET: process.env.TWILIO_API_KEY_SECRET,
         IOS_PUSH_CREDENTIAL_SID: process.env.TWILIO_IOS_PUSH_CREDENTIAL_SID,
