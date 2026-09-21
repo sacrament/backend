@@ -37,6 +37,7 @@ module.exports = {
     
     IOS_BUNDLE: process.env.IOS_BUNDLE,
     IOS_KEY_TOKEN: process.env.IOS_KEY_TOKEN,
+    APPLE_PRIVATE_KEY: process.env.APPLE_PRIVATE_KEY,
     IOS_TEAM_ID: process.env.IOS_TEAM_ID,
     
     GCM_SERVER_ID: process.env.GCM_SERVER_ID,

@@ -15,11 +15,16 @@ const NativeApnsClient = require('./apns.native');
 
 const certsFolder = path.resolve(__dirname, '..', 'certs');
 
+// Prefer the key from the environment (Secrets Manager); fall back to the key file for local dev.
+const apnsKey = () => config.APPLE_PRIVATE_KEY
+    ? config.APPLE_PRIVATE_KEY.replace(/\\n/g, '\n')
+    : path.join(certsFolder, `AuthKey_${config.IOS_KEY_TOKEN}.p8`);
+
 class PushNotificationService {
     constructor() {
         logger.info('Initializing PushNotificationService with APNs provider');
         this._apnClient = new NativeApnsClient({
-            key: path.join(certsFolder, 'AuthKey_2XCWJRBL6T.p8'),
+            key: apnsKey(),
             keyId: config.IOS_KEY_TOKEN,
             teamId: config.IOS_TEAM_ID,
             production: config.ENV_NAME === 'production',

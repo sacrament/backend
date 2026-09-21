@@ -78,6 +78,7 @@ resource "aws_ecs_task_definition" "app" {
       { name = "GCM_SERVER_ID",                         valueFrom = "${aws_secretsmanager_secret.push.arn}:GCM_SERVER_ID::" },
       { name = "IOS_BUNDLE",                            valueFrom = "${aws_secretsmanager_secret.push.arn}:IOS_BUNDLE::" },
       { name = "IOS_KEY_TOKEN",                         valueFrom = "${aws_secretsmanager_secret.push.arn}:IOS_KEY_TOKEN::" },
+      { name = "APPLE_PRIVATE_KEY",                     valueFrom = "${aws_secretsmanager_secret.push.arn}:APPLE_PRIVATE_KEY::" },
       { name = "IOS_TEAM_ID",                           valueFrom = "${aws_secretsmanager_secret.push.arn}:IOS_TEAM_ID::" },
       { name = "GOOGLE_CLIENT_ID",                      valueFrom = "${aws_secretsmanager_secret.google.arn}:GOOGLE_CLIENT_ID::" },
       { name = "GOOGLE_CLIENT_ID_IOS",                  valueFrom = "${aws_secretsmanager_secret.google.arn}:GOOGLE_CLIENT_ID_IOS::" },

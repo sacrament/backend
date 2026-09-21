@@ -99,6 +99,7 @@ resource "aws_secretsmanager_secret_version" "push" {
     GCM_SERVER_ID  = "REPLACE_ME"
     IOS_BUNDLE     = "REPLACE_ME"
     IOS_KEY_TOKEN  = "REPLACE_ME"
+    APPLE_PRIVATE_KEY = "REPLACE_ME"  # contents of the APNs .p8 file (PEM)
     IOS_TEAM_ID    = "REPLACE_ME"
   })
 
