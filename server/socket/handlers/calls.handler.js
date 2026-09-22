@@ -415,6 +415,13 @@ const endCall = async function(data, ack) {
                 console.log(`endCall: other party ${otherPartyId} offline and call was answered — no VoIP push`);
                 return;
             }
+            // The offline party is the CALLER (the callee declined/hung up an unanswered call): an
+            // outgoing call never rang on the caller's own device, so there is nothing to stop
+            // ringing — the VoIP push could only surface as a phantom "Unknown" incoming call.
+            if (otherPartyId === callerId) {
+                console.log(`endCall: other party ${otherPartyId} is the offline caller — no VoIP push`);
+                return;
+            }
             const otherObject = await resolveUserByAnyId(userService, otherPartyId);
             if (!otherObject) {
                 return;

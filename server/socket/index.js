@@ -38,8 +38,8 @@ const RECONNECTION_GRACE_PERIOD = 30 * 1000;
 // A user in a live call gets a much shorter window: if their socket is gone and they have not
 // reconnected within this time (app killed, network lost), the call is ended for the other
 // party too — instead of leaving them on a dead call for the full 30s grace period above.
-// Matches the client, which ends a call after 5s without a network.
-const CALL_DISCONNECT_GRACE = 5 * 1000;
+// Matches the client, which ends a call after 10s without a network.
+const CALL_DISCONNECT_GRACE = 10 * 1000;
 
 // Reconnect rate limiter: track connect timestamps per user
 const connectTimestamps = new Map();

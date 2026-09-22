@@ -15,12 +15,20 @@ const apnsKey = () => config.APPLE_PRIVATE_KEY
     ? config.APPLE_PRIVATE_KEY.replace(/\\n/g, '\n')
     : path.join(certsFolder, `AuthKey_${config.IOS_KEY_TOKEN}.p8`);
 
-const apnClient = new NativeApnsClient({
-    key: apnsKey(),
-    keyId: config.IOS_KEY_TOKEN,
-    teamId: config.IOS_TEAM_ID,
-    production: config.ENV_NAME === 'production',
-});
+let apnClient;
+try {
+    apnClient = new NativeApnsClient({
+        key: apnsKey(),
+        keyId: config.IOS_KEY_TOKEN,
+        teamId: config.IOS_TEAM_ID,
+        production: config.ENV_NAME === 'production',
+    });
+} catch (err) {
+    // Local dev without APPLE_PRIVATE_KEY set and no key file on disk: don't take the whole
+    // server down over VoIP push. Callers below no-op when apnClient is unset.
+    console.warn(`VoiPNotifications: APNs unavailable, VoIP push disabled — ${err.message}`);
+    apnClient = null;
+}
 
 class VoiPNotifications {
     async incomingCall(content) {
@@ -95,6 +103,11 @@ if (!user?.device?.voipToken) {
     if (data.category === 'VOIPMissedCall' || data.category === 'VOIPCallEnded') {
         payload.aps.badge = 1;
         expiration = Math.floor(Date.now() / 1000) + 3600;
+    }
+
+    if (!apnClient) {
+        console.warn('VoiPNotifications: APNs client unavailable, skipping');
+        return Promise.resolve({ skipped: true });
     }
 
     return apnClient.send({
