@@ -2,7 +2,7 @@ const express       = require('express');
 const crypto        = require('crypto');
 const rateLimit     = require('express-rate-limit');
 const { ipKeyGenerator } = require('express-rate-limit');
-const { verifyToken, verifyClientToken } = require('../../middleware/verify');
+const { verifyToken, verifyClientToken, verifyAdminToken } = require('../../middleware/verify');
 const authController = require('../controllers/auth.controller');
 
 const optionalVerifyToken = async (req, res, next) => {
@@ -25,6 +25,8 @@ const callRoutes         = require('./call');
 const deviceRoutes       = require('./device');
 const supportRoutes      = require('./support');
 const genericRoutes      = require('./generic');
+const adminAuthRoutes    = require('./admin');
+const appVersionRoutes   = require('./appVersion');
 const e2eeRoutes         = require('./e2ee');
 const moderationRoutes   = require('./moderation');
 const webhookRoutes      = require('./webhook');
@@ -122,5 +124,12 @@ router.use('/api/chat',         verifyClientToken, verifyToken, chatRoutes);
 router.use('/api/support',      verifyClientToken, verifyToken, supportRoutes);
 router.use('/api/e2ee',         verifyClientToken, verifyToken, e2eeRoutes);
 router.use('/api/moderation',   verifyClientToken, verifyToken, moderationRoutes);
+
+// Admin panel — its own auth domain, entirely separate from the mobile app's
+// client/user tokens. /login is public (it's how you get the admin token);
+// everything else is gated by verifyAdminToken against the standalone Admin
+// collection.
+router.use('/api/admin', adminAuthRoutes);
+router.use('/api/admin/app-version', verifyAdminToken, appVersionRoutes);
 
 module.exports = router;

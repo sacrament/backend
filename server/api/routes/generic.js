@@ -17,6 +17,22 @@ router.get('/newToken', async (req, res) => {
     }
 });
 
+// GET /api/generic/appVersion — public; version requirements the client checks
+// on launch and every foreground transition. Platform defaults to iOS since
+// that's the only client today; ?platform=Android is accepted for later.
+router.get('/appVersion', async (req, res) => {
+    try {
+        const platform = req.query.platform === 'Android' ? 'Android' : 'iOS';
+        const AppVersion = mongoose.model('AppVersion');
+        const doc = await AppVersion.findOne({ platform }, '-_id -__v -platform -createdAt -updatedAt').lean();
+        if (!doc) return res.status(404).json({ status: 'error', message: 'No version config for this platform' });
+        res.json(doc);
+    } catch (error) {
+        logger.error('Error fetching app version config:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to fetch app version config' });
+    }
+});
+
 // GET /api/generic/rules — public; returns Winky Community Rules from DB
 router.get('/rules', async (req, res) => {
     try {

@@ -163,6 +163,51 @@ module.exports = {
         });
     },
 
+    /**
+     * Gate a route to a logged-in admin, using the Admin collection's own
+     * token — never the app's user JWT. Self-contained: does its own
+     * Authorization parsing and DB check, so it doesn't need `verifyToken`
+     * (a mobile-app user auth check) to run first.
+     */
+    verifyAdminToken: async (request, response, next) => {
+        const header = request.headers.authorization;
+        if (!header) {
+            return response.status(401).json({ status: 'error', code: 'NO_TOKEN', message: 'Admin authentication required.' });
+        }
+        const token = header.startsWith('Bearer ') ? header.slice(7) : header;
+
+        let decoded;
+        try {
+            decoded = jwt.verify(token, config.APP_SECRET);
+            if (decoded.type !== 'admin') throw new Error('not an admin token');
+        } catch (err) {
+            logger.warn(`verifyAdminToken: failed on ${request.method} ${request.originalUrl}. ${err.name}: ${err.message}`);
+            return response.status(401).json({ status: 'error', code: 'INVALID_TOKEN', message: 'Invalid or expired admin token.' });
+        }
+
+        try {
+            const admin = await mongoose.model('Admin').findOne({ _id: decoded.adminId, active: true }).lean();
+            if (!admin) {
+                return response.status(403).json({ status: 'error', code: 'FORBIDDEN', message: 'Admin access required.' });
+            }
+            request.admin = admin;
+            request.isAdmin = true;
+            next();
+        } catch (err) {
+            logger.error('verifyAdminToken lookup failed:', err);
+            return response.status(500).json({ status: 'error', message: 'Authorization check failed.' });
+        }
+    },
+
+    /**
+     * Issue an admin JWT after a successful POST /api/admin/login. Shorter
+     * lifetime than the user token (30d) since this is a more privileged
+     * credential.
+     */
+    newAdminToken: (adminId) => {
+        return jwt.sign({ adminId, type: 'admin' }, config.APP_SECRET, { expiresIn: '12h' });
+    },
+
     newToken: (userId, scope) => {
         return jwt.sign({ userId, scope }, config.APP_SECRET, { expiresIn: '30d' });
     },

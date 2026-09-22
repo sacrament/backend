@@ -32,6 +32,8 @@ module.exports = {
     require('../models/pending.socket.event');
     require('../models/user.saved');
     require('../models/contact.us');
+    require('../models/app.version');
+    require('../models/admin');
   },
 
   async connectDatabase() {
