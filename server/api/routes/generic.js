@@ -33,6 +33,35 @@ router.get('/appVersion', async (req, res) => {
     }
 });
 
+// GET /api/generic/config — public; app-behavior config the client fetches on launch
+// and caches locally (feature flags, tab/history-segment visibility). Platform
+// defaults to iOS since that's the only client today. Falls back to the schema's
+// own defaults (rather than 404) when no doc exists yet, since an unconfigured
+// platform should behave like "nothing overridden," not an error.
+router.get('/config', async (req, res) => {
+    try {
+        const platform = req.query.platform === 'Android' ? 'Android' : 'iOS';
+        const RemoteConfig = mongoose.model('RemoteConfig');
+        const doc = await RemoteConfig.findOne({ platform }, '-_id -__v -platform -createdAt -updatedAt').lean();
+
+        const defaults = new RemoteConfig({ platform }).toObject();
+        delete defaults._id;
+        delete defaults.__v;
+        delete defaults.platform;
+        delete defaults.createdAt;
+        delete defaults.updatedAt;
+
+        // Merge rather than return `doc` as-is: a doc saved before a field was added
+        // to the schema genuinely lacks that key in Mongo (defaults only apply on
+        // document creation, not on read), so without this merge an older doc would
+        // silently omit every field added since it was last written.
+        res.json(doc ? { ...defaults, ...doc } : defaults);
+    } catch (error) {
+        logger.error('Error fetching remote config:', error);
+        res.status(500).json({ status: 'error', message: 'Failed to fetch remote config' });
+    }
+});
+
 // GET /api/generic/rules — public; returns Winky Community Rules from DB
 router.get('/rules', async (req, res) => {
     try {

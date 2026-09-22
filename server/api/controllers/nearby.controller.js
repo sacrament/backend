@@ -4,13 +4,7 @@ const mongoose = require('mongoose');
 const NearbyService = require('../../services/domain/nearby/nearby.service');
 const nearbyService = new NearbyService();
 const logger = require('../../utils/logger');
-
-const DISTANCE_PRESETS = {
-    'here':     75   * 0.0003048,  // 75 feet → km
-    'nearby':   300  * 0.0003048,  // 300 feet → km (default)
-    'walkable': 1000 * 0.0003048,  // 1000 feet → km
-    'local':    0.5  * 1.60934     // 0.5 miles → km
-};
+const { getRadarDistancePresets } = require('../../services/domain/nearby/radarPresets');
 
 const RADAR_DEFAULT_DURATION_MIN = 2;
 const RADAR_MAX_DURATION_MIN = 5;
@@ -96,14 +90,15 @@ const getNearbyUsers = async (req, res) => {
         const [searchLon, searchLat] = coords;
 
         // Resolve radius in km
+        const distancePresets = await getRadarDistancePresets();
         let radiusInKm;
-        const resolvedPreset = preset && DISTANCE_PRESETS[preset] ? preset : 'nearby';
-        if (preset && DISTANCE_PRESETS[preset]) {
-            radiusInKm = DISTANCE_PRESETS[preset];
+        const resolvedPreset = preset && distancePresets[preset] ? preset : 'nearby';
+        if (preset && distancePresets[preset]) {
+            radiusInKm = distancePresets[preset];
         } else if (radius && !isNaN(parseFloat(radius))) {
             radiusInKm = unit === 'mile' ? parseFloat(radius) * 1.60934 : unit === 'feet' ? parseFloat(radius) * 0.0003048 : parseFloat(radius);
         } else {
-            radiusInKm = DISTANCE_PRESETS['nearby'];
+            radiusInKm = distancePresets['nearby'];
         }
 
         // logger.info(`[getNearbyUsers] Search params - userId: ${currentUserId}, lat: ${searchLat}, lon: ${searchLon}, radiusKm: ${radiusInKm}, interestedIn: ${currentUser.interestedIn}`);
@@ -272,24 +267,4 @@ const deleteNearbyUserHistory = async (req, res) => {
     }
 };
 
-/**
- * GET /users-nearby/presets
- */
-const getDistancePresets = async (req, res) => {
-    try {
-        res.status(200).json({
-            status: 'success',
-            data: {
-                here:     { distance: 75,   unit: 'feet',  label: 'Here' },
-                nearby:   { distance: 300,  unit: 'feet',  label: 'Nearby', default: true },
-                walkable: { distance: 1000, unit: 'feet',  label: 'Walkable' },
-                local:    { distance: 0.5,  unit: 'mile',  label: 'Local' }
-            }
-        });
-    } catch (error) {
-        logger.error('Error getting distance presets:', error);
-        res.status(500).json({ status: 'error', message: 'Failed to get distance presets', code: 5000 });
-    }
-};
-
-module.exports = { getNearbyUsers, getNearbyUsersHistory, getNearbyUserSpecificHistory, deleteNearbyUserHistory, getDistancePresets, DISTANCE_PRESETS };
+module.exports = { getNearbyUsers, getNearbyUsersHistory, getNearbyUserSpecificHistory, deleteNearbyUserHistory };

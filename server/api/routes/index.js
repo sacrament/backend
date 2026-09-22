@@ -27,6 +27,7 @@ const supportRoutes      = require('./support');
 const genericRoutes      = require('./generic');
 const adminAuthRoutes    = require('./admin');
 const appVersionRoutes   = require('./appVersion');
+const remoteConfigRoutes = require('./remoteConfig');
 const e2eeRoutes         = require('./e2ee');
 const moderationRoutes   = require('./moderation');
 const webhookRoutes      = require('./webhook');
@@ -131,5 +132,6 @@ router.use('/api/moderation',   verifyClientToken, verifyToken, moderationRoutes
 // collection.
 router.use('/api/admin', adminAuthRoutes);
 router.use('/api/admin/app-version', verifyAdminToken, appVersionRoutes);
+router.use('/api/admin/remote-config', verifyAdminToken, remoteConfigRoutes);
 
 module.exports = router;

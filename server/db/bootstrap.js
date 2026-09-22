@@ -33,6 +33,7 @@ module.exports = {
     require('../models/user.saved');
     require('../models/contact.us');
     require('../models/app.version');
+    require('../models/remote.config');
     require('../models/admin');
   },
 

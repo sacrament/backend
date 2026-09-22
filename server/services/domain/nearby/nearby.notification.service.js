@@ -12,6 +12,7 @@
 
 const mongoose = require('mongoose');
 const { getIO } = require('../../../socket/io');
+const { getRadarDistancePresets } = require('./radarPresets');
 
 // ─── Deduplication store ──────────────────────────────────────────────────────
 // Map<recipientId, Map<movingUserId, lastNotifiedTimestamp>>
@@ -43,10 +44,15 @@ class NearbyNotificationService {
      * @param {string} movingUserId - The user who just moved
      * @param {number} lon          - New longitude
      * @param {number} lat          - New latitude
-     * @param {number} radiusKm     - Notification radius (default 300 ft ≈ 0.091 km)
+     * @param {number} [radiusKm]   - Notification radius; defaults to RemoteConfig's
+     *                                "nearby" radar preset (~300 ft) when omitted, so
+     *                                this stays in sync with the client's own default.
      */
-    async onLocationUpdate(movingUserId, lon, lat, radiusKm = 0.091) {
+    async onLocationUpdate(movingUserId, lon, lat, radiusKm) {
         try {
+            if (radiusKm === undefined) {
+                radiusKm = (await getRadarDistancePresets()).nearby;
+            }
             const movingUser = await this._User.findById(movingUserId)
                 .populate('device')
                 .lean();
