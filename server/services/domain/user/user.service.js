@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { blockingStatus } = require('../../../utils/account-status');
 const SMSService = require('../../external/twilio/sms.service');
 const mongoose = require('mongoose');
 const UserModel = mongoose.model('User');
@@ -70,17 +71,29 @@ class UserService {
     }
 
     #assertAccountCanAuthenticate(user) {
-        if (user.status === 'blocked') {
+        const reason = blockingStatus(user);
+
+        if (reason === 'blocked') {
             const err = new Error('User is blocked');
             err.httpStatus = 403;
             err.code = 1010;
             throw err;
         }
 
-        if (user.deleted || user.status === 'deleted') {
+        if (reason === 'deleted') {
             const err = new Error('User account has been deleted');
             err.httpStatus = 403;
             err.code = 1020;
+            throw err;
+        }
+
+        // Previously not checked here, only on every request after login (see
+        // utils/account-status.js) — an inactive account could sign up / log in and get
+        // a token, then 403 on its very first authenticated call.
+        if (reason === 'inactive') {
+            const err = new Error('User account is inactive');
+            err.httpStatus = 403;
+            err.code = 1030;
             throw err;
         }
     }

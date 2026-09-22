@@ -16,6 +16,7 @@ const logger = require('../utils/logger');
 const PendingSocketEventService = require('../services/domain/socket/pending.socket.event.service');
 const CallService = require('../services/domain/call/call.service');
 const UserSession = require('../models/user.session');
+const { blockingStatus } = require('../utils/account-status');
 
 // Import event handlers
 const { ChatHandler, CallsHandler, UserHandler } = require('./handlers');
@@ -155,21 +156,26 @@ const onConnected = async (socket, io) => {
             return;
         }
 
-        if (user.deleted) {
+        // Shared with the login-time check and verifyToken (see utils/account-status.js).
+        // Also catches status === 'deleted' — previously only the boolean `deleted` flag
+        // was checked here, so that string value alone would have let the socket through.
+        const reason = blockingStatus(user);
+
+        if (reason === 'deleted') {
             logger.warn(`[Auth Error] User account deleted: ${userId}`);
             socket.emit('error', 'User account has been deleted');
             socket.disconnect(true);
             return;
         }
 
-        if (user.status === 'blocked') {
+        if (reason === 'blocked') {
             logger.warn(`[Auth Error] User account blocked: ${userId}`);
             socket.emit('error', 'User account is blocked');
             socket.disconnect(true);
             return;
         }
 
-        if (user.status === 'inactive') {
+        if (reason === 'inactive') {
             logger.warn(`[Auth Error] User account inactive: ${userId}`);
             socket.emit('error', 'User account is inactive');
             socket.disconnect(true);

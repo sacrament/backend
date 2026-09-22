@@ -2,6 +2,7 @@ const jwt      = require('jsonwebtoken');
 const mongoose = require('mongoose');
 const config   = require('../utils/config');
 const logger   = require('../utils/logger');
+const { blockingStatus } = require('../utils/account-status');
 
 // 6-month epoch in milliseconds (182 days)
 const EPOCH_MS = 182 * 24 * 60 * 60 * 1000;
@@ -108,14 +109,16 @@ module.exports = {
                 }
             }
 
-            if (user?.status === 'blocked') {
+            // Shared with UserService#assertAccountCanAuthenticate (the login-time check) so
+            // the two can't drift apart again — see utils/account-status.js.
+            const reason = blockingStatus(user);
+
+            if (reason === 'blocked') {
                 return response.status(403).json({ status: 'error', code: 'ACCOUNT_BLOCKED', message: 'Your account has been suspended. Please contact support.' });
             }
 
-            if (user && (user.status === 'inactive' || user.status === 'deleted' || user.deleted)) {
-                if (!isAccountDeletionRequest(request)) {
-                    return response.status(403).json({ status: 'error', code: 'ACCOUNT_INACTIVE', message: 'Your account is no longer active.' });
-                }
+            if (reason && !isAccountDeletionRequest(request)) {
+                return response.status(403).json({ status: 'error', code: 'ACCOUNT_INACTIVE', message: 'Your account is no longer active.' });
             }
         } catch (err) {
             logger.error('verifyToken user lookup error:', err.message);

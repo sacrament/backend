@@ -8,6 +8,7 @@ const crypto        = require('crypto');
 const mongoose      = require('mongoose');
 const UserService   = require('../../services/domain/user/user.service');
 const DeviceService = require('../../services/domain/device/device.service');
+const { blockingStatus } = require('../../utils/account-status');
 const KeyEscrow     = require('../../models/key.escrow');
 const KeyBackup     = require('../../models/key.backup');
 const { UserConnectStatus } = require('../../models/user.connect');
@@ -141,11 +142,14 @@ const getCurrentUserProfile = async (req, res) => {
       return res.status(404).json({ status: 'error', code: 'ACCOUNT_DELETED', message: 'Account no longer exists' });
     }
 
-    if (user.status === 'blocked') {
+    // Shared with the login-time check and verifyToken (see utils/account-status.js).
+    const reason = blockingStatus(user);
+
+    if (reason === 'blocked') {
       return res.status(403).json({ status: 'error', code: 'ACCOUNT_BANNED', message: 'Account has been suspended' });
     }
 
-    if (user.status === 'inactive') {
+    if (reason) {
       return res.status(403).json({ status: 'error', code: 'ACCOUNT_INACTIVE', message: 'Account is inactive' });
     }
 
