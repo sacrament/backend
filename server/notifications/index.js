@@ -18,13 +18,20 @@ const certsFolder = path.resolve(__dirname, '..', 'certs');
 class PushNotificationService {
     constructor() {
         logger.info('Initializing PushNotificationService with APNs provider');
-        this._apnClient = new NativeApnsClient({
-            key: path.join(certsFolder, 'AuthKey_2XCWJRBL6T.p8'),
-            keyId: config.IOS_KEY_TOKEN,
-            teamId: config.IOS_TEAM_ID,
-            production: config.ENV_NAME === 'production',
-            logger,
-        });
+        try {
+            this._apnClient = new NativeApnsClient({
+                key: path.join(certsFolder, 'AuthKey_2XCWJRBL6T.p8'),
+                keyId: config.IOS_KEY_TOKEN,
+                teamId: config.IOS_TEAM_ID,
+                production: config.ENV_NAME === 'production',
+                logger,
+            });
+        } catch (err) {
+            // Local dev without the .p8 file on disk: don't take the whole server down over
+            // push. sendIOS below no-ops when _apnClient is unset.
+            logger.warn(`PushNotificationService: APNs unavailable, push disabled — ${err.message}`);
+            this._apnClient = null;
+        }
     }
 
     // ─── Chat ────────────────────────────────────────────────────────────────
@@ -692,6 +699,12 @@ class PushNotificationService {
                 const tokenArray = Array.isArray(tokens) ? tokens : [tokens];
                 
                 console.log(`push:sendIOS — Attempting to send via APNs to ${tokenArray.length} token(s)`);
+
+                if (!this._apnClient) {
+                    console.warn('push:sendIOS — APNs client unavailable, skipping');
+                    resolve({ skipped: true });
+                    return;
+                }
 
                 Promise.all(tokenArray.map((token) => this._apnClient.send({
                     deviceToken: token,
