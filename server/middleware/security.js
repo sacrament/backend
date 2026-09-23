@@ -245,12 +245,14 @@ const ssrfProtection = buildPatternGuard(PATTERNS.ssrf, 'SSRF');
 // ─── Endpoint-Specific Rate Limiters ─────────────────────────────────────────
 
 /**
- * Strict rate-limiter for authentication endpoints (OTP request / verify).
- * 10 attempts per 15 minutes per IP.
+ * Rate-limiter for authentication endpoints (OTP request / verify).
+ * 500 attempts per 15 minutes per IP. Deliberately loose: people on one Wi-Fi share a
+ * public IP, so a group signing in together (QA, an office, a venue) must not trip it.
+ * Per-phone abuse is limited separately (OTP resend cap in AuthService.requestOtp).
  */
 const authRateLimiter = rateLimit({
     windowMs       : 15 * 60 * 1000,
-    max            : 10,
+    max            : 500,
     keyGenerator   : (req) => clientIp(req),
     message        : {
         status  : 'error',
