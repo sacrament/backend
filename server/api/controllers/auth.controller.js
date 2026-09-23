@@ -103,7 +103,7 @@ const GLOBAL_OTP_MAX_PER_HOUR = parseInt(process.env.OTP_GLOBAL_HOURLY_LIMIT) ||
 
 // Short-window per-phone cap, layered under the hourly limiter in routes/index.js.
 // Stops a burst against one victim's handset between hourly window resets.
-const OTP_MAX_PER_PHONE_PER_10MIN = parseInt(process.env.OTP_MAX_PER_PHONE_PER_10MIN) || 3;
+const OTP_MAX_PER_PHONE_PER_10MIN = parseInt(process.env.OTP_MAX_PER_PHONE_PER_10MIN) || 10;
 
 /**
  * Apple Authentication
@@ -302,7 +302,8 @@ const requestPhoneOtp = async (req, res) => {
     // Per-phone check runs first: checkGlobalOtpBudget() consumes budget on every
     // call, so checking it ahead of the phone cap would let rejected abuse burn
     // through the global allowance and lock out legitimate signups.
-    if (!checkRateLimit(rateLimitKey, OTP_MAX_PER_PHONE_PER_10MIN, 10 * 60).allowed) {
+    // QA / App Review bypass numbers never send an SMS, so they aren't rate limited here.
+    if (!authService.isReviewTestPhone(phoneNumber) && !checkRateLimit(rateLimitKey, OTP_MAX_PER_PHONE_PER_10MIN, 10 * 60).allowed) {
       logger.warn(`[requestPhoneOtp] Rejected: phone rate limit exceeded - phone: ${phoneNumber}`);
       return res.status(429).json({ status: 'error', code: 3129, message: 'Rate limit exceeded for phone number' });
     }
@@ -321,7 +322,8 @@ const requestPhoneOtp = async (req, res) => {
   } catch (error) {
     if (error.code === 3133) {
       logger.warn(`[requestPhoneOtp] Rate limit error from service: ${error.message}`);
-      return res.status(429).json({ status: 'error', code: 3133, message: error.message });
+      if (error.retryAfterSeconds) res.set('Retry-After', String(error.retryAfterSeconds));
+      return res.status(429).json({ status: 'error', code: 3133, message: error.message, retryAfterSeconds: error.retryAfterSeconds });
     }
     if (error.httpStatus) {
       logger.warn(`[requestPhoneOtp] Service error - code: ${error.code}, message: ${error.message}`);

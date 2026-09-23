@@ -41,6 +41,11 @@ const REVIEW_TEST_PHONES = new Set(
 );
 const REVIEW_TEST_OTP = process.env.APP_REVIEW_TEST_OTP || null;
 
+// How many times one pending code may be (re)sent before further requests are refused.
+// Refusing does NOT delete the pending code — the user may already hold a valid SMS.
+// The hourly per-phone / per-IP limiters (routes/index.js) still bound SMS spend.
+const OTP_MAX_RESENDS_PER_SESSION = parseInt(process.env.OTP_MAX_RESENDS_PER_SESSION) || 10;
+
 class AuthService {
 
     get PhoneAuthCollection() {
@@ -54,14 +59,22 @@ class AuthService {
     }
 
 
+    /** True for the QA / App Review bypass numbers — they never send an SMS. */
+    isReviewTestPhone(phoneNumber) {
+        return !!(REVIEW_TEST_OTP && REVIEW_TEST_PHONES.has(phoneNumber));
+    }
+
     async requestOtp(phoneNumber, { userAgent, ip }) {
-        const isReviewTestPhone = !!(REVIEW_TEST_OTP && REVIEW_TEST_PHONES.has(phoneNumber));
+        const isReviewTestPhone = this.isReviewTestPhone(phoneNumber);
         const phoneHash = this.hashPhone(phoneNumber);
         const existing = await this.PhoneAuthCollection.findOne({ partition: phoneHash, usedAt: null });
-        if (existing && existing.requestCount >= 3) {
-            await this.PhoneAuthCollection.deleteOne({ partition: phoneHash });
+        // Bypass numbers cost nothing (no SMS), so the resend cap doesn't apply to them.
+        if (existing && !isReviewTestPhone && existing.requestCount >= OTP_MAX_RESENDS_PER_SESSION) {
             const err = new Error('Maximum OTP resend attempts reached. Please try again later.');
             err.code = 3133;
+            // The pending code stays valid until it expires; tell the client when to retry.
+            const expiresMs = existing.expiresAt ? new Date(existing.expiresAt).getTime() : Date.now() + OTP_TTL_MS;
+            err.retryAfterSeconds = Math.max(1, Math.ceil((expiresMs - Date.now()) / 1000));
             throw err;
         }
         let otp;

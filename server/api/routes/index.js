@@ -53,8 +53,8 @@ const authLimiter = rateLimit({
 //   otpIpLimiter    — caps a single origin rotating through many numbers, which
 //                     the phone-keyed bucket alone cannot see.
 
-const OTP_MAX_PER_PHONE_PER_HOUR = parseInt(process.env.OTP_MAX_PER_PHONE_PER_HOUR) || 5;
-const OTP_MAX_PER_IP_PER_HOUR    = parseInt(process.env.OTP_MAX_PER_IP_PER_HOUR)    || 20;
+const OTP_MAX_PER_PHONE_PER_HOUR = parseInt(process.env.OTP_MAX_PER_PHONE_PER_HOUR) || 20;
+const OTP_MAX_PER_IP_PER_HOUR    = parseInt(process.env.OTP_MAX_PER_IP_PER_HOUR)    || 50;
 
 const otpPhoneLimiter = rateLimit({
     windowMs: 60 * 60 * 1000,
