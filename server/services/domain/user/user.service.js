@@ -15,6 +15,9 @@ const { countryFromPhone } = require('../../../utils/phone.country');
 const { getIO } = require('../../../socket/io');
 const _ = require('lodash');
 
+// Non-current locations are only kept briefly; nothing reads them once superseded.
+const SUPERSEDED_LOCATION_TTL_MS = 48 * 60 * 60 * 1000;
+
 class UserService {
     constructor() {
         this.model = UserModel;
@@ -1541,21 +1544,21 @@ class UserService {
      */
     async removeFromRadar(userId) {
         const LocationModel = mongoose.model('Location');
-        const thirtyDays = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+        const expiresAt = new Date(Date.now() + SUPERSEDED_LOCATION_TTL_MS);
         await LocationModel.updateMany(
             { user: userId, isCurrent: true },
-            { $set: { isCurrent: false, expiresAt: thirtyDays } }
+            { $set: { isCurrent: false, expiresAt } }
         );
     }
 
     async updateLocation(userId, lat, lon) {
         const LocationModel = mongoose.model('Location');
-        const thirtyDays = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+        const expiresAt = new Date(Date.now() + SUPERSEDED_LOCATION_TTL_MS);
 
         // Supersede all previous current locations for this user
         await LocationModel.updateMany(
             { user: userId, isCurrent: true },
-            { $set: { isCurrent: false, expiresAt: thirtyDays } }
+            { $set: { isCurrent: false, expiresAt } }
         );
 
         const locationDoc = await LocationModel.create({

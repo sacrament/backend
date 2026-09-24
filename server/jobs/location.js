@@ -12,6 +12,7 @@
 const mongoose = require('mongoose');
 
 const STALE_THRESHOLD_MS = 60 * 60 * 1000; // 1 hour
+const SUPERSEDED_LOCATION_TTL_MS = 48 * 60 * 60 * 1000; // TTL for non-current locations
 
 module.exports = (agenda) => {
     agenda.define('location:expire-stale', async () => {
@@ -38,7 +39,7 @@ module.exports = (agenda) => {
 
         await Location.updateMany(
             { _id: { $in: stale.map((l) => l._id) } },
-            { $set: { isCurrent: false } }
+            { $set: { isCurrent: false, expiresAt: new Date(Date.now() + SUPERSEDED_LOCATION_TTL_MS) } }
         );
     });
 
