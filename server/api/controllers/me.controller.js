@@ -384,7 +384,7 @@ const updateCurrentUserPicture = async (req, res) => {
  */
 const updateCurrentUserLocation = async (req, res) => {
   try {
-    const { latitude, longitude, lat: latitudeAlias, lon: longitudeAlias } = req.body;
+    const { latitude, longitude, lat: latitudeAlias, lon: longitudeAlias, accuracy: inputAccuracy } = req.body;
     const inputLatitude = latitude ?? latitudeAlias;
     const inputLongitude = longitude ?? longitudeAlias;
 
@@ -397,10 +397,14 @@ const updateCurrentUserLocation = async (req, res) => {
     if (isNaN(lat) || lat < -90  || lat > 90)  return res.status(400).json({ status: 'error', message: 'Invalid latitude. Must be between -90 and 90' });
     if (isNaN(lon) || lon < -180 || lon > 180) return res.status(400).json({ status: 'error', message: 'Invalid longitude. Must be between -180 and 180' });
 
-    const userId = req.decodedToken.userId;
-    await userService.updateLocation(userId, lat, lon);
+    // Optional — a missing or invalid value just means no accuracy slack for this fix.
+    const parsedAccuracy = parseFloat(inputAccuracy);
+    const accuracy = Number.isFinite(parsedAccuracy) && parsedAccuracy >= 0 ? parsedAccuracy : null;
 
-    logger.info(`[updateCurrentUserLocation] userId=${userId} lat=${lat} lon=${lon} locationSaved=true`);
+    const userId = req.decodedToken.userId;
+    await userService.updateLocation(userId, lat, lon, accuracy);
+
+    logger.info(`[updateCurrentUserLocation] userId=${userId} lat=${lat} lon=${lon} accuracy=${accuracy} locationSaved=true`);
 
     // Fire-and-forget: notify nearby users without blocking the response
     nearbyNotifications.onLocationUpdate(userId, lon, lat).catch(() => {});

@@ -1548,7 +1548,7 @@ class UserService {
         );
     }
 
-    async updateLocation(userId, lat, lon) {
+    async updateLocation(userId, lat, lon, accuracy = null) {
         const LocationModel = mongoose.model('Location');
         const thirtyDays = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
@@ -1561,6 +1561,7 @@ class UserService {
         const locationDoc = await LocationModel.create({
             user: userId,
             point: { type: 'Point', coordinates: [lon, lat] },
+            accuracy,
             isCurrent: true,
             recordedAt: new Date(),
         });
