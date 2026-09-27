@@ -23,8 +23,13 @@ class NearbyService {
      *   `radar.presetDurations[preset]` (capped at maxDurationMin, falling back
      *   to defaultDurationMin when unset) determines how far back their
      *   `lastSeen` may be and still count as visible.
+     * @param {Object} [accuracyOptions]  GPS-uncertainty slack:
+     *   { selfAccuracyM, maxAccuracyM } — a candidate matches when their distance is
+     *   within radius + my accuracy + their accuracy, each capped at maxAccuracyM.
+     *   Indoor fixes for two phones in the same room can land further apart than a
+     *   91 m radius; without this they never see each other.
      */
-    async findUsersNear(lon, lat, radiusKm, extraFilters = {}, visibilityOptions = null) {
+    async findUsersNear(lon, lat, radiusKm, extraFilters = {}, visibilityOptions = null, accuracyOptions = null) {
         const userMatch = {};
         for (const [key, val] of Object.entries(extraFilters)) {
             userMatch[`user.${key}`] = val;
@@ -47,16 +52,29 @@ class NearbyService {
 
         // console.log('[NearbyService] findUsersNear', { lon, lat, radiusKm, userMatch });
 
+        const radiusM = radiusKm * 1000;
+        const maxAccuracyM = accuracyOptions?.maxAccuracyM ?? 0;
+        const selfAccuracyM = Math.min(accuracyOptions?.selfAccuracyM ?? 0, maxAccuracyM);
+        const accuracyMatch = maxAccuracyM > 0 ? {
+            $expr: {
+                $lte: ['$dist', {
+                    $add: [radiusM, selfAccuracyM, { $min: [{ $ifNull: ['$accuracy', 0] }, maxAccuracyM] }]
+                }]
+            }
+        } : null;
+
         const results = await this._Location.aggregate([
             {
                 $geoNear: {
                     near: { type: 'Point', coordinates: [lon, lat] },
                     distanceField: 'dist',
-                    maxDistance: radiusKm * 1000,
+                    // Widest possible match; accuracyMatch then trims per candidate.
+                    maxDistance: radiusM + selfAccuracyM + maxAccuracyM,
                     spherical: true,
                     query: { isCurrent: true },
                 }
             },
+            ...(accuracyMatch ? [{ $match: accuracyMatch }] : []),
             {
                 $lookup: {
                     from: 'users',
@@ -149,7 +167,7 @@ class NearbyService {
      * Get a user by _id with their latest location populated.
      */
     async getUserById(userId) {
-        return this._User.findById(userId).populate('location', 'point recordedAt');
+        return this._User.findById(userId).populate('location', 'point recordedAt accuracy');
     }
 }
 

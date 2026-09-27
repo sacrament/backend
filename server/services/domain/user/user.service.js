@@ -1434,9 +1434,12 @@ class UserService {
             }).save();
         }
         this.#assertAccountCanAuthenticate(user);
-        // decrypt phone for response if it's the same user
+        // The caller just verified this exact number and the partition hash matched it,
+        // so return it directly rather than decrypting the stored copy — a record
+        // encrypted under a key this environment doesn't hold (shared dev DB, rotated
+        // key) otherwise turns every login for that account into a 500.
         if (user.phone) {
-            user.phone = this.decryptPhone(user.phone);
+            user.phone = phoneNumber;
         }
         return { user, accountExisted };
     }
@@ -1551,7 +1554,7 @@ class UserService {
         );
     }
 
-    async updateLocation(userId, lat, lon) {
+    async updateLocation(userId, lat, lon, accuracy = null) {
         const LocationModel = mongoose.model('Location');
         const expiresAt = new Date(Date.now() + SUPERSEDED_LOCATION_TTL_MS);
 
@@ -1564,6 +1567,7 @@ class UserService {
         const locationDoc = await LocationModel.create({
             user: userId,
             point: { type: 'Point', coordinates: [lon, lat] },
+            accuracy,
             isCurrent: true,
             recordedAt: new Date(),
         });

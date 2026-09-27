@@ -8,6 +8,9 @@ const { getRadarDistancePresets } = require('../../services/domain/nearby/radarP
 
 const RADAR_DEFAULT_DURATION_MIN = 2;
 const RADAR_MAX_DURATION_MIN = 5;
+// Cap on how much GPS uncertainty (per user) may widen the search radius, so a
+// wildly inaccurate fix (e.g. iOS approximate location, ~km) can't blow it open.
+const MAX_ACCURACY_SLACK_M = 100;
 
 // A pair of users can accumulate several request rows over time (sent, cancelled,
 // re-sent, disconnected). When more than one exists, the radar should reflect the
@@ -66,6 +69,7 @@ const getNearbyUsers = async (req, res) => {
         }
 
         let coords = currentUser.location?.point?.coordinates;
+        let selfAccuracyM = currentUser.location?.accuracy ?? 0;
 
         // Fallback for legacy/inconsistent users where location ref is missing
         // but a current Location document still exists.
@@ -75,11 +79,12 @@ const getNearbyUsers = async (req, res) => {
                 user: currentUserId,
                 isCurrent: true,
             })
-                .select('point')
+                .select('point accuracy')
                 .sort({ recordedAt: -1 })
                 .lean();
 
             coords = latestCurrentLocation?.point?.coordinates;
+            selfAccuracyM = latestCurrentLocation?.accuracy ?? 0;
         }
 
         if (!coords || coords.length < 2) {
@@ -122,7 +127,8 @@ const getNearbyUsers = async (req, res) => {
 
         const DisappearedUser = mongoose.model('DisappearedUser');
         const [rawUsers, blockedIds, disappearedRecords] = await Promise.all([
-            nearbyService.findUsersNear(searchLon, searchLat, radiusInKm, filters, visibilityOptions),
+            nearbyService.findUsersNear(searchLon, searchLat, radiusInKm, filters, visibilityOptions,
+                { selfAccuracyM, maxAccuracyM: MAX_ACCURACY_SLACK_M }),
             nearbyService.getBlockedUserIds(currentUserId),
             DisappearedUser.find({ target: currentUserId }).select('user').lean(),
         ]);

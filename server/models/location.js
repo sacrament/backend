@@ -7,6 +7,9 @@ const Location = new Schema({
         type:        { type: String, enum: ['Point'], default: 'Point' },
         coordinates: { type: [Number], required: true } // [longitude, latitude]
     },
+    // Horizontal accuracy of the fix in metres, as reported by the device. Null for
+    // clients that don't send it (and for manually-set locations).
+    accuracy:   { type: Number, default: null },
     isCurrent:  { type: Boolean, default: true, index: true },
     recordedAt: { type: Date, default: Date.now },
     expiresAt:  { type: Date, default: null },
