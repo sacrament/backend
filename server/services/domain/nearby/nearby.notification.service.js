@@ -6,8 +6,9 @@
  *   - Generic:    "New users nearby you"        → stranger entered their radar area
  *   - Connection: "Your connection X is nearby" → a connection entered their radar area
  *
- * Deduplication: each (recipient, movingUser) pair is suppressed for 30 minutes
- * so rapid location pings don't spam notifications.
+ * Online recipients get a silent 'user nearby' socket event every time (the radar
+ * refetches). Offline recipients get a push, suppressed per (recipient, movingUser)
+ * pair for 30 minutes so rapid location pings don't spam notifications.
  */
 
 const mongoose = require('mongoose');
@@ -44,15 +45,20 @@ class NearbyNotificationService {
      * @param {string} movingUserId - The user who just moved
      * @param {number} lon          - New longitude
      * @param {number} lat          - New latitude
-     * @param {number} [radiusKm]   - Notification radius; defaults to RemoteConfig's
-     *                                "nearby" radar preset (~300 ft) when omitted, so
-     *                                this stays in sync with the client's own default.
+     * @param {number} [radiusKm]   - Fixed notification radius for everyone. When omitted
+     *                                (the normal case) each recipient is notified within
+     *                                their own chosen radar distance (radar.radiusKm), or the
+     *                                "nearby" preset if they never picked one — the same
+     *                                default the client and GET /nearby/users use.
      */
     async onLocationUpdate(movingUserId, lon, lat, radiusKm) {
         try {
-            if (radiusKm === undefined) {
-                radiusKm = (await getRadarDistancePresets()).nearby;
-            }
+            const presets = await getRadarDistancePresets();
+            const defaultKm = presets.nearby;
+            // Search out to the widest preset once, then keep each recipient only if the
+            // mover is inside *their* distance (recipient.dist is metres from the mover).
+            const searchKm = radiusKm ?? Math.max(defaultKm, ...Object.values(presets));
+            const recipientRadiusKm = (recipient) => radiusKm ?? recipient.radar?.radiusKm ?? defaultKm;
             const movingUser = await this._User.findById(movingUserId)
                 .populate('device')
                 .lean();
@@ -63,7 +69,7 @@ class NearbyNotificationService {
             if (movingUser.profileVisibility === 'nobody') return; // profile hidden from everyone
 
             const [nearbyUsers, blockedIds, connectionIds] = await Promise.all([
-                this._findUsersNear(lon, lat, radiusKm, movingUserId),
+                this._findUsersNear(lon, lat, searchKm, movingUserId),
                 this._getBlockedIds(movingUserId),
                 this._getConnectionIds(movingUserId),
             ]);
@@ -78,18 +84,18 @@ class NearbyNotificationService {
                 const recipientId = recipient._id.toString();
 
                 if (blockedIds.has(recipientId))                              return; // blocked pair
-                if (recipient.notificationPreferences?.nearbyWinks === false) return; // opted out
                 if (recipient.radar?.enabled === false)                       return; // not on radar
-                if (_recentlyNotified(recipientId, movingUserId))             return; // cooldown
-
-                _markNotified(recipientId, movingUserId);
+                if (recipient.dist > recipientRadiusKm(recipient) * 1000)     return; // outside their chosen distance
 
                 const isConnection = connectionIds.has(recipientId);
                 const sockets      = await io.in(recipientId).fetchSockets();
                 const isOnline     = sockets.length > 0;
 
                 if (isOnline) {
-                    // Deliver via socket when the user is in the app
+                    // Deliver via socket when the user is in the app. No cooldown here:
+                    // this is a silent radar refresh, not a notification, and the 30-min
+                    // cooldown meant someone relaunching the app nearby never appeared
+                    // live on an open radar. The client ignores it for users already shown.
                     io.to(recipientId).emit('user nearby', {
                         userId:       movingUserId,
                         name:         movingUser.name,
@@ -99,7 +105,11 @@ class NearbyNotificationService {
                     return;
                 }
 
-                // Offline → push notification.
+                // Offline → push notification, rate-limited per pair.
+                if (recipient.notificationPreferences?.nearbyWinks === false) return; // opted out of the push
+                if (_recentlyNotified(recipientId, movingUserId)) return; // cooldown
+                _markNotified(recipientId, movingUserId);
+
                 // Re-fetch to get the populated device token (aggregate results are lean).
                 const recipientWithDevice = await this._User.findById(recipientId)
                     .populate('device')
@@ -122,7 +132,8 @@ class NearbyNotificationService {
 
     /**
      * Find active, radar-visible users near (lon, lat) within radiusKm,
-     * excluding the moving user themselves.
+     * excluding the moving user themselves. Each result carries `dist`: metres
+     * from (lon, lat).
      */
     async _findUsersNear(lon, lat, radiusKm, excludeUserId) {
         const sixtyMinutesAgo = new Date(Date.now() - 60 * 60 * 1000);
@@ -146,6 +157,9 @@ class NearbyNotificationService {
                 },
             },
             { $unwind: '$user' },
+            // Carry the distance onto the user doc — the caller filters on each
+            // recipient's own radar distance.
+            { $addFields: { 'user.dist': '$dist' } },
             {
                 $match: {
                     'user._id':           { $ne: new mongoose.Types.ObjectId(excludeUserId) },
