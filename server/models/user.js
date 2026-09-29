@@ -68,7 +68,8 @@ const User = new Schema({
         radiusKm:  { type: Number, default: null },
         // How long (minutes) this user stays visible on others' radar after their
         // last location ping, per distance preset. Missing/unset presets fall back
-        // to RADAR_DEFAULT_DURATION_MIN (30) in nearby.controller.js.
+        // to RADAR_DEFAULT_DURATION_MIN (2) and are capped at RADAR_MAX_DURATION_MIN (5)
+        // in nearby.controller.js.
         presetDurations: {
             here:     { type: Number, default: null },
             nearby:   { type: Number, default: null },

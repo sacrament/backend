@@ -1543,7 +1543,7 @@ class UserService {
      * immediately — the geoNear query only matches `Location` docs with
      * `isCurrent: true`. Without this, a logged-out user stays on other users'
      * radar until their `lastSeen` ages out of the visibility window (up to the
-     * radar duration, e.g. 30 min).
+     * radar duration, 2–5 min).
      */
     async removeFromRadar(userId) {
         const LocationModel = mongoose.model('Location');

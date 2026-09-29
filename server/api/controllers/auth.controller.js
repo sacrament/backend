@@ -412,7 +412,7 @@ const logout = async (req, res) => {
         userService.clearRefreshToken(userId),
         deviceService.disableAllDevicesForUser(userId),
         // Otherwise the user stays on others' radar until lastSeen ages out of
-        // the visibility window (up to ~30 min after logout).
+        // the radar duration (2–5 min after logout).
         userService.removeFromRadar(userId),
       ]);
     }
