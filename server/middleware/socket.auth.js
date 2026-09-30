@@ -7,7 +7,9 @@
  */
 
 const jwt = require('jsonwebtoken');
+const mongoose = require('mongoose');
 const config = require('../utils/config');
+const { isSessionReplaced } = require('../utils/session');
 
 /**
  * Authenticate socket connections using JWT tokens
@@ -55,14 +57,29 @@ function authenticateSocket(socket, next) {
         return next(new Error('Authentication error: Invalid token'));
       }
 
-      // Attach decoded token and deviceId to socket
-      socket.decoded_token = decoded;
-      socket.userId = decoded.userId;
-      socket.token = token;
-      socket.deviceId = deviceId;
+      // A token from a replaced or ended session (signed in on another phone,
+      // or logged out) mustn't reconnect: that phone would keep receiving the
+      // account's calls and messages. Same rule as verifyToken.
+      mongoose.model('User').findById(decoded.userId).select('sessionStartedAt').lean()
+        .then((user) => {
+          if (user && isSessionReplaced(decoded, user.sessionStartedAt)) {
+            console.warn(`[Socket Auth] Session replaced for user ${decoded.userId} (socket: ${socket.id}, deviceId: ${deviceId || 'none'})`);
+            return next(new Error('Authentication error: Session replaced'));
+          }
 
-      console.log(`[Socket Auth] ✓ Authentication successful for user: ${decoded.userId} (socket: ${socket.id}, deviceId: ${deviceId || 'none'})`);
-      next();
+          // Attach decoded token and deviceId to socket
+          socket.decoded_token = decoded;
+          socket.userId = decoded.userId;
+          socket.token = token;
+          socket.deviceId = deviceId;
+
+          console.log(`[Socket Auth] ✓ Authentication successful for user: ${decoded.userId} (socket: ${socket.id}, deviceId: ${deviceId || 'none'})`);
+          next();
+        })
+        .catch((lookupErr) => {
+          console.error(`[Socket Auth] User lookup failed for socket ${socket.id}:`, lookupErr.message);
+          next(new Error('Authentication error: Lookup failed'));
+        });
     });
   } catch (error) {
     console.error(`[Socket Auth] Middleware error for socket ${socket.id}:`, error.message);

@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { blockingStatus } = require('../../../utils/account-status');
+const { sessionStartNow } = require('../../../utils/session');
 const SMSService = require('../../external/twilio/sms.service');
 const mongoose = require('mongoose');
 const UserModel = mongoose.model('User');
@@ -268,6 +269,11 @@ class UserService {
 
         if (user.device) {
             resolvedDevice = await DeviceModel.findById(user.device).lean().exec();
+            // A stale pointer to a phone now used by another account must not route
+            // this user's pushes (message previews included) to that person.
+            if (resolvedDevice && resolvedDevice.user && resolvedDevice.user.toString() !== user._id.toString()) {
+                resolvedDevice = null;
+            }
         }
 
         if (!resolvedDevice) {
@@ -307,7 +313,10 @@ class UserService {
         let resolvedDevice = null;
 
         if (user.device) {
-            resolvedDevice = await DeviceModel.findById(user.device).select('status token').lean().exec();
+            resolvedDevice = await DeviceModel.findById(user.device).select('status token user').lean().exec();
+            if (resolvedDevice && resolvedDevice.user && resolvedDevice.user.toString() !== userId.toString()) {
+                resolvedDevice = null;
+            }
         }
 
         if (!resolvedDevice) {
@@ -451,6 +460,14 @@ class UserService {
         return SMSService.send(user, phones);
     }
 
+
+    /**
+     * Start a new login session: every token issued before now stops working
+     * (see utils/session.js). Called on sign-in and on logout.
+     */
+    async startNewSession(userId) {
+        await this.model.updateOne({ _id: userId }, { $set: { sessionStartedAt: sessionStartNow() } });
+    }
 
     /**
      * Save refresh token for user
@@ -1543,7 +1560,7 @@ class UserService {
      * immediately — the geoNear query only matches `Location` docs with
      * `isCurrent: true`. Without this, a logged-out user stays on other users'
      * radar until their `lastSeen` ages out of the visibility window (up to the
-     * radar duration, e.g. 30 min).
+     * radar duration, 2–5 min).
      */
     async removeFromRadar(userId) {
         const LocationModel = mongoose.model('Location');

@@ -55,6 +55,9 @@ const User = new Schema({
     favorites: [{ type: Schema.Types.ObjectId, ref: 'User' }],
     isPublic: { type: Boolean, default: false },
     refreshToken: { type: String, default: null },
+    // Start of the current login session (utils/session.js): tokens issued before
+    // it were replaced by a sign-in elsewhere or ended by logout, and are rejected.
+    sessionStartedAt: { type: Date, default: null },
     lastSeen: { type: Date, default: null, index: true },
     radar: {
         enabled:   { type: Boolean, default: true },
@@ -68,7 +71,8 @@ const User = new Schema({
         radiusKm:  { type: Number, default: null },
         // How long (minutes) this user stays visible on others' radar after their
         // last location ping, per distance preset. Missing/unset presets fall back
-        // to RADAR_DEFAULT_DURATION_MIN (30) in nearby.controller.js.
+        // to RADAR_DEFAULT_DURATION_MIN (2) and are capped at RADAR_MAX_DURATION_MIN (5)
+        // in nearby.controller.js.
         presetDurations: {
             here:     { type: Number, default: null },
             nearby:   { type: Number, default: null },
