@@ -407,7 +407,7 @@ const updateCurrentUserLocation = async (req, res) => {
     logger.info(`[updateCurrentUserLocation] userId=${userId} lat=${lat} lon=${lon} accuracy=${accuracy} locationSaved=true`);
 
     // Fire-and-forget: notify nearby users without blocking the response
-    nearbyNotifications.onLocationUpdate(userId, lon, lat).catch(() => {});
+    nearbyNotifications.onLocationUpdate(userId, lon, lat, undefined, accuracy).catch(() => {});
 
     return res.status(202).json({ status: 'success', message: 'Location updated' });
 
