@@ -1,5 +1,10 @@
+const jwt = require('jsonwebtoken');
+const mongoose = require('mongoose');
 const DeviceService = require('../../services/domain/device/device.service');
 const deviceService = new DeviceService();
+const UserService = require('../../services/domain/user/user.service');
+const userService = new UserService();
+const config = require('../../utils/config');
 const logger = require('../../utils/logger');
 
 /**
@@ -212,7 +217,54 @@ const updateState = async (req, res) => {
     }
 };
 
+/**
+ * POST /api/devices/:id/logout
+ * Body: { accessToken }
+ *
+ * Called by the app on every logout, including forced ones (session revoked,
+ * refresh failed) where it no longer holds a valid token — so this route sits
+ * behind the client token only, and ownership is proven with the user's last
+ * access token verified WITHOUT its expiry. Disables only this device, so a
+ * stale phone can't cut off the user's current one. If it was the user's current
+ * device, also clears their refresh token and takes them off the radar, same as
+ * POST /auth/logout.
+ */
+const logoutDevice = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { accessToken } = req.body || {};
+        if (!mongoose.isValidObjectId(id) || typeof accessToken !== 'string' || !accessToken) {
+            return res.status(400).json({ status: 'error', message: 'device id and accessToken are required' });
+        }
+
+        let decoded;
+        try {
+            decoded = jwt.verify(accessToken, config.APP_SECRET, { ignoreExpiration: true });
+        } catch {
+            return res.status(401).json({ status: 'error', message: 'Invalid token' });
+        }
+        const userId = decoded?.userId;
+        if (!userId) {
+            return res.status(401).json({ status: 'error', message: 'Invalid token' });
+        }
+
+        const { disabled, wasCurrentDevice } = await deviceService.logoutDevice(id, userId);
+        if (wasCurrentDevice) {
+            await Promise.all([
+                userService.clearRefreshToken(userId),
+                userService.removeFromRadar(userId),
+            ]);
+        }
+
+        return res.status(200).json({ status: 'success', disabled });
+    } catch (ex) {
+        logger.error('Logout device error:', ex);
+        return res.status(500).json({ status: 'error', message: ex.message });
+    }
+};
+
 module.exports = {
+    logoutDevice,
     newDevice,
     updateDevice,
     getDevices,

@@ -559,6 +559,11 @@ class PushNotificationService {
                     console.warn(`push:_send — User ${user._id?.toString()} device has no token`);
                     return { skipped: true };
                 }
+                // Logged-out (disabled) devices get nothing, even if a token was left behind.
+                if (user.device.status && user.device.status !== 'active') {
+                    console.warn(`push:_send — User ${user._id?.toString()} device is ${user.device.status}`);
+                    return { skipped: true };
+                }
 
                 const muted = member.options?.muted || false;
 
@@ -673,6 +678,10 @@ class PushNotificationService {
 
                 if (!user?.device?.token) {
                     console.warn(`push:_sendSilent — User ${userId} has no device token`);
+                    return { skipped: true };
+                }
+                if (user.device.status && user.device.status !== 'active') {
+                    console.warn(`push:_sendSilent — User ${userId} device is ${user.device.status}`);
                     return { skipped: true };
                 }
 

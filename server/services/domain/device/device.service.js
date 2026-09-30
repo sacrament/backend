@@ -235,6 +235,29 @@ class DeviceService {
     }
 
     /**
+     * Log one device out: stop all pushes (including VoIP calls) to it.
+     * Scoped to this device, never "all devices for the user" — a phone that was
+     * logged out locally (e.g. its session was revoked because the user signed in
+     * elsewhere) must not cut off the phone the user is actually using now.
+     *
+     * @param {string} deviceId
+     * @param {string} userId
+     * @returns {Promise<{ disabled: boolean, wasCurrentDevice: boolean }>}
+     */
+    async logoutDevice(deviceId, userId) {
+        const device = await DeviceModel.findOneAndUpdate(
+            { _id: deviceId, user: userId },
+            { $set: { status: 'disabled', token: null, voipToken: null, updatedOn: new Date() } },
+            { new: true }
+        );
+        if (!device) return { disabled: false, wasCurrentDevice: false };
+
+        const user = await UserModel.findById(userId).select('device').lean();
+        const wasCurrentDevice = !!user?.device && user.device.toString() === device._id.toString();
+        return { disabled: true, wasCurrentDevice };
+    }
+
+    /**
      * Update push notification token for a device
      * @param {string} deviceId
      * @param {string} userId

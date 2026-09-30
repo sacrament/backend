@@ -86,6 +86,11 @@ if (!user?.device?.voipToken) {
         console.warn(`VoIP:_send — No voip token for user: ${user?._id || 'unknown'}`);
         return Promise.resolve({ skipped: true });
     }
+    // A logged-out (disabled) device must never ring, even if a token was left behind.
+    if (user.device.status && user.device.status !== 'active') {
+        console.warn(`VoIP:_send — Device ${user.device._id} is ${user.device.status}, skipping for user: ${user._id}`);
+        return Promise.resolve({ skipped: true });
+    }
 
     const payload = {
         aps: {

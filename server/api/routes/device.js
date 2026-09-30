@@ -3,6 +3,7 @@ const router = express.Router();
 
 const { verifyToken } = require('../../middleware/verify');
 const {
+    logoutDevice,
     newDevice,
     updateDevice,
     getDevices,
@@ -18,6 +19,9 @@ router.get('/', verifyToken, getDevices);
 
 // POST /api/devices
 router.post('/', newDevice);
+
+// POST /api/devices/:id/logout — client token only; body { accessToken } (may be expired)
+router.post('/:id/logout', logoutDevice);
 
 // PUT /api/devices/:id/enable
 router.put('/:id/enable', verifyToken, enableDevice);
