@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const mongoose = require('mongoose');
 const logger = require('../../../utils/logger');
-const { deleteMedia } = require('../../external/aws/s3.service');
+const { deleteObjectAtUrl } = require('../../external/aws/s3.service');
 
 /**
  * AccountDeletionService
@@ -60,18 +60,60 @@ class AccountDeletionService {
 
         await this.writeTombstone(user, reason);
 
-        // From here the account must not be usable, even if a later stage fails.
-        await User.updateOne({ _id: userId }, { $set: { status: 'deleted', refreshToken: null } });
+        // From here the account must not be usable or identifiable, even if a later
+        // stage fails: it used to be only flagged here, so a failure further down left
+        // a "deleted" record with the real name, photo and phone on it.
+        await this.maskIdentity(userId, user);
 
-        await this.applySafetyRetention(userId);
-        await this.purgePersonalRecords(userId, user);
-        await this.detachFromOtherUsers(userId);
-        await this.stripDeliveredContent(userId);
+        // Each stage is idempotent; one failing is logged and the rest still run, so
+        // the record isn't left behind half-deleted.
+        await this.runStage('safety retention', () => this.applySafetyRetention(userId));
+        await this.runStage('personal records', () => this.purgePersonalRecords(userId, user));
+        await this.runStage('detach from other users', () => this.detachFromOtherUsers(userId));
+        await this.runStage('delivered content', () => this.stripDeliveredContent(userId));
 
         await User.deleteOne({ _id: userId });
 
         logger.info(`Account deleted: ${userId} (${reason})`);
         return { status: 'deleted' };
+    }
+
+    async runStage(name, fn) {
+        try { await fn(); }
+        catch (err) { logger.error(`Account deletion stage "${name}" failed: ${err.message}`); }
+    }
+
+    // ─── Stage 1b — mask ──────────────────────────────────────────────────────
+
+    /**
+     * Mark the account deleted and strip everything that identifies the person, in one
+     * write. The profile photo is deleted from S3 first (it's theirs alone).
+     * username / partition have sparse unique indexes, so they're unset, not nulled.
+     */
+    async maskIdentity(userId, user) {
+        for (const url of [user.imageUrl, user.pictureUrl]) {
+            if (!url) continue;
+            const result = await deleteObjectAtUrl(url);
+            if (!result.deleted) logger.warn(`Account deletion: avatar not deleted (${result.bucket || '?'}/${result.key || url}): ${result.reason}`);
+        }
+        await this.model('User').updateOne({ _id: userId }, {
+            $set: {
+                status: 'deleted',
+                refreshToken: null,
+                name: 'Deleted user',
+                imageUrl: null,
+                pictureUrl: null,
+                bio: null,
+                phone: null,
+                email: null,
+                appleId: null,
+                googleId: null,
+                dateOfBirth: null,
+                interests: [],
+                location: null,
+            },
+            $unset: { username: '', partition: '' },
+        });
     }
 
     // ─── Stage 1 — tombstone ──────────────────────────────────────────────────
@@ -190,15 +232,7 @@ class AccountDeletionService {
             UserConnectStatus.deleteMany({ users: userId }),
             SavedUser.deleteMany({ $or: [{ user: userId }, { savedUser: userId }] }),
         ].map(p => p.catch(err => logger.warn(`Deletion stage failed (non-fatal): ${err.message}`))));
-
-        // Profile photo is theirs alone, so the S3 object goes with the account.
-        if (user.imageUrl) {
-            const key = String(user.imageUrl).split('/').pop();
-            if (key) {
-                try { await deleteMedia(key); }
-                catch (err) { logger.warn(`Failed to delete avatar ${key}: ${err.message}`); }
-            }
-        }
+        // Profile photo: deleted from S3 in maskIdentity().
     }
 
     // ─── Stage 4 — detach from other users ────────────────────────────────────
