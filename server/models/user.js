@@ -55,6 +55,9 @@ const User = new Schema({
     favorites: [{ type: Schema.Types.ObjectId, ref: 'User' }],
     isPublic: { type: Boolean, default: false },
     refreshToken: { type: String, default: null },
+    // Start of the current login session (utils/session.js): tokens issued before
+    // it were replaced by a sign-in elsewhere or ended by logout, and are rejected.
+    sessionStartedAt: { type: Date, default: null },
     lastSeen: { type: Date, default: null, index: true },
     radar: {
         enabled:   { type: Boolean, default: true },

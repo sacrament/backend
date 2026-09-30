@@ -262,6 +262,7 @@ const logoutDevice = async (req, res) => {
         if (wasCurrentDevice) {
             await Promise.all([
                 userService.clearRefreshToken(userId),
+                userService.startNewSession(userId),
                 userService.removeFromRadar(userId),
             ]);
         }

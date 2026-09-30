@@ -194,6 +194,10 @@ class AuthService {
             } catch (_) { }
             await userService.disableUserDeviceFor(userId);
         }
+        // New session before signing: tokens from any earlier sign-in (another
+        // phone, or a phone that missed the displacement because it was offline)
+        // stop working — verifyToken / socket auth reject them as SESSION_REPLACED.
+        await userService.startNewSession(userId);
         const refreshToken = newToken(userId, 'REFRESH_TOKEN_SCOPE');
         const [, clientToken] = await Promise.all([
             userService.saveRefreshToken(userId, refreshToken),

@@ -410,6 +410,8 @@ const logout = async (req, res) => {
     if (userId) {
       await Promise.all([
         userService.clearRefreshToken(userId),
+        // Ends the session: this user's outstanding access tokens stop working too.
+        userService.startNewSession(userId),
         deviceService.disableAllDevicesForUser(userId),
         // Otherwise the user stays on others' radar until lastSeen ages out of
         // the radar duration (2–5 min after logout).

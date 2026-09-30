@@ -5,7 +5,7 @@
 
 const express = require('express');
 const router = express.Router();
-const { verifyToken } = require('../../middleware/verify');
+const { verifyToken, verifyRefreshToken } = require('../../middleware/verify');
 const authController = require('../controllers/auth.controller');
 
 // POST /auth/phone/secured — Request OTP
@@ -21,7 +21,7 @@ router.post('/apple', authController.appleAuth);
 router.post('/google', authController.googleAuth);
 
 // GET /auth/token — Refresh access token (send refresh token in Authorization header)
-router.get('/token', verifyToken, authController.refreshToken);
+router.get('/token', verifyRefreshToken, authController.refreshToken);
 
 // POST /auth/logout
 router.post('/logout', verifyToken, authController.logout);

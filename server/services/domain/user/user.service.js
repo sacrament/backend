@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { blockingStatus } = require('../../../utils/account-status');
+const { sessionStartNow } = require('../../../utils/session');
 const SMSService = require('../../external/twilio/sms.service');
 const mongoose = require('mongoose');
 const UserModel = mongoose.model('User');
@@ -459,6 +460,14 @@ class UserService {
         return SMSService.send(user, phones);
     }
 
+
+    /**
+     * Start a new login session: every token issued before now stops working
+     * (see utils/session.js). Called on sign-in and on logout.
+     */
+    async startNewSession(userId) {
+        await this.model.updateOne({ _id: userId }, { $set: { sessionStartedAt: sessionStartNow() } });
+    }
 
     /**
      * Save refresh token for user

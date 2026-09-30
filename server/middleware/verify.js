@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const config   = require('../utils/config');
 const logger   = require('../utils/logger');
 const { blockingStatus } = require('../utils/account-status');
+const { isSessionReplaced } = require('../utils/session');
 
 // 6-month epoch in milliseconds (182 days)
 const EPOCH_MS = 182 * 24 * 60 * 60 * 1000;
@@ -97,7 +98,7 @@ module.exports = {
         // Check current account status on every request so blocked/deleted
         // users are denied immediately without waiting for token expiry.
         try {
-            const user = await mongoose.model('User').findById(decoded.userId).select('status deleted').lean();
+            const user = await mongoose.model('User').findById(decoded.userId).select('status deleted sessionStartedAt').lean();
 
             if (!user) {
                 // The account is now genuinely removed rather than flagged, so a
@@ -107,6 +108,12 @@ module.exports = {
                 if (!isAccountDeletionRequest(request)) {
                     return response.status(401).json({ status: 'error', code: 'ACCOUNT_NOT_FOUND', message: 'Account not found. Please log in again.' });
                 }
+            }
+
+            // Issued before the user's current session (signed in on another phone, or
+            // logged out): refuse, so the app's refresh fails and it logs out.
+            if (user && isSessionReplaced(decoded, user.sessionStartedAt)) {
+                return response.status(401).json({ status: 'error', code: 'SESSION_REPLACED', message: 'Your account was signed in on another device. Please log in again.' });
             }
 
             // Shared with UserService#assertAccountCanAuthenticate (the login-time check) so
@@ -126,6 +133,53 @@ module.exports = {
         }
 
         request.authToken    = token;
+        request.decodedToken = decoded;
+        next();
+    },
+
+    /**
+     * Verify a refresh token (GET /auth/token). Sign-in issues it with newToken()
+     * (APP_SECRET, scope REFRESH_TOKEN_SCOPE). Unlike verifyToken, it must also be the
+     * one currently stored for the user: logout clears it and a sign-in elsewhere
+     * replaces it, so an old refresh token can no longer mint new access tokens.
+     */
+    verifyRefreshToken: async (request, response, next) => {
+        const header = request.headers.authorization;
+        if (!header) {
+            return response.status(401).json({ status: 'error', code: 'NO_TOKEN', message: 'Authentication required.' });
+        }
+        const token = header.startsWith('Bearer ') ? header.slice(7) : header;
+
+        let decoded;
+        try {
+            decoded = jwt.verify(token, config.APP_SECRET);
+        } catch (err) {
+            logger.warn(`verifyRefreshToken: failed. ${err.name}: ${err.message}`);
+            const code = err.name === 'TokenExpiredError' ? 'TOKEN_EXPIRED' : 'INVALID_TOKEN';
+            return response.status(401).json({ status: 'error', code, message: 'Your session has expired. Please log in again.' });
+        }
+        if (decoded.scope !== 'REFRESH_TOKEN_SCOPE') {
+            return response.status(401).json({ status: 'error', code: 'INVALID_TOKEN', message: 'Invalid token scope for refresh' });
+        }
+
+        try {
+            const user = await mongoose.model('User').findById(decoded.userId).select('status deleted refreshToken').lean();
+            if (!user || !user.refreshToken || user.refreshToken !== token) {
+                return response.status(401).json({ status: 'error', code: 'SESSION_REPLACED', message: 'Your session has ended. Please log in again.' });
+            }
+            const reason = blockingStatus(user);
+            if (reason === 'blocked') {
+                return response.status(403).json({ status: 'error', code: 'ACCOUNT_BLOCKED', message: 'Your account has been suspended. Please contact support.' });
+            }
+            if (reason) {
+                return response.status(403).json({ status: 'error', code: 'ACCOUNT_INACTIVE', message: 'Your account is no longer active.' });
+            }
+        } catch (err) {
+            logger.error('verifyRefreshToken user lookup error:', err.message);
+            return response.status(500).json({ status: 'error', code: 'SERVER_ERROR', message: 'Authentication check failed.' });
+        }
+
+        request.authToken = token;
         request.decodedToken = decoded;
         next();
     },
