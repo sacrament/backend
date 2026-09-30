@@ -263,8 +263,10 @@ class PushNotificationService {
 
     async incomingCall(content) {
         try {
-            const from = { ...content.from._doc };
-            const to = content.to._doc;
+            // Callers pass plain (lean) users as well as documents — with a plain object
+            // `._doc` is undefined, `to` was lost and the incoming-call push never sent.
+            const from = { ...(content.from._doc || content.from) };
+            const to = content.to._doc || content.to;
             delete from.device;
 
             await this.#send({
