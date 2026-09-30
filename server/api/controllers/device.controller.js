@@ -19,7 +19,17 @@ const newDevice = async (req, res) => {
             return res.status(400).json({ status: 'error', message: 'platform must be "iOS" or "Android"' });
         }
 
-        const device = await deviceService.newDevice({ platform, os, version, appVersion, info, token, voipToken, state, uniqueId, model });
+        // Auth-optional: the app sends its user token when it has one, and the device
+        // is then linked to that user. An invalid or missing token registers it unlinked.
+        let userId = null;
+        const header = req.headers.authorization;
+        if (header) {
+            try {
+                userId = jwt.verify(header.startsWith('Bearer ') ? header.slice(7) : header, config.APP_SECRET)?.userId || null;
+            } catch { userId = null; }
+        }
+
+        const device = await deviceService.newDevice({ platform, os, version, appVersion, info, token, voipToken, state, uniqueId, model }, userId);
 
         return res.status(201).json({ status: 'success', device });
     } catch (ex) {

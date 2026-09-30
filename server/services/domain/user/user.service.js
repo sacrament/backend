@@ -268,6 +268,11 @@ class UserService {
 
         if (user.device) {
             resolvedDevice = await DeviceModel.findById(user.device).lean().exec();
+            // A stale pointer to a phone now used by another account must not route
+            // this user's pushes (message previews included) to that person.
+            if (resolvedDevice && resolvedDevice.user && resolvedDevice.user.toString() !== user._id.toString()) {
+                resolvedDevice = null;
+            }
         }
 
         if (!resolvedDevice) {
@@ -307,7 +312,10 @@ class UserService {
         let resolvedDevice = null;
 
         if (user.device) {
-            resolvedDevice = await DeviceModel.findById(user.device).select('status token').lean().exec();
+            resolvedDevice = await DeviceModel.findById(user.device).select('status token user').lean().exec();
+            if (resolvedDevice && resolvedDevice.user && resolvedDevice.user.toString() !== userId.toString()) {
+                resolvedDevice = null;
+            }
         }
 
         if (!resolvedDevice) {

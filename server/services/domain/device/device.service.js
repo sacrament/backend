@@ -11,7 +11,7 @@ class DeviceService {
      * @param {Object} data - Device data
      * @returns {Promise<Object>}
      */
-    async newDevice(data) {
+    async newDevice(data, userId = null) {
         const { platform, os, version, appVersion, info, token, voipToken, state, uniqueId, model } = data;
 
         const payload = {
@@ -27,17 +27,42 @@ class DeviceService {
             state: state || 'active'
         };
 
+        // A registration restarts this phone's record, so it belongs to the caller if
+        // they're signed in, otherwise to nobody until they sign in (linkToUser /
+        // PUT /devices/:id). It used to keep its previous owner: after one account
+        // logged out and another signed in on the same phone, the old account's
+        // pushes (message previews included) came back to life on it, while the new
+        // account could never link the device and got no pushes or calls.
+        payload.user = userId || null;
+
         // Deduplicate by physical-device identifier when provided.
+        let device;
         if (uniqueId) {
-            return DeviceModel.findOneAndUpdate(
+            const existing = await DeviceModel.findOne({ uniqueId }).select('user').lean();
+            if (existing?.user && existing.user.toString() !== String(userId)) {
+                await UserModel.updateOne(
+                    { _id: existing.user, device: existing._id },
+                    { $set: { device: null } }
+                );
+            }
+            device = await DeviceModel.findOneAndUpdate(
                 { uniqueId },
                 { $set: { ...payload, uniqueId } },
                 { upsert: true, new: true, setDefaultsOnInsert: true }
             );
+        } else {
+            device = await new DeviceModel(payload).save();
         }
 
-        const device = new DeviceModel(payload);
-        return device.save();
+        if (userId) {
+            // The caller's live device now: retire their others and point them here.
+            await DeviceModel.updateMany(
+                { user: userId, status: 'active', _id: { $ne: device._id } },
+                { $set: { status: 'disabled', token: null, voipToken: null } }
+            );
+            await UserModel.updateOne({ _id: userId }, { $set: { device: device._id } });
+        }
+        return device;
     }
 
     /**
