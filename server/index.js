@@ -32,8 +32,11 @@ app.set('trust proxy', 1);
 
 const SKIP_LOG_PATHS  = new Set(['/', '/health']);
 const SKIP_LOG_AGENTS = /ELB-HealthChecker/i;
+// Morgan calls this once the response is sent, while a mounted router has still
+// stripped its prefix from req.url (req.path is '/' for POST /api/devices), so match
+// on the original URL or every router-root route drops out of the log.
 const skipLogging     = (req) =>
-    SKIP_LOG_PATHS.has(req.path) || SKIP_LOG_AGENTS.test(req.headers['user-agent'] || '');
+    SKIP_LOG_PATHS.has(req.originalUrl.split('?')[0]) || SKIP_LOG_AGENTS.test(req.headers['user-agent'] || '');
 
 morgan.token('client-ip', (req) =>
     (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress
