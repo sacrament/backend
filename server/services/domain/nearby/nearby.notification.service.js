@@ -15,6 +15,10 @@ const mongoose = require('mongoose');
 const { getIO } = require('../../../socket/io');
 const { getRadarDistancePresets } = require('./radarPresets');
 
+// Same GPS-uncertainty allowance as GET /nearby/users (MAX_ACCURACY_SLACK_M in
+// nearby.controller.js): each side's reported accuracy, capped at this, widens the match.
+const MAX_ACCURACY_SLACK_M = 100;
+
 // ─── Deduplication store ──────────────────────────────────────────────────────
 // Map<recipientId, Map<movingUserId, lastNotifiedTimestamp>>
 const _notified = new Map();
@@ -50,15 +54,27 @@ class NearbyNotificationService {
      *                                their own chosen radar distance (radar.radiusKm), or the
      *                                "nearby" preset if they never picked one — the same
      *                                default the client and GET /nearby/users use.
+     * @param {number} [accuracyM]  - Horizontal accuracy of the mover's fix, in metres.
+     *                                Widens the match the same way GET /nearby/users does,
+     *                                so anyone the radar would show also gets the event.
      */
-    async onLocationUpdate(movingUserId, lon, lat, radiusKm) {
+    async onLocationUpdate(movingUserId, lon, lat, radiusKm, accuracyM) {
         try {
             const presets = await getRadarDistancePresets();
             const defaultKm = presets.nearby;
             // Search out to the widest preset once, then keep each recipient only if the
             // mover is inside *their* distance (recipient.dist is metres from the mover).
-            const searchKm = radiusKm ?? Math.max(defaultKm, ...Object.values(presets));
+            // Widest possible match (largest preset plus both accuracy allowances);
+            // each recipient is then checked against their own distance.
+            const moverSlackM = Math.min(Number.isFinite(accuracyM) ? accuracyM : 0, MAX_ACCURACY_SLACK_M);
+            const searchKm = (radiusKm ?? Math.max(defaultKm, ...Object.values(presets)))
+                + (moverSlackM + MAX_ACCURACY_SLACK_M) / 1000;
             const recipientRadiusKm = (recipient) => radiusKm ?? recipient.radar?.radiusKm ?? defaultKm;
+            // Real phones indoors are often off by 30-100 m; without this two phones side
+            // by side could compute further apart than "Nearby" (91 m) and never get the
+            // event, although GET /nearby/users (which applies the same allowance) shows them.
+            const allowedDistanceM = (recipient) => recipientRadiusKm(recipient) * 1000
+                + moverSlackM + Math.min(recipient.locationAccuracy ?? 0, MAX_ACCURACY_SLACK_M);
             const movingUser = await this._User.findById(movingUserId)
                 .populate('device')
                 .lean();
@@ -90,7 +106,7 @@ class NearbyNotificationService {
                 // "your connection is nearby" push must not reveal them either.
                 if (hiddenFromIds.has(recipientId))                           return;
                 if (recipient.radar?.enabled === false)                       return; // not on radar
-                if (recipient.dist > recipientRadiusKm(recipient) * 1000)     return; // outside their chosen distance
+                if (recipient.dist > allowedDistanceM(recipient))             return; // outside their chosen distance
 
                 const isConnection = connectionIds.has(recipientId);
                 const sockets      = await io.in(recipientId).fetchSockets();
@@ -137,8 +153,8 @@ class NearbyNotificationService {
 
     /**
      * Find active, radar-visible users near (lon, lat) within radiusKm,
-     * excluding the moving user themselves. Each result carries `dist`: metres
-     * from (lon, lat).
+     * excluding the moving user themselves. Each result carries `dist` (metres
+     * from (lon, lat)) and `locationAccuracy` (their fix's accuracy in metres, or null).
      */
     async _findUsersNear(lon, lat, radiusKm, excludeUserId) {
         const sixtyMinutesAgo = new Date(Date.now() - 60 * 60 * 1000);
@@ -164,7 +180,7 @@ class NearbyNotificationService {
             { $unwind: '$user' },
             // Carry the distance onto the user doc — the caller filters on each
             // recipient's own radar distance.
-            { $addFields: { 'user.dist': '$dist' } },
+            { $addFields: { 'user.dist': '$dist', 'user.locationAccuracy': '$accuracy' } },
             {
                 $match: {
                     'user._id':           { $ne: new mongoose.Types.ObjectId(excludeUserId) },
